@@ -1,0 +1,602 @@
+/*
+Brand colors extracted directly from the CallMax logo file (verified by
+sampling actual pixel values, not guessed): navy #182D57 (wordmark),
+cyan #00ADEE (checkmark accent). Could not reach callmaxsolutions.com to
+confirm the site's full palette beyond the logo — if there are other
+official secondary colors, adjust these variables.
+*/
+:root {
+  --cmx-navy: #182d57;
+  --cmx-navy-dark: #101d3a;
+  --cmx-cyan: #00adee;
+  --cmx-cyan-dark: #0090c7;
+  --cmx-gray-bg: #f4f6fa;
+  --cmx-text-dark: #182d57;
+  --cmx-border: #d9dee6;
+  --cmx-danger: #c0392b;
+  --cmx-success: #1e7e34;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Segoe UI", Arial, sans-serif;
+  background: var(--cmx-gray-bg);
+  color: var(--cmx-text-dark);
+}
+
+/* ===== Header ===== */
+.header {
+  background: var(--cmx-navy);
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px;
+  height: 64px;
+}
+
+.header-logo img {
+  height: 42px;
+  display: block;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+}
+
+.header-user {
+  text-align: right;
+  font-size: 14px;
+  line-height: 1.3;
+}
+
+.header-user .name {
+  font-weight: 600;
+}
+
+.header-user .meta {
+  opacity: 0.75;
+  font-size: 12px;
+}
+
+.logout-btn {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  color: white;
+  padding: 6px 14px;
+  border-radius: 4px;
+  margin-left: 18px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.logout-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+/* ===== Auth (login) page ===== */
+.auth-page {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+}
+
+.auth-card {
+  background: white;
+  padding: 32px;
+  border-radius: 8px;
+  box-shadow: 0 2px 16px rgba(24, 45, 87, 0.12);
+  width: 360px;
+}
+
+.auth-card .logo-row {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 20px;
+}
+
+.auth-card .logo-row img {
+  height: 32px;
+}
+
+.auth-card h1 {
+  color: var(--cmx-navy);
+  font-size: 18px;
+  margin: 0 0 4px;
+  text-align: center;
+}
+
+.auth-card p.subtitle {
+  color: #666;
+  font-size: 13px;
+  margin-bottom: 20px;
+  text-align: center;
+}
+
+.auth-card input {
+  width: 100%;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  border: 1px solid var(--cmx-border);
+  border-radius: 4px;
+  font-size: 14px;
+  text-align: center;
+}
+
+.auth-card input:focus {
+  outline: none;
+  border-color: var(--cmx-cyan);
+}
+
+.auth-card button.primary {
+  width: 100%;
+  padding: 10px;
+  background: var(--cmx-cyan);
+  border: none;
+  border-radius: 4px;
+  color: white;
+  font-weight: 600;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.auth-card button.primary:hover {
+  background: var(--cmx-cyan-dark);
+}
+
+.auth-card button.primary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.auth-card button.link {
+  display: block;
+  width: 100%;
+  background: none;
+  border: none;
+  color: var(--cmx-navy);
+  text-decoration: underline;
+  font-size: 13px;
+  cursor: pointer;
+  padding: 8px 0 0;
+  text-align: center;
+}
+
+.auth-card .error {
+  color: var(--cmx-danger);
+  font-size: 13px;
+  margin-bottom: 12px;
+}
+
+.auth-card .success {
+  color: var(--cmx-success);
+  font-size: 13px;
+  margin-bottom: 12px;
+}
+
+/* ===== Landing / general content ===== */
+.page-content {
+  padding: 32px;
+  max-width: 800px;
+  margin: 0 auto;
+}
+
+.page-content h2 {
+  color: var(--cmx-navy);
+  margin-bottom: 8px;
+}
+
+.card {
+  background: white;
+  border-radius: 8px;
+  padding: 20px;
+  box-shadow: 0 1px 6px rgba(24, 45, 87, 0.08);
+  margin-bottom: 16px;
+}
+
+.card p {
+  margin: 0 0 10px;
+}
+
+.card p:last-child {
+  margin-bottom: 0;
+}
+
+.badge {
+  display: inline-block;
+  background: var(--cmx-cyan);
+  color: white;
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.button-secondary {
+  width: auto;
+  padding: 10px 20px;
+  background: var(--cmx-navy);
+  border: none;
+  border-radius: 4px;
+  color: white;
+  font-weight: 600;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.button-secondary:hover {
+  background: var(--cmx-navy-dark);
+}
+
+/* ===== TOTP setup prompt modal ===== */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(16, 29, 58, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal-card {
+  background: white;
+  border-radius: 8px;
+  padding: 24px;
+  width: 340px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.25);
+}
+
+.modal-card h3 {
+  margin: 0 0 8px;
+  color: var(--cmx-navy);
+  font-size: 16px;
+}
+
+.modal-card p {
+  font-size: 13px;
+  color: #444;
+}
+
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  margin: 12px 0;
+  cursor: pointer;
+}
+
+.modal-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 8px;
+}
+
+.otp-countdown {
+  text-align: center;
+  font-size: 12px;
+  color: #666;
+  margin: 10px 0 4px;
+}
+
+.otp-countdown .link {
+  padding: 0;
+  font-size: 12px;
+}
+
+/* ===== Campaign select ===== */
+.campaign-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--cmx-border);
+  cursor: pointer;
+}
+
+.campaign-row:last-of-type {
+  border-bottom: none;
+}
+
+.campaign-name {
+  font-weight: 600;
+  flex: 1;
+}
+
+.campaign-id {
+  color: #888;
+  font-size: 12px;
+}
+
+/* ===== Dialer page ===== */
+.dialer-topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 16px;
+}
+
+.status-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.status-elapsed {
+  margin-left: 12px;
+  font-size: 13px;
+  color: #666;
+  font-family: monospace;
+}
+
+.status-switcher {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.status-switcher select {
+  padding: 8px 10px;
+  border: 1px solid var(--cmx-border);
+  border-radius: 4px;
+  font-size: 14px;
+}
+
+.lead-card h3 {
+  margin: 0 0 6px;
+  color: var(--cmx-navy);
+}
+
+.lead-phone {
+  font-size: 16px;
+  font-weight: 600;
+  font-family: monospace;
+}
+
+.lead-address {
+  color: #666;
+  font-size: 13px;
+}
+
+.disposition-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.inbound-banner {
+  background: #fff3cd;
+  border-left: 4px solid var(--cmx-cyan);
+}
+
+/* ===== Wide page content for the dialer (needs more room than the
+   default 800px-max content pages) ===== */
+.page-content-wide {
+  max-width: 1300px;
+}
+
+/* ===== Responsive two-column dialer layout =====
+   Mobile (default): single column, natural DOM order —
+     status bar -> dial button -> contact details -> call status ->
+     disposition -> call log (always last, so always "at the bottom").
+   Desktop (>=900px): two columns — main flow on the left, contact
+     details top-right + call log bottom-right. Achieved by rendering
+     ContactDetailsCard TWICE (once inline in .dialer-main for mobile,
+     once in .dialer-side for desktop) and toggling which copy is
+     visible per breakpoint, rather than reordering the DOM. */
+.dialer-layout {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 16px;
+}
+
+.contact-desktop-only {
+  display: none;
+}
+
+.contact-mobile-only {
+  display: block;
+}
+
+@media (min-width: 900px) {
+  .dialer-layout {
+    grid-template-columns: 1fr 2fr;
+    gap: 20px;
+    align-items: start;
+  }
+
+  .dialer-main {
+    min-width: 0;
+  }
+
+  .dialer-side {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    min-width: 0;
+  }
+
+  .contact-mobile-only {
+    display: none;
+  }
+
+  .contact-desktop-only {
+    display: block;
+  }
+}
+
+/* ===== Contact details card ===== */
+.contact-card h3 {
+  margin: 0 0 10px;
+  color: var(--cmx-navy);
+}
+
+.lead-name {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 0 0 2px;
+}
+
+.contact-fields {
+  margin: 12px 0 0;
+}
+
+.contact-field-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--cmx-border);
+  font-size: 13px;
+}
+
+.contact-field-row dt {
+  color: #888;
+}
+
+.contact-field-row dd {
+  margin: 0;
+  text-align: right;
+}
+
+.lead-notes {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--cmx-border);
+  font-size: 13px;
+}
+
+.lead-notes p {
+  color: #555;
+  white-space: pre-wrap;
+}
+
+/* ===== Call log table ===== */
+.call-log-card h3 {
+  margin: 0 0 10px;
+  color: var(--cmx-navy);
+}
+
+.call-log-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.call-log-table th {
+  text-align: left;
+  color: #888;
+  font-weight: 600;
+  padding: 6px 8px;
+  border-bottom: 2px solid var(--cmx-border);
+}
+
+.call-log-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--cmx-border);
+}
+
+.call-id-cell {
+  font-family: monospace;
+  color: #888;
+}
+
+/* ===== Disposition comments ===== */
+.comments-label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  margin-top: 12px;
+  margin-bottom: 4px;
+}
+
+.comments-textarea {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--cmx-border);
+  border-radius: 4px;
+  font-size: 14px;
+  font-family: inherit;
+  resize: vertical;
+}
+
+/* ===== Today's stats panel ===== */
+.stats-panel {
+  padding-bottom: 12px;
+}
+
+.stats-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+  font-size: 14px;
+  color: var(--cmx-navy);
+}
+
+.stats-toggle-icon {
+  font-size: 12px;
+  width: 14px;
+}
+
+.stats-inline-total {
+  margin-left: auto;
+  font-size: 13px;
+  font-weight: 600;
+  color: #444;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.stats-cell {
+  background: var(--cmx-gray-bg);
+  border-radius: 6px;
+  padding: 10px 12px;
+}
+
+.stats-cell-label {
+  font-size: 11px;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  margin-bottom: 4px;
+}
+
+.stats-cell-value {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--cmx-navy);
+  font-family: monospace;
+}
+
+.stats-footnote {
+  margin: 12px 0 0;
+  font-size: 11px;
+  color: #999;
+  line-height: 1.4;
+}
