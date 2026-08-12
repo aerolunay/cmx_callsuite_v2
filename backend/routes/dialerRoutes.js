@@ -5,6 +5,8 @@ const express = require("express");
 const db = require("../config/db");
 const dialerService = require("../services/dialerService");
 const agentStatusService = require("../services/agentStatusService");
+const statsService = require("../services/statsService");
+const inboundCallService = require("../services/inboundCallService");
 
 const router = express.Router();
 
@@ -23,56 +25,27 @@ function requireAuth(req, res, next) {
 ==================================================
 CAMPAIGN LIST
 ==================================================
-GET /api/campaigns
-Active campaigns for the campaign-picker screen.
-
-NOTE: this does not yet filter by the agent's user_group against
-whatever access-control ViciDial itself uses to restrict which
-campaigns a given agent may work — every logged-in agent currently
-sees every active campaign. Flagged as a known gap, not yet confirmed
-how this install actually models that restriction.
-==================================================
 */
 router.get("/campaigns", requireAuth, async (req, res) => {
   try {
     const [rows] = await db.execute(
       `
-        SELECT
-          campaign_id,
-          campaign_name,
-          campaign_cid
+        SELECT campaign_id, campaign_name, campaign_cid
         FROM vicidial_campaigns
         WHERE active = 'Y'
         ORDER BY campaign_name ASC
       `
     );
-
-    return res.json({
-      success: true,
-      campaigns: rows,
-    });
+    return res.json({ success: true, campaigns: rows });
   } catch (error) {
     console.error("GET /api/campaigns failed:", error);
-
-    return res.status(500).json({
-      success: false,
-      message: "We could not load campaigns. Please try again.",
-    });
+    return res.status(500).json({ success: false, message: "We could not load campaigns. Please try again." });
   }
 });
 
 /*
 ==================================================
 AGENT STATUS
-==================================================
-GET /api/dialer/status — current status + how long they've been in it.
-  Fetched once on DialerPage mount; live updates after that come over
-  the WebSocket, not polling.
-
-POST /api/dialer/status — manual switch. Body: { status }
-  Only NOT_READY, READY, ON_HOLD are accepted here — IN_CALL and
-  AFTER_CALL_WORK are system-only (see agentStatusService.js) and
-  rejected if a client tries to set them directly.
 ==================================================
 */
 router.get("/dialer/status", requireAuth, async (req, res) => {
@@ -106,10 +79,43 @@ router.post("/dialer/status", requireAuth, async (req, res) => {
 
 /*
 ==================================================
-NEXT LEAD
+CURRENT CALL (restoration after refresh / app reopen)
 ==================================================
-POST /api/dialer/next-lead
-Body: { campaignId }
+*/
+router.get("/dialer/current-call", requireAuth, async (req, res) => {
+  try {
+    const call = dialerService.getActiveCallForAgent(req.session.agent.appUserId);
+    return res.json({ success: true, call });
+  } catch (error) {
+    console.error("GET /api/dialer/current-call failed:", error);
+    return res.status(500).json({ success: false, message: "Failed to fetch current call." });
+  }
+});
+
+router.get("/dialer/inbound/current", requireAuth, async (req, res) => {
+  try {
+    const current = inboundCallService.getInboundCallForAgent(req.session.agent.appUserId);
+    if (!current) {
+      return res.json({ success: true, call: null });
+    }
+    return res.json({
+      success: true,
+      call: {
+        status: current.status,
+        room: inboundCallService.INBOUND_ROOM,
+        callerIdNumber: current.callerIdNumber,
+        onHold: current.onHold,
+      },
+    });
+  } catch (error) {
+    console.error("GET /api/dialer/inbound/current failed:", error);
+    return res.status(500).json({ success: false, message: "Failed to fetch current inbound call." });
+  }
+});
+
+/*
+==================================================
+NEXT LEAD
 ==================================================
 */
 router.post("/dialer/next-lead", requireAuth, async (req, res) => {
@@ -140,17 +146,14 @@ router.post("/dialer/next-lead", requireAuth, async (req, res) => {
 ==================================================
 START CALL
 ==================================================
-POST /api/dialer/start-call
-Body: { campaignId, leadId, phoneNumber }
-
-campaignCid is looked up server-side from vicidial_campaigns rather than
-trusted from the client, since it drives the outbound CallerID sent to
-the trunk — no reason to let the frontend supply that directly.
+`lead` (the full object, not just leadId/phoneNumber) is now passed
+through and stored on the call state — needed so a page refresh can
+restore ContactDetailsCard fully, not just the lead's ID/phone number.
 ==================================================
 */
 router.post("/dialer/start-call", requireAuth, async (req, res) => {
   try {
-    const { campaignId, leadId, phoneNumber } = req.body;
+    const { campaignId, leadId, phoneNumber, lead } = req.body;
 
     if (!campaignId || !leadId || !phoneNumber) {
       return res.status(400).json({
@@ -182,6 +185,7 @@ router.post("/dialer/start-call", requireAuth, async (req, res) => {
       appUserId,
       agentUser,
       agentExtension,
+      lead,
       leadId,
       phoneNumber,
       campaignCid,
@@ -191,45 +195,92 @@ router.post("/dialer/start-call", requireAuth, async (req, res) => {
     return res.json({ success: true, ...result });
   } catch (error) {
     console.error("POST /api/dialer/start-call failed:", error);
-    return res.status(500).json({
-      success: false,
-      message: error.message || "Failed to start call.",
-    });
+    return res.status(500).json({ success: false, message: error.message || "Failed to start call." });
   }
 });
 
 /*
 ==================================================
-END CALL
-==================================================
-POST /api/dialer/end-call/:callId
+END CALL / HOLD / UNHOLD (outbound)
 ==================================================
 */
 router.post("/dialer/end-call/:callId", requireAuth, async (req, res) => {
   try {
-    const { callId } = req.params;
-    const status = await dialerService.endCall(callId);
+    const status = await dialerService.endCall(req.params.callId);
     return res.json({ success: true, status });
   } catch (error) {
     console.error("POST /api/dialer/end-call failed:", error);
-    return res.status(500).json({
-      success: false,
-      message: error.message || "Failed to end call.",
-    });
+    return res.status(500).json({ success: false, message: error.message || "Failed to end call." });
+  }
+});
+
+router.post("/dialer/hold/:callId", requireAuth, async (req, res) => {
+  try {
+    const status = await dialerService.holdCall(req.params.callId);
+    return res.json({ success: true, status });
+  } catch (error) {
+    console.error("POST /api/dialer/hold failed:", error);
+    return res.status(500).json({ success: false, message: error.message || "Failed to hold call." });
+  }
+});
+
+router.post("/dialer/unhold/:callId", requireAuth, async (req, res) => {
+  try {
+    const status = await dialerService.unholdCall(req.params.callId);
+    return res.json({ success: true, status });
+  } catch (error) {
+    console.error("POST /api/dialer/unhold failed:", error);
+    return res.status(500).json({ success: false, message: error.message || "Failed to unhold call." });
   }
 });
 
 /*
 ==================================================
-CALL LOG
+INBOUND: END CALL / HOLD / UNHOLD
 ==================================================
-GET /api/dialer/call-log — this agent's own recent call history, for
-the DialerPage's "Call Logs" table.
+*/
+router.post("/dialer/inbound/end-call", requireAuth, async (req, res) => {
+  try {
+    await inboundCallService.endInboundCall();
+    return res.json({ success: true });
+  } catch (error) {
+    console.error("POST /api/dialer/inbound/end-call failed:", error);
+    return res.status(500).json({ success: false, message: error.message || "Failed to end call." });
+  }
+});
+
+router.post("/dialer/inbound/hold", requireAuth, async (req, res) => {
+  try {
+    const status = await inboundCallService.holdInboundCall();
+    return res.json({ success: true, status });
+  } catch (error) {
+    console.error("POST /api/dialer/inbound/hold failed:", error);
+    return res.status(500).json({ success: false, message: error.message || "Failed to hold call." });
+  }
+});
+
+router.post("/dialer/inbound/unhold", requireAuth, async (req, res) => {
+  try {
+    const status = await inboundCallService.unholdInboundCall();
+    return res.json({ success: true, status });
+  } catch (error) {
+    console.error("POST /api/dialer/inbound/unhold failed:", error);
+    return res.status(500).json({ success: false, message: error.message || "Failed to unhold call." });
+  }
+});
+
+/*
+==================================================
+CALL LOG / STATS
 ==================================================
 */
 router.get("/dialer/call-log", requireAuth, async (req, res) => {
   try {
-    const rows = await dialerService.getCallLog(req.session.agent.username);
+    const { campaignId } = req.query;
+    if (!campaignId) {
+      return res.status(400).json({ success: false, message: "campaignId query param is required." });
+    }
+    const rows = await dialerService.getCallLog(req.session.agent.username, campaignId);
     return res.json({ success: true, callLog: rows });
   } catch (error) {
     console.error("GET /api/dialer/call-log failed:", error);
@@ -237,17 +288,24 @@ router.get("/dialer/call-log", requireAuth, async (req, res) => {
   }
 });
 
+router.get("/dialer/stats/today", requireAuth, async (req, res) => {
+  try {
+    const { campaignId } = req.query;
+    if (!campaignId) {
+      return res.status(400).json({ success: false, message: "campaignId query param is required." });
+    }
+    const { appUserId, username: agentUser } = req.session.agent;
+    const stats = await statsService.getTodayStats(appUserId, agentUser, campaignId);
+    return res.json({ success: true, stats });
+  } catch (error) {
+    console.error("GET /api/dialer/stats/today failed:", error);
+    return res.status(500).json({ success: false, message: "Failed to load today's stats." });
+  }
+});
+
 /*
 ==================================================
-SAVE DISPOSITION
-==================================================
-POST /api/dialer/disposition/:callId
-Body: { campaignId, leadId, phoneNumber, firstName, lastName, room,
-        disposition, comments, callbackAt? }
-
-comments is required — enforced both here and again inside
-dialerService.saveDisposition (defense in depth, since a direct API
-call could otherwise bypass the frontend's disabled-button check).
+SAVE DISPOSITION (outbound)
 ==================================================
 */
 router.post("/dialer/disposition/:callId", requireAuth, async (req, res) => {
@@ -263,17 +321,11 @@ router.post("/dialer/disposition/:callId", requireAuth, async (req, res) => {
     }
 
     if (!comments || !comments.trim()) {
-      return res.status(400).json({
-        success: false,
-        message: "Comments are required before saving a disposition.",
-      });
+      return res.status(400).json({ success: false, message: "Comments are required before saving a disposition." });
     }
 
     if (disposition === "CALLBACK" && !callbackAt) {
-      return res.status(400).json({
-        success: false,
-        message: "callbackAt is required when disposition is CALLBACK.",
-      });
+      return res.status(400).json({ success: false, message: "callbackAt is required when disposition is CALLBACK." });
     }
 
     const { appUserId, username: agentUser } = req.session.agent;
@@ -296,10 +348,63 @@ router.post("/dialer/disposition/:callId", requireAuth, async (req, res) => {
     return res.json({ success: true, ...result });
   } catch (error) {
     console.error("POST /api/dialer/disposition failed:", error);
-    return res.status(500).json({
-      success: false,
-      message: error.message || "Failed to save disposition.",
-    });
+    return res.status(500).json({ success: false, message: error.message || "Failed to save disposition." });
+  }
+});
+
+/*
+==================================================
+INBOUND DISPOSITION
+==================================================
+call_id is read from inboundCallService's tracked call (the UUID
+generated when the call started) — NOT regenerated here, so it
+matches the same ID used throughout the call's lifecycle.
+==================================================
+*/
+router.post("/dialer/inbound-disposition", requireAuth, async (req, res) => {
+  try {
+    const { callerIdNumber, firstName, lastName, comments, disposition, callbackAt } = req.body;
+
+    if (!comments || !comments.trim()) {
+      return res.status(400).json({ success: false, message: "Comments are required." });
+    }
+
+    if (!disposition) {
+      return res.status(400).json({ success: false, message: "Disposition is required." });
+    }
+
+    if (disposition === "CALLBACK_REQUESTED" && !callbackAt) {
+      return res.status(400).json({
+        success: false,
+        message: "callbackAt is required when disposition is CALLBACK_REQUESTED.",
+      });
+    }
+
+    const { appUserId, username: agentUser } = req.session.agent;
+    const current = inboundCallService.getInboundCallStatus();
+    const startedAt = current?.startedAt || new Date();
+    const endedAt = current?.endedAt || new Date();
+    const inboundCallId = current?.callId || null;
+
+    await db.execute(
+      `
+        INSERT INTO cmx_dialer.inbound_call_log
+          (agent_user, call_id, caller_id_number, first_name, last_name, comments,
+           disposition, callback_at, call_started_at, call_ended_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+      [
+        agentUser, inboundCallId, callerIdNumber || null, firstName || null, lastName || null,
+        comments.trim(), disposition, callbackAt || null, startedAt, endedAt,
+      ]
+    );
+
+    await inboundCallService.finalizeInboundCall(appUserId);
+
+    return res.json({ success: true });
+  } catch (error) {
+    console.error("POST /api/dialer/inbound-disposition failed:", error);
+    return res.status(500).json({ success: false, message: error.message || "Failed to save inbound disposition." });
   }
 });
 

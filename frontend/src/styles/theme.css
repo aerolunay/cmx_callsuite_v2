@@ -516,6 +516,25 @@ body {
   color: #888;
 }
 
+.direction-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.direction-outbound {
+  background: #e3f6fc;
+  color: var(--cmx-navy);
+}
+
+.direction-inbound {
+  background: #fff3cd;
+  color: #8a6d1a;
+}
+
 /* ===== Disposition comments ===== */
 .comments-label {
   display: block;

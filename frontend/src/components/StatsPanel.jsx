@@ -22,17 +22,18 @@ const STAT_ROWS = [
 // refreshKey is bumped by the parent whenever something happened that
 // could change today's numbers (a disposition saved, an agent status
 // transition over the WebSocket) — event-driven refetch, not polling.
-export default function StatsPanel({ refreshKey }) {
+export default function StatsPanel({ refreshKey, campaignId }) {
   const [expanded, setExpanded] = useState(true);
   const [stats, setStats] = useState(null);
   const [error, setError] = useState("");
 
   useEffect(() => {
+    if (!campaignId) return;
     api
-      .getTodayStats()
+      .getTodayStats(campaignId)
       .then((data) => setStats(data.stats))
       .catch((err) => setError(err.message));
-  }, [refreshKey]);
+  }, [refreshKey, campaignId]);
 
   function formatValue(row) {
     if (!stats) return "—";
@@ -68,8 +69,7 @@ export default function StatsPanel({ refreshKey }) {
 
       {expanded && (
         <p className="stats-footnote">
-          Inbound metrics and hold-time-by-direction aren't tracked yet — this app doesn't
-          handle inbound calls, and hold time isn't currently tied to a specific call.
+          Hold-time-by-direction isn't tracked — hold isn't currently tied to a specific call.
         </p>
       )}
     </div>

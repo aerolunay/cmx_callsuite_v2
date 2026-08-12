@@ -6,6 +6,7 @@ const db = require("../config/db");
 const ami = require("../config/ami");
 const ws = require("../config/ws");
 const agentStatusService = require("./agentStatusService");
+const { getEasternDayBoundsForServerClock } = require("./statsService");
 
 /*
 ==================================================
@@ -70,6 +71,7 @@ function broadcastCallStatus(call) {
     callId: call.callId,
     status: call.status,
     room: call.room,
+    onHold: call.onHold,
   });
 }
 
@@ -88,7 +90,7 @@ async function markCallEnded(call) {
   broadcastCallStatus(call);
 
   try {
-    await agentStatusService.setStatus(call.appUserId, "AFTER_CALL_WORK");
+    await agentStatusService.setStatus(call.appUserId, "AFTER_CALL_WORK", { relatedCallDirection: "outbound", relatedCampaignId: call.campaignId });
   } catch (err) {
     console.error("[dialerService] Failed to set AFTER_CALL_WORK status:", err.message);
   }
@@ -178,7 +180,7 @@ callers should track status via getCallStatus()/WebSocket push rather
 than blocking on the full flow.
 ==================================================
 */
-function startCall({ appUserId, agentUser, agentExtension, leadId, phoneNumber, campaignCid, campaignId }) {
+function startCall({ appUserId, agentUser, agentExtension, lead, leadId, phoneNumber, campaignCid, campaignId }) {
   return new Promise(async (resolve, reject) => {
     let suffix;
     try {
@@ -196,6 +198,7 @@ function startCall({ appUserId, agentUser, agentExtension, leadId, phoneNumber, 
       roomSuffix: suffix,
       appUserId,
       campaignId,
+      lead, // full lead object — needed to restore ContactDetailsCard after a page refresh/reopen, not just leadId/phoneNumber
       leadId,
       phoneNumber,
       agentUser,
@@ -206,6 +209,7 @@ function startCall({ appUserId, agentUser, agentExtension, leadId, phoneNumber, 
       startedAt: new Date(),
       endedAt: null,
       afterCallWorkTriggered: false,
+      onHold: false,
     };
 
     activeCalls.set(callId, callState);
@@ -215,7 +219,7 @@ function startCall({ appUserId, agentUser, agentExtension, leadId, phoneNumber, 
     // starts, not only once someone actually answers — so IN_CALL
     // begins here rather than waiting for ConfbridgeJoin.
     try {
-      await agentStatusService.setStatus(appUserId, "IN_CALL");
+      await agentStatusService.setStatus(appUserId, "IN_CALL", { relatedCallDirection: "outbound", relatedCampaignId: callState.campaignId });
     } catch (err) {
       console.error("[dialerService] Failed to set IN_CALL status:", err.message);
     }
@@ -336,11 +340,34 @@ function getCallStatus(callId) {
     callId: call.callId,
     room: call.room,
     status: call.status,
+    campaignId: call.campaignId,
+    lead: call.lead,
     leadId: call.leadId,
     phoneNumber: call.phoneNumber,
     startedAt: call.startedAt,
     endedAt: call.endedAt,
+    onHold: call.onHold,
   };
+}
+
+/*
+==================================================
+getActiveCallForAgent
+==================================================
+Used to restore state after a page refresh/reopen — the ONLY thing
+that ever knew about an in-progress call was React state in the
+browser, which a refresh wipes even though the backend (this Map) kept
+tracking the real call the whole time. Returns null if this agent has
+no active call right now.
+==================================================
+*/
+function getActiveCallForAgent(appUserId) {
+  for (const call of activeCalls.values()) {
+    if (call.appUserId === appUserId && call.status !== "ended") {
+      return getCallStatus(call.callId);
+    }
+  }
+  return null;
 }
 
 /*
@@ -373,6 +400,9 @@ function registerCallEventTracking() {
   ami.events.on("ConfbridgeLeave", (evt) => {
     for (const call of activeCalls.values()) {
       if (evt.conference !== call.room) continue;
+      // If this call is on hold, WE caused this leave (redirected the
+      // customer to the cmxhold extension) — not a real hangup.
+      if (call.onHold && evt.channel === call.customerChannel) continue;
       if (evt.channel === call.customerChannel) {
         markCallEnded(call);
       }
@@ -423,6 +453,83 @@ async function endCall(callId) {
 
   await markCallEnded(call);
   releaseRoomSuffix(call.roomSuffix);
+
+  return getCallStatus(callId);
+}
+
+/*
+==================================================
+holdCall / unholdCall (outbound)
+==================================================
+Redirects the CUSTOMER's channel out of the ConfBridge room into the
+shared "cmxhold" MOH loop, and back again. Only valid once the
+customer has actually joined (customer_connected) — can't hold a call
+that hasn't connected yet.
+
+This is also what finally makes ON_HOLD attributable to a real call —
+tagging the transition with relatedCallDirection is what makes Avg
+IB/OB Hold in Today's Stats computable, instead of structurally
+impossible as it was before this feature existed.
+==================================================
+*/
+async function holdCall(callId) {
+  const call = activeCalls.get(callId);
+  if (!call) {
+    throw new Error(`No active call found for callId ${callId}.`);
+  }
+  if (call.status !== "customer_connected") {
+    throw new Error("Can only hold a call once the customer has connected.");
+  }
+  if (call.onHold) {
+    throw new Error("Call is already on hold.");
+  }
+
+  // Set BEFORE issuing the redirect, not after awaiting it — a real
+  // bug found during testing: the ConfbridgeLeave event this redirect
+  // triggers (as a side effect of the customer actually leaving the
+  // ConfBridge room) can arrive before the AMI action's own
+  // acknowledgment resolves, meaning the "onHold" guard in
+  // registerCallEventTracking() wasn't armed yet and the call was
+  // incorrectly treated as hung up.
+  call.onHold = true;
+
+  try {
+    await ami.redirectChannel(call.customerChannel, { context: "default", exten: "cmxhold" });
+  } catch (err) {
+    call.onHold = false; // redirect itself failed — revert
+    throw err;
+  }
+
+  broadcastCallStatus(call);
+
+  try {
+    await agentStatusService.setStatus(call.appUserId, "ON_HOLD", { relatedCallDirection: "outbound", relatedCampaignId: call.campaignId });
+  } catch (err) {
+    console.error("[dialerService] Failed to set ON_HOLD status:", err.message);
+  }
+
+  return getCallStatus(callId);
+}
+
+async function unholdCall(callId) {
+  const call = activeCalls.get(callId);
+  if (!call) {
+    throw new Error(`No active call found for callId ${callId}.`);
+  }
+  if (!call.onHold) {
+    throw new Error("Call is not currently on hold.");
+  }
+
+  await ami.redirectChannel(call.customerChannel, { context: "default", exten: call.room });
+
+  call.onHold = false;
+  broadcastCallStatus(call);
+
+  try {
+    await agentStatusService.setStatus(call.appUserId, "IN_CALL", { relatedCallDirection: "outbound", relatedCampaignId: call.campaignId });
+  } catch (err) {
+    console.error("[dialerService] Failed to set IN_CALL status after unhold:", err.message);
+  }
 
   return getCallStatus(callId);
 }
@@ -547,21 +654,57 @@ async function saveDisposition({
 getCallLog
 ==================================================
 Call history for the current agent — used by the DialerPage's
-"Call Logs" table. Ordered most-recent-first, capped at a reasonable
-count rather than returning unbounded history.
+"Call Logs" table. Combines BOTH outbound (dialer_call_log) and
+inbound (inbound_call_log) — separate tables by design, since inbound
+has genuinely different fields (caller_id_number, no lead/campaign) —
+tagging each row with its direction so the UI can show which is which.
+
+Filtered to "today" using the same self-calibrating EST/EDT boundary
+as statsService.js. NOTE: this filter was missing entirely until now —
+a real bug, not a timezone-math issue — which is why "yesterday's"
+calls were showing: there was no date filter applied at all before.
 ==================================================
 */
-async function getCallLog(agentUser, limit = 50) {
+async function getCallLog(agentUser, campaignId, limit = 50) {
+  const { start, end } = await getEasternDayBoundsForServerClock();
+
   const [rows] = await db.execute(
     `
-      SELECT call_log_id, call_id, call_started_at, first_name, last_name,
-             phone_number, disposition
-      FROM cmx_dialer.dialer_call_log
-      WHERE agent_user = ?
-      ORDER BY call_log_id DESC
+      (
+        SELECT
+          'outbound' AS direction,
+          call_log_id,
+          call_id,
+          call_started_at,
+          first_name,
+          last_name,
+          phone_number,
+          disposition
+        FROM cmx_dialer.dialer_call_log
+        WHERE agent_user = ?
+          AND campaign_id = ?
+          AND call_started_at BETWEEN ? AND ?
+      )
+      UNION ALL
+      (
+        SELECT
+          'inbound' AS direction,
+          call_log_id,
+          call_id,
+          call_started_at,
+          first_name,
+          last_name,
+          caller_id_number AS phone_number,
+          disposition
+        FROM cmx_dialer.inbound_call_log
+        WHERE agent_user = ?
+          AND campaign_id = ?
+          AND call_started_at BETWEEN ? AND ?
+      )
+      ORDER BY call_started_at DESC
       LIMIT ?
     `,
-    [agentUser, limit]
+    [agentUser, campaignId, start, end, agentUser, campaignId, start, end, limit]
   );
 
   return rows;
@@ -571,7 +714,10 @@ module.exports = {
   getNextLead,
   startCall,
   getCallStatus,
+  getActiveCallForAgent,
   endCall,
+  holdCall,
+  unholdCall,
   saveDisposition,
   getCallLog,
 };

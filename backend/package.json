@@ -11,19 +11,20 @@
   "dependencies": {
     "asterisk-manager": "^0.2.0",
     "bcryptjs": "^2.4.3",
+    "cookie": "^0.6.0",
+    "cookie-signature": "^1.2.1",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "express-session": "^1.18.0",
     "helmet": "^7.1.0",
+    "luxon": "^3.7.2",
     "morgan": "^1.10.0",
     "mysql2": "^3.23.1",
     "nodemailer": "^9.0.5",
     "otplib": "^12.0.1",
     "qrcode": "^1.5.4",
     "session-file-store": "^1.5.0",
-    "cookie": "^0.6.0",
-    "cookie-signature": "^1.2.1",
     "ws": "^8.18.0"
   }
 }

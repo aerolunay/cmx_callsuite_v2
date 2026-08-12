@@ -65,10 +65,12 @@ its real duration) and opens a new one. Broadcasts the change over the
 WebSocket so any connected client for this agent updates live instead
 of needing to poll.
 */
-async function setStatus(appUserId, status) {
+async function setStatus(appUserId, status, options = {}) {
   if (!ALL_STATUSES.has(status)) {
     throw new Error(`Unknown agent status: ${status}`);
   }
+
+  const { relatedCallDirection = null, relatedCampaignId = null } = options;
 
   await db.execute(
     `
@@ -80,8 +82,8 @@ async function setStatus(appUserId, status) {
   );
 
   await db.execute(
-    `INSERT INTO cmx_dialer.agent_status_log (app_user_id, status, started_at) VALUES (?, ?, NOW())`,
-    [appUserId, status]
+    `INSERT INTO cmx_dialer.agent_status_log (app_user_id, status, related_call_direction, related_campaign_id, started_at) VALUES (?, ?, ?, ?, NOW())`,
+    [appUserId, status, relatedCallDirection, relatedCampaignId]
   );
 
   const current = await getCurrentStatus(appUserId);

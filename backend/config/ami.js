@@ -111,11 +111,25 @@ function hangupChannel(channel) {
   return sendAction({ action: "Hangup", channel });
 }
 
+// Needed for Hold/Unhold — moves a channel to a different
+// context/extension without hanging it up (e.g. out of a ConfBridge
+// room into a MOH loop, and back again).
+function redirectChannel(channel, { context, exten, priority = 1 }) {
+  return sendAction({
+    action: "Redirect",
+    channel,
+    context,
+    exten,
+    priority,
+  });
+}
+
 connect();
 
 module.exports = {
   events,
   originate,
   hangupChannel,
+  redirectChannel,
   isConnected,
 };

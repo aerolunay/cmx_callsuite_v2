@@ -8,6 +8,7 @@ import { api } from "../api";
 import { useAuth } from "../context/AuthContext";
 import { useDialerSocket } from "../hooks/useDialerSocket";
 import { DISPOSITIONS } from "../constants/dispositions";
+import { INBOUND_DISPOSITIONS } from "../constants/inboundDispositions";
 import { formatDuration } from "../utils/format";
 
 // Agent-selectable statuses. IN_CALL and AFTER_CALL_WORK are set only
@@ -55,7 +56,12 @@ export default function DialerPage() {
 
   const [lead, setLead] = useState(null);
   const [call, setCall] = useState(null); // { callId, room, status }
-  const [inboundCall, setInboundCall] = useState(null); // { status, room } — pushed, not requested
+  const [inboundCall, setInboundCall] = useState(null); // { status, room, callerIdNumber }
+  const [inboundFirstName, setInboundFirstName] = useState("");
+  const [inboundLastName, setInboundLastName] = useState("");
+  const [inboundComments, setInboundComments] = useState("");
+  const [inboundDisposition, setInboundDisposition] = useState("");
+  const [inboundCallbackAt, setInboundCallbackAt] = useState("");
 
   const [disposition, setDisposition] = useState("");
   const [comments, setComments] = useState("");
@@ -68,13 +74,39 @@ export default function DialerPage() {
   const elapsedTimerRef = useRef(null);
 
   useEffect(() => {
-    const stored = sessionStorage.getItem("cmx_dialer_campaign");
+    const stored = localStorage.getItem("cmx_dialer_campaign");
     if (!stored) {
       navigate("/select-campaign");
       return;
     }
     setCampaign(JSON.parse(stored));
   }, [navigate]);
+
+  // Restore an in-progress call after a page refresh or the app being
+  // fully closed and reopened. The backend (dialerService.js's
+  // activeCalls Map / inboundCallService.js's singleton) kept tracking
+  // the real call the whole time — only the React state here was ever
+  // wiped. Runs once on mount, alongside the existing status fetch.
+  useEffect(() => {
+    api
+      .getCurrentCall()
+      .then((data) => {
+        if (data.call) {
+          setCall(data.call);
+          setLead(data.call.lead || null);
+        }
+      })
+      .catch(() => {});
+
+    api
+      .getCurrentInboundCall()
+      .then((data) => {
+        if (data.call) {
+          setInboundCall(data.call);
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     api
@@ -119,20 +151,39 @@ export default function DialerPage() {
     if (message.type === "callStatus") {
       setCall((prev) => {
         if (!prev || prev.callId !== message.callId) return prev;
-        return { ...prev, status: message.status };
+        return { ...prev, status: message.status, onHold: message.onHold };
       });
     }
 
     if (message.type === "inboundCall") {
-      if (message.status === "ended") {
-        setInboundCall(null);
-      } else {
-        setInboundCall({ status: message.status, room: message.room });
-      }
+      setInboundCall((prev) => {
+        // A brand new call starting (no previous call, or previous one
+        // was already fully finalized) — reset the intake form fields.
+        if (!prev) {
+          setInboundFirstName("");
+          setInboundLastName("");
+          setInboundComments("");
+          setInboundDisposition("");
+          setInboundCallbackAt("");
+        }
+        return {
+          status: message.status,
+          room: message.room,
+          callerIdNumber: message.callerIdNumber,
+          onHold: message.onHold,
+        };
+      });
     }
   });
 
-  const isSystemStatus = agentStatus?.status === "IN_CALL" || agentStatus?.status === "AFTER_CALL_WORK";
+  // IN_CALL always locks the switcher (a call is genuinely in progress).
+  // AFTER_CALL_WORK only locks it when there's an outbound disposition
+  // actually pending (call + lead both set) — inbound calls have no
+  // disposition step at all, so an inbound-triggered AFTER_CALL_WORK
+  // must NOT lock the agent out of manually returning to READY, or
+  // there'd be no way out of it.
+  const outboundDispositionPending = agentStatus?.status === "AFTER_CALL_WORK" && call && lead;
+  const isSystemStatus = agentStatus?.status === "IN_CALL" || outboundDispositionPending;
   const isCallActive = call && call.status !== "ended";
 
   async function handleStatusSwitch() {
@@ -160,7 +211,8 @@ export default function DialerPage() {
       const callData = await api.startCall(
         campaign.campaign_id,
         leadData.lead.lead_id,
-        leadData.lead.phone_number
+        leadData.lead.phone_number,
+        leadData.lead
       );
       setCall({ callId: callData.callId, room: callData.room, status: "ringing_agent" });
     } catch (err) {
@@ -176,6 +228,50 @@ export default function DialerPage() {
     setBusy(true);
     try {
       await api.endCall(call.callId);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleToggleHold() {
+    if (!call) return;
+    setError("");
+    setBusy(true);
+    try {
+      const data = call.onHold ? await api.unholdCall(call.callId) : await api.holdCall(call.callId);
+      setCall((prev) => ({ ...prev, onHold: data.status.onHold }));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleToggleInboundHold() {
+    if (!inboundCall) return;
+    setError("");
+    setBusy(true);
+    try {
+      const data = inboundCall.onHold ? await api.unholdInbound() : await api.holdInbound();
+      setInboundCall((prev) => ({ ...prev, onHold: data.status.onHold }));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleEndInboundCall() {
+    if (!inboundCall) return;
+    setError("");
+    setBusy(true);
+    try {
+      await api.endInboundCall();
+      // The 'ended' status arrives over the WS broadcast that
+      // endInboundCall() triggers server-side — nothing else to do
+      // here but wait for it.
     } catch (err) {
       setError(err.message);
     } finally {
@@ -219,8 +315,43 @@ export default function DialerPage() {
     }
   }
 
+  const inboundCommentsMissing = !inboundComments.trim();
+  const inboundCallbackMissing = inboundDisposition === "CALLBACK_REQUESTED" && !inboundCallbackAt;
+  const inboundSaveDisabled =
+    !inboundDisposition || inboundCommentsMissing || inboundCallbackMissing || busy;
+
+  async function handleSaveInboundDisposition(e) {
+    e.preventDefault();
+    if (inboundSaveDisabled) return;
+
+    setError("");
+    setBusy(true);
+    try {
+      await api.saveInboundDisposition({
+        callerIdNumber: inboundCall?.callerIdNumber,
+        firstName: inboundFirstName,
+        lastName: inboundLastName,
+        comments: inboundComments.trim(),
+        disposition: inboundDisposition,
+        callbackAt: inboundDisposition === "CALLBACK_REQUESTED" ? inboundCallbackAt : undefined,
+      });
+
+      setInboundCall(null);
+      setInboundFirstName("");
+      setInboundLastName("");
+      setInboundComments("");
+      setInboundDisposition("");
+      setInboundCallbackAt("");
+      setCallLogVersion((v) => v + 1);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function handleChangeCampaign() {
-    sessionStorage.removeItem("cmx_dialer_campaign");
+    localStorage.removeItem("cmx_dialer_campaign");
     navigate("/select-campaign");
   }
 
@@ -290,16 +421,113 @@ export default function DialerPage() {
               </div>
             </div>
 
-            <StatsPanel refreshKey={callLogVersion} />
+            <StatsPanel refreshKey={callLogVersion} campaignId={campaign?.campaign_id} />
 
         {inboundCall && (
-          <div className="card inbound-banner">
+          <div className="card">
             <p>
               <strong>
+                {inboundCall.status === "waiting_for_agent" && "Incoming call — waiting for an available agent…"}
                 {inboundCall.status === "ringing_agent" && "Incoming call — ringing your phone…"}
                 {inboundCall.status === "agent_connected" && "Incoming call connected"}
+                {inboundCall.status === "ended" && "Call ended — please complete the details below"}
+                {inboundCall.onHold && <span className="badge" style={{ marginLeft: 10 }}>ON HOLD</span>}
               </strong>
             </p>
+
+            {(inboundCall.status === "ringing_agent" || inboundCall.status === "agent_connected") && (
+              <>
+                {inboundCall.status === "agent_connected" && (
+                  <button
+                    className="button-secondary"
+                    onClick={handleToggleInboundHold}
+                    disabled={busy}
+                    style={{ marginBottom: 10, marginRight: 8 }}
+                  >
+                    {inboundCall.onHold ? "Unhold" : "Hold"}
+                  </button>
+                )}
+                <button
+                  className="button-secondary"
+                  onClick={handleEndInboundCall}
+                  disabled={busy || inboundCall.onHold}
+                  style={{ marginBottom: 10 }}
+                >
+                  End Call
+                </button>
+              </>
+            )}
+
+            {/* Shown immediately, editable throughout the call so the
+                agent can take notes live — not gated behind the call
+                having ended. */}
+            <div style={{ marginTop: 12 }}>
+              <label className="comments-label">Caller ID</label>
+              <input type="text" value={inboundCall.callerIdNumber || "Unknown"} readOnly />
+
+              <label className="comments-label">First Name</label>
+              <input
+                type="text"
+                value={inboundFirstName}
+                onChange={(e) => setInboundFirstName(e.target.value)}
+              />
+
+              <label className="comments-label">Last Name</label>
+              <input
+                type="text"
+                value={inboundLastName}
+                onChange={(e) => setInboundLastName(e.target.value)}
+              />
+
+              <label className="comments-label">Comments (required)</label>
+              <textarea
+                className="comments-textarea"
+                value={inboundComments}
+                onChange={(e) => setInboundComments(e.target.value)}
+                placeholder="What did the caller need?"
+                rows={3}
+              />
+            </div>
+
+            {/* Disposition only appears once the call has actually
+                ended — matches outbound's pattern of dispositioning
+                after the call, not mid-call. */}
+            {inboundCall.status === "ended" && (
+              <form onSubmit={handleSaveInboundDisposition} style={{ marginTop: 14 }}>
+                <h3 style={{ marginBottom: 8 }}>Disposition</h3>
+                {INBOUND_DISPOSITIONS.map((d) => (
+                  <label key={d.value} className="disposition-row">
+                    <input
+                      type="radio"
+                      name="inboundDisposition"
+                      value={d.value}
+                      checked={inboundDisposition === d.value}
+                      onChange={() => setInboundDisposition(d.value)}
+                    />
+                    {d.label}
+                  </label>
+                ))}
+
+                {inboundDisposition === "CALLBACK_REQUESTED" && (
+                  <input
+                    type="datetime-local"
+                    value={inboundCallbackAt}
+                    onChange={(e) => setInboundCallbackAt(e.target.value)}
+                    required
+                    style={{ marginTop: 10 }}
+                  />
+                )}
+
+                <button
+                  className="button-secondary"
+                  type="submit"
+                  style={{ marginTop: 14 }}
+                  disabled={inboundSaveDisabled}
+                >
+                  {busy ? "Saving…" : "Save Disposition"}
+                </button>
+              </form>
+            )}
           </div>
         )}
 
@@ -330,11 +558,24 @@ export default function DialerPage() {
               <div className="card">
                 <p>
                   <strong>{CALL_STATUS_LABELS[call.status] || call.status}</strong>
+                  {call.onHold && <span className="badge" style={{ marginLeft: 10 }}>ON HOLD</span>}
                 </p>
                 {isCallActive && (
-                  <button className="button-secondary" onClick={handleEndCall} disabled={busy}>
-                    End Call
-                  </button>
+                  <>
+                    {call.status === "customer_connected" && (
+                      <button
+                        className="button-secondary"
+                        onClick={handleToggleHold}
+                        disabled={busy}
+                        style={{ marginRight: 8 }}
+                      >
+                        {call.onHold ? "Unhold" : "Hold"}
+                      </button>
+                    )}
+                    <button className="button-secondary" onClick={handleEndCall} disabled={busy || call.onHold}>
+                      End Call
+                    </button>
+                  </>
                 )}
               </div>
             )}
@@ -398,7 +639,7 @@ export default function DialerPage() {
               </div>
             )}
 
-            <CallLogTable refreshKey={callLogVersion} />
+            <CallLogTable refreshKey={callLogVersion} campaignId={campaign?.campaign_id} />
           </div>
         </div>
       </div>
