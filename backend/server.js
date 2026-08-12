@@ -1,6 +1,7 @@
 "use strict";
 
 const path = require("path");
+const http = require("http");
 const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
@@ -11,7 +12,10 @@ const FileStore = require("session-file-store")(session);
 require("dotenv").config();
 
 const db = require("./config/db");
+const ws = require("./config/ws");
+require("./services/inboundCallService"); // self-registers AMI listeners on require
 const authRoutes = require("./routes/authRoutes");
+const dialerRoutes = require("./routes/dialerRoutes");
 
 const app = express();
 
@@ -63,23 +67,25 @@ SESSION MIDDLEWARE
 ==================================================
 */
 
+const sessionStore = new FileStore({
+  path: path.join(__dirname, "sessions"),
+  ttl: SESSION_MAX_AGE_MS / 1000,
+  retries: 1,
+  reapInterval: 60 * 60,
+
+  logFn: (message) => {
+    if (String(message).toLowerCase().includes("error")) {
+      console.error(message);
+    }
+  },
+});
+
 app.use(
   session({
     name: SESSION_NAME,
     secret: process.env.SESSION_SECRET,
 
-    store: new FileStore({
-      path: path.join(__dirname, "sessions"),
-      ttl: SESSION_MAX_AGE_MS / 1000,
-      retries: 1,
-      reapInterval: 60 * 60,
-
-      logFn: (message) => {
-        if (String(message).toLowerCase().includes("error")) {
-          console.error(message);
-        }
-      },
-    }),
+    store: sessionStore,
 
     resave: false,
     saveUninitialized: false,
@@ -116,6 +122,7 @@ API ROUTES
 */
 
 app.use("/api/auth", authRoutes);
+app.use("/api", dialerRoutes);
 
 /*
 ==================================================
@@ -171,10 +178,14 @@ async function startServer() {
 
     console.log("Connected to MySQL (asterisk schema).");
 
-    app.listen(PORT, () => {
+    const httpServer = http.createServer(app);
+    ws.attach(httpServer, sessionStore);
+
+    httpServer.listen(PORT, () => {
       console.log(`CMX Dialer API running on port ${PORT}`);
       console.log(`Environment: ${process.env.NODE_ENV || "development"}`);
       console.log(`Frontend URL: ${FRONTEND_URL}`);
+      console.log(`WebSocket endpoint: ws://localhost:${PORT}/ws/dialer`);
     });
   } catch (error) {
     console.error("CMX Dialer API failed to start:", {

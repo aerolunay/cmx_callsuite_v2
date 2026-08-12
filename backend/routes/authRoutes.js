@@ -1,221 +1,428 @@
 "use strict";
 
+const crypto = require("crypto");
 const express = require("express");
-const bcrypt = require("bcryptjs");
+const nodemailer = require("nodemailer");
+const { authenticator } = require("otplib");
+const QRCode = require("qrcode");
 
 const db = require("../config/db");
+const agentStatusService = require("../services/agentStatusService");
 
 const router = express.Router();
 
-const SESSION_NAME = process.env.SESSION_NAME || "cmx_dialer_session";
+const OTP_EXPIRY_MINUTES = Number(process.env.OTP_EXPIRY_MINUTES || 10);
+const OTP_LENGTH = 6;
+const MAX_OTP_ATTEMPTS = 5; // guesses per code before it's invalidated
 
-function saveSession(req) {
-  return new Promise((resolve, reject) => {
-    req.session.save((error) => {
-      if (error) {
-        reject(error);
-        return;
-      }
+// SMTP_ALLOW_SELF_SIGNED is an explicit opt-in, not a default. It disables
+// TLS certificate validation on the SMTP connection — appropriate ONLY if
+// this really is an internal mail server on a trusted network whose cert
+// is self-signed/internally-signed, not a workaround to reach for
+// casually. Prefer fixing the actual cert trust chain if possible instead
+// of leaving this on indefinitely.
+const transporter = nodemailer.createTransport({
+  host: process.env.SMTP_HOST,
+  port: Number(process.env.SMTP_PORT || 587),
+  secure: process.env.SMTP_SECURE === "true",
+  auth: {
+    user: process.env.SMTP_USER,
+    pass: process.env.SMTP_PASS,
+  },
+  tls: {
+    rejectUnauthorized: process.env.SMTP_ALLOW_SELF_SIGNED !== "true",
+  },
+});
 
-      resolve();
-    });
-  });
+function generateOtpCode() {
+  // 6-digit numeric code, zero-padded.
+  return String(crypto.randomInt(0, 10 ** OTP_LENGTH)).padStart(OTP_LENGTH, "0");
 }
 
-function regenerateSession(req) {
-  return new Promise((resolve, reject) => {
-    req.session.regenerate((error) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-
-      resolve();
-    });
-  });
+function hashCode(code) {
+  return crypto.createHash("sha256").update(code).digest("hex");
 }
 
-// vicidial_users.pass is either plaintext or a bcrypt hash depending on this
-// ViciDial install's "Encrypt User Passwords" system setting — detect by the
-// bcrypt "$2a$/$2b$/$2y$" prefix rather than trusting a hardcoded flag, since
-// that avoids depending on the exact system_settings column name/shape.
-async function verifyPassword(suppliedPassword, storedHash) {
-  const hash = String(storedHash || "");
-
-  if (/^\$2[aby]\$/.test(hash)) {
-    return bcrypt.compare(suppliedPassword, hash);
+/*
+==================================================
+Resolve an app_user's ViciDial extension the same way the old
+password-based login did — just triggered after OTP/TOTP success
+instead of before. Confirmed join logic from the verified Phase 1 work.
+==================================================
+*/
+async function resolveAgentContext(appUser) {
+  if (!appUser.vicidial_user) {
+    return { extension: null, protocol: null, user_group: null };
   }
 
-  return suppliedPassword === hash;
-}
-
-async function findActiveAgentByUsername(username) {
   const [rows] = await db.execute(
     `
-      SELECT
-        vu.user,
-        vu.pass,
-        vu.full_name,
-        vu.user_level,
-        vu.user_group,
-        vu.phone_login,
-        vu.active,
-        p.extension AS agent_extension,
-        p.protocol AS agent_protocol
+      SELECT p.extension, p.protocol, vu.user_group
       FROM vicidial_users vu
       LEFT JOIN phones p ON p.login = vu.phone_login
-      WHERE vu.user = ?
-      LIMIT 1
+      WHERE vu.user = ? AND vu.active = 'Y'
     `,
-    [username]
+    [appUser.vicidial_user]
   );
 
   if (!rows.length) {
-    return null;
+    return { extension: null, protocol: null, user_group: null };
   }
 
-  const agent = rows[0];
-
-  if (String(agent.active || "").trim().toUpperCase() !== "Y") {
-    return null;
-  }
-
-  return agent;
+  return rows[0];
 }
 
-function sanitizeAgent(agent) {
+function buildSessionAgent(appUser, vicidialContext) {
   return {
-    username: agent.user,
-    full_name: agent.full_name,
-    user_level: agent.user_level,
-    user_group: agent.user_group,
-    extension: agent.agent_extension,
-    protocol: agent.agent_protocol,
+    appUserId: appUser.app_user_id,
+    email: appUser.email,
+    fullName: appUser.full_name,
+    accessLevel: appUser.access_level,
+    username: appUser.vicidial_user, // kept as "username" for continuity with dialerRoutes.js, which reads req.session.agent.username as agentUser
+    extension: vicidialContext.extension,
+    protocol: vicidialContext.protocol,
+    userGroup: vicidialContext.user_group,
+    totpEnabled: Boolean(appUser.totp_enabled),
   };
 }
 
 /*
 ==================================================
-LOGIN
+CHECK USER
 ==================================================
-POST /api/auth/login
+POST /api/auth/check-user
+Body: { email }
+
+Used by the login screen to decide which buttons to show BEFORE
+requesting an OTP — "Request OTP" only, or both "Request OTP" and
+"Login using Authenticator" if TOTP is already enrolled.
+
+NOTE: unlike request-otp, this deliberately reveals whether an email
+has TOTP enabled — a small loosening of the "don't confirm account
+existence" principle used elsewhere. Acceptable for an internal tool
+with known staff emails; would need reconsidering if this app were ever
+exposed more publicly.
 ==================================================
 */
-router.post("/login", async (req, res) => {
+router.post("/check-user", async (req, res) => {
   try {
-    const username = String(req.body.username || "").trim();
-    const password = String(req.body.password || "");
+    const { email } = req.body;
 
-    if (!username || !password) {
-      return res.status(400).json({
-        success: false,
-        message: "Please enter a username and password.",
+    if (!email) {
+      return res.status(400).json({ success: false, message: "Email is required." });
+    }
+
+    const [users] = await db.execute(
+      `SELECT totp_enabled FROM cmx_dialer.app_users WHERE email = ? AND active = 1`,
+      [email]
+    );
+
+    const totpEnabled = users.length ? Boolean(users[0].totp_enabled) : false;
+
+    return res.json({ success: true, totpEnabled });
+  } catch (error) {
+    console.error("POST /api/auth/check-user failed:", error);
+    return res.status(500).json({ success: false, message: "Failed to check account." });
+  }
+});
+
+/*
+==================================================
+REQUEST OTP
+==================================================
+POST /api/auth/request-otp
+Body: { email }
+
+Always responds success (even for unknown emails) to avoid leaking
+which addresses are registered. Only sends an email if the app_user
+actually exists and is active.
+==================================================
+*/
+router.post("/request-otp", async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({ success: false, message: "Email is required." });
+    }
+
+    const [users] = await db.execute(
+      `SELECT app_user_id, email, full_name FROM cmx_dialer.app_users WHERE email = ? AND active = 1`,
+      [email]
+    );
+
+    if (users.length) {
+      const appUser = users[0];
+      const code = generateOtpCode();
+      const codeHash = hashCode(code);
+      const expiresAt = new Date(Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000);
+
+      await db.execute(
+        `INSERT INTO cmx_dialer.otp_codes (app_user_id, code_hash, expires_at) VALUES (?, ?, ?)`,
+        [appUser.app_user_id, codeHash, expiresAt]
+      );
+
+      await transporter.sendMail({
+        from: process.env.SMTP_FROM,
+        to: appUser.email,
+        subject: "Your CMX Dialer login code",
+        text: `Your login code is ${code}. It expires in ${OTP_EXPIRY_MINUTES} minutes.`,
       });
     }
 
-    const agent = await findActiveAgentByUsername(username);
-
-    if (!agent) {
-      return res.status(401).json({
-        success: false,
-        message: "Invalid username or password.",
-      });
-    }
-
-    const passwordMatches = await verifyPassword(password, agent.pass);
-
-    if (!passwordMatches) {
-      return res.status(401).json({
-        success: false,
-        message: "Invalid username or password.",
-      });
-    }
-
-    if (!agent.agent_extension) {
-      return res.status(409).json({
-        success: false,
-        message:
-          "This agent has no phone extension configured in ViciDial's phones table.",
-      });
-    }
-
-    await regenerateSession(req);
-
-    req.session.authenticated = true;
-    req.session.agent = sanitizeAgent(agent);
-    req.session.login_datetime = new Date().toISOString();
-
-    await saveSession(req);
-
+    // Same response regardless of whether the email matched a real user.
     return res.json({
       success: true,
-      message: "Login successful.",
-      agent: req.session.agent,
+      message: "If that email is registered, a login code has been sent.",
+      expiresInSeconds: OTP_EXPIRY_MINUTES * 60,
     });
   } catch (error) {
-    console.error("Login failed:", error);
-
-    return res.status(500).json({
-      success: false,
-      message: "We could not log you in. Please try again.",
-    });
+    console.error("POST /api/auth/request-otp failed:", error);
+    return res.status(500).json({ success: false, message: "Failed to send login code." });
   }
 });
 
 /*
 ==================================================
-CURRENT SESSION
+VERIFY OTP -> creates session
 ==================================================
-GET /api/auth/me
-==================================================
-*/
-router.get("/me", (req, res) => {
-  if (!req.session || !req.session.authenticated || !req.session.agent) {
-    return res.status(401).json({
-      success: false,
-      message: "Authentication required.",
-    });
-  }
-
-  return res.json({
-    success: true,
-    agent: req.session.agent,
-  });
-});
-
-/*
-==================================================
-LOGOUT
-==================================================
-POST /api/auth/logout
+POST /api/auth/verify-otp
+Body: { email, code }
 ==================================================
 */
-router.post("/logout", (req, res) => {
-  if (!req.session) {
-    res.clearCookie(SESSION_NAME, { path: "/" });
+router.post("/verify-otp", async (req, res) => {
+  try {
+    const { email, code } = req.body;
 
-    return res.json({
-      success: true,
-      message: "You have been logged out.",
-    });
-  }
-
-  req.session.destroy((error) => {
-    if (error) {
-      console.error("Logout failed:", error);
-
-      return res.status(500).json({
-        success: false,
-        message: "We could not log you out. Please try again.",
-      });
+    if (!email || !code) {
+      return res.status(400).json({ success: false, message: "Email and code are required." });
     }
 
-    res.clearCookie(SESSION_NAME, { path: "/" });
+    const [users] = await db.execute(
+      `SELECT * FROM cmx_dialer.app_users WHERE email = ? AND active = 1`,
+      [email]
+    );
 
-    return res.json({
-      success: true,
-      message: "You have been logged out.",
+    if (!users.length) {
+      return res.status(401).json({ success: false, message: "Invalid email or code." });
+    }
+
+    const appUser = users[0];
+
+    const [otpRows] = await db.execute(
+      `
+        SELECT * FROM cmx_dialer.otp_codes
+        WHERE app_user_id = ? AND consumed_at IS NULL AND expires_at > NOW()
+        ORDER BY otp_id DESC LIMIT 1
+      `,
+      [appUser.app_user_id]
+    );
+
+    if (!otpRows.length) {
+      return res.status(401).json({ success: false, message: "Code expired or not found. Request a new one." });
+    }
+
+    const otp = otpRows[0];
+
+    if (otp.attempt_count >= MAX_OTP_ATTEMPTS) {
+      return res.status(429).json({ success: false, message: "Too many attempts. Request a new code." });
+    }
+
+    if (otp.code_hash !== hashCode(code)) {
+      await db.execute(`UPDATE cmx_dialer.otp_codes SET attempt_count = attempt_count + 1 WHERE otp_id = ?`, [otp.otp_id]);
+      return res.status(401).json({ success: false, message: "Invalid email or code." });
+    }
+
+    await db.execute(`UPDATE cmx_dialer.otp_codes SET consumed_at = NOW() WHERE otp_id = ?`, [otp.otp_id]);
+
+    const vicidialContext = await resolveAgentContext(appUser);
+
+    req.session.regenerate((err) => {
+      if (err) {
+        console.error("Session regenerate failed:", err);
+        return res.status(500).json({ success: false, message: "Login failed." });
+      }
+
+      req.session.authenticated = true;
+      req.session.agent = buildSessionAgent(appUser, vicidialContext);
+
+      req.session.save(async (saveErr) => {
+        if (saveErr) {
+          console.error("Session save failed:", saveErr);
+          return res.status(500).json({ success: false, message: "Login failed." });
+        }
+
+        // Every fresh login starts the agent in NOT_READY — they
+        // explicitly switch to READY once actually at their desk. Not
+        // firing this here would leave getCurrentStatus() returning
+        // null until the agent's first manual status change.
+        try {
+          await agentStatusService.setStatus(appUser.app_user_id, "NOT_READY");
+        } catch (statusErr) {
+          console.error("Failed to initialize agent status on login:", statusErr);
+          // Non-fatal — login itself already succeeded; DialerPage will
+          // just show no status until the agent changes it manually.
+        }
+
+        return res.json({
+          success: true,
+          message: "Login successful.",
+          agent: req.session.agent,
+          totpEnabled: Boolean(appUser.totp_enabled),
+        });
+      });
     });
+  } catch (error) {
+    console.error("POST /api/auth/verify-otp failed:", error);
+    return res.status(500).json({ success: false, message: "Login failed." });
+  }
+});
+
+/*
+==================================================
+TOTP ENROLLMENT
+==================================================
+POST /api/auth/totp/setup — generates a secret + QR code, but does NOT
+enable TOTP yet. Requires an active session (i.e. the user already
+logged in via OTP once).
+POST /api/auth/totp/confirm — verifies the first real code from the
+authenticator app and only THEN flips totp_enabled on.
+==================================================
+*/
+function requireAuth(req, res, next) {
+  if (!req.session || !req.session.authenticated || !req.session.agent) {
+    return res.status(401).json({ success: false, message: "Authentication required." });
+  }
+  next();
+}
+
+router.post("/totp/setup", requireAuth, async (req, res) => {
+  try {
+    const secret = authenticator.generateSecret();
+    const otpauthUrl = authenticator.keyuri(req.session.agent.email, "CMX Dialer", secret);
+    const qrDataUrl = await QRCode.toDataURL(otpauthUrl);
+
+    // Stored but not yet "enabled" — confirmed only after /totp/confirm.
+    await db.execute(
+      `UPDATE cmx_dialer.app_users SET totp_secret = ? WHERE app_user_id = ?`,
+      [secret, req.session.agent.appUserId]
+    );
+
+    return res.json({ success: true, qrDataUrl, secret });
+  } catch (error) {
+    console.error("POST /api/auth/totp/setup failed:", error);
+    return res.status(500).json({ success: false, message: "Failed to start TOTP setup." });
+  }
+});
+
+router.post("/totp/confirm", requireAuth, async (req, res) => {
+  try {
+    const { code } = req.body;
+
+    const [rows] = await db.execute(
+      `SELECT totp_secret FROM cmx_dialer.app_users WHERE app_user_id = ?`,
+      [req.session.agent.appUserId]
+    );
+
+    if (!rows.length || !rows[0].totp_secret) {
+      return res.status(400).json({ success: false, message: "No TOTP setup in progress." });
+    }
+
+    const valid = authenticator.check(code, rows[0].totp_secret);
+    if (!valid) {
+      return res.status(401).json({ success: false, message: "Invalid code." });
+    }
+
+    await db.execute(
+      `UPDATE cmx_dialer.app_users SET totp_enabled = 1 WHERE app_user_id = ?`,
+      [req.session.agent.appUserId]
+    );
+
+    req.session.agent.totpEnabled = true;
+
+    return res.json({ success: true, message: "Authenticator enabled." });
+  } catch (error) {
+    console.error("POST /api/auth/totp/confirm failed:", error);
+    return res.status(500).json({ success: false, message: "Failed to confirm TOTP setup." });
+  }
+});
+
+/*
+==================================================
+TOTP LOGIN (returning users who already enrolled)
+==================================================
+POST /api/auth/login-totp
+Body: { email, code }
+==================================================
+*/
+router.post("/login-totp", async (req, res) => {
+  try {
+    const { email, code } = req.body;
+
+    if (!email || !code) {
+      return res.status(400).json({ success: false, message: "Email and code are required." });
+    }
+
+    const [users] = await db.execute(
+      `SELECT * FROM cmx_dialer.app_users WHERE email = ? AND active = 1 AND totp_enabled = 1`,
+      [email]
+    );
+
+    if (!users.length) {
+      return res.status(401).json({ success: false, message: "Invalid email or code." });
+    }
+
+    const appUser = users[0];
+    const valid = authenticator.check(code, appUser.totp_secret);
+
+    if (!valid) {
+      return res.status(401).json({ success: false, message: "Invalid email or code." });
+    }
+
+    const vicidialContext = await resolveAgentContext(appUser);
+
+    req.session.regenerate((err) => {
+      if (err) {
+        console.error("Session regenerate failed:", err);
+        return res.status(500).json({ success: false, message: "Login failed." });
+      }
+
+      req.session.authenticated = true;
+      req.session.agent = buildSessionAgent(appUser, vicidialContext);
+
+      req.session.save(async (saveErr) => {
+        if (saveErr) {
+          console.error("Session save failed:", saveErr);
+          return res.status(500).json({ success: false, message: "Login failed." });
+        }
+
+        try {
+          await agentStatusService.setStatus(appUser.app_user_id, "NOT_READY");
+        } catch (statusErr) {
+          console.error("Failed to initialize agent status on login:", statusErr);
+        }
+
+        return res.json({ success: true, message: "Login successful.", agent: req.session.agent });
+      });
+    });
+  } catch (error) {
+    console.error("POST /api/auth/login-totp failed:", error);
+    return res.status(500).json({ success: false, message: "Login failed." });
+  }
+});
+
+router.get("/me", requireAuth, (req, res) => {
+  return res.json({ success: true, agent: req.session.agent });
+});
+
+router.post("/logout", (req, res) => {
+  req.session.destroy((err) => {
+    if (err) {
+      console.error("Logout failed:", err);
+      return res.status(500).json({ success: false, message: "Logout failed." });
+    }
+    res.clearCookie(process.env.SESSION_NAME || "cmx_dialer_session");
+    return res.json({ success: true, message: "Logged out." });
   });
 });
 
