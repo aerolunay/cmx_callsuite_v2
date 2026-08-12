@@ -380,21 +380,22 @@ router.post("/dialer/inbound-disposition", requireAuth, async (req, res) => {
       });
     }
 
-    const { appUserId, username: agentUser } = req.session.agent;
+const { appUserId, username: agentUser } = req.session.agent;
     const current = inboundCallService.getInboundCallStatus();
     const startedAt = current?.startedAt || new Date();
     const endedAt = current?.endedAt || new Date();
     const inboundCallId = current?.callId || null;
+    const inboundCampaignId = current?.campaignId || null;
 
     await db.execute(
       `
         INSERT INTO cmx_dialer.inbound_call_log
-          (agent_user, call_id, caller_id_number, first_name, last_name, comments,
+          (agent_user, campaign_id, call_id, caller_id_number, first_name, last_name, comments,
            disposition, callback_at, call_started_at, call_ended_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
-        agentUser, inboundCallId, callerIdNumber || null, firstName || null, lastName || null,
+        agentUser, inboundCampaignId, inboundCallId, callerIdNumber || null, firstName || null, lastName || null,
         comments.trim(), disposition, callbackAt || null, startedAt, endedAt,
       ]
     );

@@ -176,14 +176,17 @@ export default function DialerPage() {
     }
   });
 
-  // IN_CALL always locks the switcher (a call is genuinely in progress).
-  // AFTER_CALL_WORK only locks it when there's an outbound disposition
-  // actually pending (call + lead both set) — inbound calls have no
-  // disposition step at all, so an inbound-triggered AFTER_CALL_WORK
-  // must NOT lock the agent out of manually returning to READY, or
-  // there'd be no way out of it.
+  // IN_CALL and ON_HOLD always lock the switcher (a call is genuinely
+  // active either way — ON_HOLD can now ONLY be reached via the Hold
+  // button on a live call, since it's been removed from the manual
+  // dropdown options). AFTER_CALL_WORK only locks it when there's an
+  // outbound disposition actually pending (call + lead both set) —
+  // inbound calls have no disposition step at all, so an
+  // inbound-triggered AFTER_CALL_WORK must NOT lock the agent out of
+  // manually returning to READY, or there'd be no way out of it.
   const outboundDispositionPending = agentStatus?.status === "AFTER_CALL_WORK" && call && lead;
-  const isSystemStatus = agentStatus?.status === "IN_CALL" || outboundDispositionPending;
+  const isSystemStatus =
+    agentStatus?.status === "IN_CALL" || agentStatus?.status === "ON_HOLD" || outboundDispositionPending;
   const isCallActive = call && call.status !== "ended";
 
   async function handleStatusSwitch() {

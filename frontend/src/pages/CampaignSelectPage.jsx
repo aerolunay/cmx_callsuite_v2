@@ -21,7 +21,7 @@ export default function CampaignSelectPage() {
   function handleContinue() {
     const campaign = campaigns.find((c) => c.campaign_id === selectedId);
     if (!campaign) return;
-    sessionStorage.setItem("cmx_dialer_campaign", JSON.stringify(campaign));
+    localStorage.setItem("cmx_dialer_campaign", JSON.stringify(campaign));
     navigate("/dialer");
   }
 
