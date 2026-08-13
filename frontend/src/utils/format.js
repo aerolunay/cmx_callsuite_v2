@@ -22,6 +22,39 @@ export function formatDurationHMS(totalSeconds) {
   return `${pad(h)}:${pad(m)}:${pad(s)}`;
 }
 
+/*
+==================================================
+DURATION_THRESHOLDS / durationColorFor
+==================================================
+Shared between LiveStatusDashboard.jsx (supervisor view) and
+DialerPage.jsx (the agent's own status bar) — moved here so both apply
+the EXACT same thresholds rather than two copies drifting apart over
+time. Thresholds as specified, not guessed. Statuses not listed here
+get no special coloring — just the page's normal text color.
+
+Each entry is [orangeAtSeconds, redAtSeconds]. AFTER_CALL_WORK's red
+threshold is strictly ">" 60s (not ">="), matching exactly how it was
+specified — one second different from the others' ">=", not a
+copy-paste slip.
+==================================================
+*/
+export const DURATION_THRESHOLDS = {
+  IN_CALL: { orangeAt: 5 * 60, redAt: 8 * 60, redInclusive: true },
+  ON_HOLD: { orangeAt: 90, redAt: 120, redInclusive: true },
+  AFTER_CALL_WORK: { orangeAt: 20, redAt: 60, redInclusive: false },
+  AUX_CB: { orangeAt: 5 * 60, redAt: 8 * 60, redInclusive: true },
+};
+
+export function durationColorFor(statusKey, seconds) {
+  const t = DURATION_THRESHOLDS[statusKey];
+  if (!t || seconds === null || seconds === undefined) return undefined;
+
+  const isRed = t.redInclusive ? seconds >= t.redAt : seconds > t.redAt;
+  if (isRed) return "var(--cmx-danger)";
+  if (seconds >= t.orangeAt) return "var(--cmx-warning)";
+  return undefined; // page's normal text color
+}
+
 // Formats a fixed historical timestamp for display — NOT an elapsed-
 // time calculation, so none of the clock-comparison caveats elsewhere
 // in this file apply here. Moved here from CallLogTable.jsx so

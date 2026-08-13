@@ -3,7 +3,7 @@ import { Navigate } from "react-router-dom";
 import Header from "../components/Header";
 import { api } from "../api";
 import { useAuth } from "../context/AuthContext";
-import { formatDurationHMS, formatDate } from "../utils/format";
+import { formatDurationHMS, formatDate, durationColorFor } from "../utils/format";
 
 // Order matters — this is the display order of the tables on the page.
 const STATUS_GROUPS = [
@@ -17,37 +17,9 @@ const STATUS_GROUPS = [
   { key: "LOGGED_OUT", label: "Logged Out" },
 ];
 
-/*
-==================================================
-DURATION_THRESHOLDS
-==================================================
-Per-status color coding for the Duration column, thresholds as
-specified (not guessed) — statuses not listed here (READY, NOT_READY,
-AD_HOC, LOGGED_OUT) get no special coloring at all, just the page's
-normal text color, since only these four were called out.
-
-Each entry is [orangeAtSeconds, redAtSeconds]. ACW's red threshold is
-strictly ">" 60s (not ">="), matching exactly how it was specified —
-the other three are ">=" at their red threshold, so this is genuinely
-a one-second difference from the others, not a copy-paste slip.
-==================================================
-*/
-const DURATION_THRESHOLDS = {
-  IN_CALL: { orangeAt: 5 * 60, redAt: 8 * 60, redInclusive: true },
-  ON_HOLD: { orangeAt: 90, redAt: 120, redInclusive: true },
-  AFTER_CALL_WORK: { orangeAt: 20, redAt: 60, redInclusive: false },
-  AUX_CB: { orangeAt: 5 * 60, redAt: 8 * 60, redInclusive: true },
-};
-
-function durationColorFor(statusKey, seconds) {
-  const t = DURATION_THRESHOLDS[statusKey];
-  if (!t || seconds === null || seconds === undefined) return undefined;
-
-  const isRed = t.redInclusive ? seconds >= t.redAt : seconds > t.redAt;
-  if (isRed) return "var(--cmx-danger)";
-  if (seconds >= t.orangeAt) return "var(--cmx-warning)";
-  return undefined; // page's normal text color
-}
+// DURATION_THRESHOLDS / durationColorFor moved to utils/format.js so
+// the agent's own DialerPage status bar can apply the EXACT same
+// color coding, rather than two copies drifting apart.
 
 const REFRESH_INTERVAL_MS = 5000;
 
@@ -164,6 +136,10 @@ export default function LiveStatusDashboard() {
                   </span>
                 </p>
               )}
+              <p style={{ fontSize: 12, color: "#888" }}>
+                Respects the campaign filter above. Per campaign, based on each campaign's DID —
+                see DID_TO_CAMPAIGN in inboundCallService.js to add a new one.
+              </p>
             </div>
           </div>
 

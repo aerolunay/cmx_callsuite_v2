@@ -10,7 +10,7 @@ import { useAuth } from "../context/AuthContext";
 import { useDialerSocket } from "../hooks/useDialerSocket";
 import { DISPOSITIONS } from "../constants/dispositions";
 import { INBOUND_DISPOSITIONS } from "../constants/inboundDispositions";
-import { formatDuration } from "../utils/format";
+import { formatDuration, durationColorFor } from "../utils/format";
 
 // Agent-selectable statuses. IN_CALL and AFTER_CALL_WORK are set only
 // by the backend in response to real call events — never offered here.
@@ -247,7 +247,7 @@ export default function DialerPage() {
         leadData.lead.phone_number,
         leadData.lead
       );
-      setCall({ callId: callData.callId, room: callData.room, status: "ringing_agent" });
+      setCall({ callId: callData.callId, room: callData.room, status: "ringing_agent", callType: "REGULAR" });
     } catch (err) {
       setError(err.message);
     } finally {
@@ -290,7 +290,7 @@ export default function DialerPage() {
         callbackLead,
         "CALLBACK"
       );
-      setCall({ callId: callData.callId, room: callData.room, status: "ringing_agent" });
+      setCall({ callId: callData.callId, room: callData.room, status: "ringing_agent", callType: "CALLBACK" });
     } catch (err) {
       setError(err.message);
     } finally {
@@ -479,7 +479,15 @@ export default function DialerPage() {
             <div className="card status-bar">
               <div>
                 <span className="badge">{statusLabel}</span>
-                <span className="status-elapsed">{formatDuration(elapsedSeconds)}</span>
+                <span
+                  className="status-elapsed"
+                  style={{
+                    color: durationColorFor(agentStatus?.status, elapsedSeconds),
+                    fontWeight: durationColorFor(agentStatus?.status, elapsedSeconds) ? 700 : undefined,
+                  }}
+                >
+                  {formatDuration(elapsedSeconds)}
+                </span>
               </div>
 
               <div className="status-switcher">
@@ -672,6 +680,52 @@ export default function DialerPage() {
                       End Call
                     </button>
                   </>
+                )}
+
+                {/* Callback-only, shown immediately (not gated on the
+                    call ending) and pre-filled from the Call Logs row
+                    that started it — mirrors inbound's "shown
+                    immediately, editable throughout the call" intake
+                    panel, since a callback's "lead" is often just
+                    reconstructed from a call log row (no real address/
+                    etc. to show), same reasoning inbound already has no
+                    real lead at all. First/Last Name write straight into
+                    the SAME `lead` state handleSaveDisposition already
+                    reads firstName/lastName from — editing them here
+                    needs no backend changes at all, since that payload
+                    already existed. Comments reuses the EXACT same
+                    `comments` state the post-call disposition form
+                    below uses, so anything typed early is still there
+                    (not a second, disconnected comments box) once the
+                    call ends and that form appears. */}
+                {call.callType === "CALLBACK" && isCallActive && (
+                  <div style={{ marginTop: 12 }}>
+                    <label className="comments-label">Caller ID</label>
+                    <input type="text" value={lead?.phone_number || ""} readOnly />
+
+                    <label className="comments-label">First Name</label>
+                    <input
+                      type="text"
+                      value={lead?.first_name || ""}
+                      onChange={(e) => setLead((prev) => ({ ...prev, first_name: e.target.value }))}
+                    />
+
+                    <label className="comments-label">Last Name</label>
+                    <input
+                      type="text"
+                      value={lead?.last_name || ""}
+                      onChange={(e) => setLead((prev) => ({ ...prev, last_name: e.target.value }))}
+                    />
+
+                    <label className="comments-label">Comments (required)</label>
+                    <textarea
+                      className="comments-textarea"
+                      value={comments}
+                      onChange={(e) => setComments(e.target.value)}
+                      placeholder="What's this callback about?"
+                      rows={3}
+                    />
+                  </div>
                 )}
               </div>
             )}

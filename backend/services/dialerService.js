@@ -82,6 +82,16 @@ function broadcastCallStatus(call) {
 // status transition (harmless functionally, but noisy/confusing in the
 // status_log history).
 async function markCallEnded(call) {
+  // Safety net for the OriginateResponse listener added in startCall()
+  // (see the customer-leg-channel fix above) — if the call ends via some
+  // other path (agent hangs up first, ConfbridgeLeave/Hangup fires,
+  // etc.) before that listener ever gets a chance to fire on its own,
+  // this stops it from leaking indefinitely on this long-running process.
+  if (call._customerOriginateResponseListener) {
+    ami.events.removeListener("OriginateResponse", call._customerOriginateResponseListener);
+    call._customerOriginateResponseListener = null;
+  }
+
   if (call.afterCallWorkTriggered) return;
   call.afterCallWorkTriggered = true;
 
@@ -278,6 +288,37 @@ function startCall({ appUserId, agentUser, agentExtension, lead, leadId, phoneNu
 
         callState.status = "ringing_customer";
         broadcastCallStatus(callState);
+
+        // REAL BUG FIXED HERE: previously, callState.customerChannel was
+        // ONLY ever set inside ConfbridgeJoin's handler — which only
+        // fires once the customer's phone actually ANSWERS. While still
+        // ringing, customerChannel stayed null, so endCall() (see below)
+        // had nothing to hang up if the agent ended the call before the
+        // customer picked up — the dial-out just kept ringing on
+        // Asterisk's side indefinitely, orphaned from callState entirely.
+        // Confirmed via a real callback test: agent ended the call while
+        // the customer's line was still ringing, and it never stopped.
+        //
+        // Fix: capture the channel from the customer leg's OWN
+        // OriginateResponse instead, which fires immediately once
+        // Asterisk accepts the dial attempt — regardless of whether it's
+        // ever answered. Matched by room (via the Local channel's name
+        // prefix), not by phoneNumber, since room is guaranteed unique
+        // per in-flight call by construction of allocateRoomSuffix(),
+        // whereas two simultaneous calls could in principle dial the
+        // same number. One-shot: removes itself once it fires, or once
+        // the call ends some other way first.
+        const onCustomerOriginateResponse = (evt) => {
+          if (!evt.channel || !evt.channel.startsWith(`Local/${room}@`)) return;
+          if (!callState.customerChannel) {
+            callState.customerChannel = evt.channel;
+          }
+          ami.events.removeListener("OriginateResponse", onCustomerOriginateResponse);
+          callState._customerOriginateResponseListener = null;
+        };
+        callState._customerOriginateResponseListener = onCustomerOriginateResponse;
+        ami.events.on("OriginateResponse", onCustomerOriginateResponse);
+
         resolve({ callId, room });
       } catch (err) {
         await markCallEnded(callState);
