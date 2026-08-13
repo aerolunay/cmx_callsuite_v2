@@ -2,17 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { dispositionLabel } from "../constants/dispositions";
 import { inboundDispositionLabel } from "../constants/inboundDispositions";
-
-function formatDate(value) {
-  if (!value) return "—";
-  const d = new Date(value);
-  return d.toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
+import { formatDate } from "../utils/format";
 
 // refreshKey is bumped by the parent (DialerPage) after a disposition
 // is saved, so this table picks up the new row without polling on an

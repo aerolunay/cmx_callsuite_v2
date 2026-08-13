@@ -15,8 +15,8 @@ import { formatDuration } from "../utils/format";
 // Agent-selectable statuses. IN_CALL and AFTER_CALL_WORK are set only
 // by the backend in response to real call events — never offered here.
 const MANUAL_STATUSES = [
-  { value: "NOT_READY", label: "Not Ready" },
   { value: "READY", label: "Ready" },
+  { value: "NOT_READY", label: "Not Ready" },
   { value: "AUX_CB", label: "Aux CB" },
   { value: "AD_HOC", label: "Ad-Hoc" },
 ];
@@ -182,9 +182,13 @@ export default function DialerPage() {
 
     if (message.type === "inboundCall") {
       setInboundCall((prev) => {
-        // A brand new call starting (no previous call, or previous one
-        // was already fully finalized) — reset the intake form fields.
-        if (!prev) {
+        // A brand new call starting (no previous call, previous one was
+        // already fully finalized, OR this message is for a DIFFERENT
+        // callId than whatever we were tracking — v2's multi-call
+        // rebuild means an agent could in principle see a stale "ended"
+        // message for a just-finalized call arrive right as a new one
+        // starts) — reset the intake form fields.
+        if (!prev || prev.callId !== message.callId) {
           setInboundFirstName("");
           setInboundLastName("");
           setInboundComments("");
@@ -192,6 +196,7 @@ export default function DialerPage() {
           setInboundCallbackAt("");
         }
         return {
+          callId: message.callId,
           status: message.status,
           room: message.room,
           callerIdNumber: message.callerIdNumber,
@@ -325,7 +330,9 @@ export default function DialerPage() {
     setError("");
     setBusy(true);
     try {
-      const data = inboundCall.onHold ? await api.unholdInbound() : await api.holdInbound();
+      const data = inboundCall.onHold
+        ? await api.unholdInbound(inboundCall.callId)
+        : await api.holdInbound(inboundCall.callId);
       setInboundCall((prev) => ({ ...prev, onHold: data.status.onHold }));
     } catch (err) {
       setError(err.message);
@@ -339,7 +346,7 @@ export default function DialerPage() {
     setError("");
     setBusy(true);
     try {
-      await api.endInboundCall();
+      await api.endInboundCall(inboundCall.callId);
       // The 'ended' status arrives over the WS broadcast that
       // endInboundCall() triggers server-side — nothing else to do
       // here but wait for it.
@@ -401,6 +408,7 @@ export default function DialerPage() {
     setBusy(true);
     try {
       await api.saveInboundDisposition({
+        callId: inboundCall?.callId,
         callerIdNumber: inboundCall?.callerIdNumber,
         firstName: inboundFirstName,
         lastName: inboundLastName,

@@ -90,7 +90,11 @@ async function markCallEnded(call) {
   broadcastCallStatus(call);
 
   try {
-    await agentStatusService.setStatus(call.appUserId, "AFTER_CALL_WORK", { relatedCallDirection: "outbound", relatedCampaignId: call.campaignId });
+    await agentStatusService.setStatus(call.appUserId, "AFTER_CALL_WORK", {
+      relatedCallDirection: "outbound",
+      relatedCampaignId: call.campaignId,
+      relatedCallId: call.callId,
+    });
   } catch (err) {
     console.error("[dialerService] Failed to set AFTER_CALL_WORK status:", err.message);
   }
@@ -236,7 +240,11 @@ function startCall({ appUserId, agentUser, agentExtension, lead, leadId, phoneNu
     // starts, not only once someone actually answers — so IN_CALL
     // begins here rather than waiting for ConfbridgeJoin.
     try {
-      await agentStatusService.setStatus(appUserId, "IN_CALL", { relatedCallDirection: "outbound", relatedCampaignId: callState.campaignId });
+      await agentStatusService.setStatus(appUserId, "IN_CALL", {
+        relatedCallDirection: "outbound",
+        relatedCampaignId: callState.campaignId,
+        relatedCallId: callState.callId,
+      });
     } catch (err) {
       console.error("[dialerService] Failed to set IN_CALL status:", err.message);
     }
@@ -520,7 +528,11 @@ async function holdCall(callId) {
   broadcastCallStatus(call);
 
   try {
-    await agentStatusService.setStatus(call.appUserId, "ON_HOLD", { relatedCallDirection: "outbound", relatedCampaignId: call.campaignId });
+    await agentStatusService.setStatus(call.appUserId, "ON_HOLD", {
+      relatedCallDirection: "outbound",
+      relatedCampaignId: call.campaignId,
+      relatedCallId: call.callId,
+    });
   } catch (err) {
     console.error("[dialerService] Failed to set ON_HOLD status:", err.message);
   }
@@ -543,7 +555,11 @@ async function unholdCall(callId) {
   broadcastCallStatus(call);
 
   try {
-    await agentStatusService.setStatus(call.appUserId, "IN_CALL", { relatedCallDirection: "outbound", relatedCampaignId: call.campaignId });
+    await agentStatusService.setStatus(call.appUserId, "IN_CALL", {
+      relatedCallDirection: "outbound",
+      relatedCampaignId: call.campaignId,
+      relatedCallId: call.callId,
+    });
   } catch (err) {
     console.error("[dialerService] Failed to set IN_CALL status after unhold:", err.message);
   }

@@ -14,6 +14,7 @@ official secondary colors, adjust these variables.
   --cmx-text-dark: #182d57;
   --cmx-border: #d9dee6;
   --cmx-danger: #c0392b;
+  --cmx-warning: #e67e22;
   --cmx-success: #1e7e34;
 }
 
@@ -246,6 +247,42 @@ button.primary:disabled {
 
 .card p:last-child {
   margin-bottom: 0;
+}
+
+/*
+==================================================
+LIVE STATUS DASHBOARD — Calls in Queue / Abandoned row
+==================================================
+Two equal-width cards side by side, both pinned to the SAME fixed
+height regardless of content — a long Abandoned list scrolls WITHIN
+its card instead of growing it taller. .queue-row-scroll is the actual
+scrolling element (not the whole card), so the card's h3 title stays
+pinned in view while the list scrolls underneath it.
+==================================================
+*/
+.queue-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.queue-row .card {
+  height: 380px;
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 0;
+}
+
+.queue-row-scroll {
+  overflow-y: auto;
+  flex: 1;
+}
+
+@media (max-width: 700px) {
+  .queue-row {
+    grid-template-columns: 1fr;
+  }
 }
 
 .badge {

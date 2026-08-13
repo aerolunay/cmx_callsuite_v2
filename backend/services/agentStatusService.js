@@ -113,7 +113,7 @@ async function setStatus(appUserId, status, options = {}) {
     throw new Error(`Unknown agent status: ${status}`);
   }
 
-  const { relatedCallDirection = null, relatedCampaignId = null } = options;
+  const { relatedCallDirection = null, relatedCampaignId = null, relatedCallId = null } = options;
 
   await db.execute(
     `
@@ -125,8 +125,8 @@ async function setStatus(appUserId, status, options = {}) {
   );
 
   await db.execute(
-    `INSERT INTO cmx_dialer.agent_status_log (app_user_id, status, related_call_direction, related_campaign_id, started_at) VALUES (?, ?, ?, ?, NOW())`,
-    [appUserId, status, relatedCallDirection, relatedCampaignId]
+    `INSERT INTO cmx_dialer.agent_status_log (app_user_id, status, related_call_direction, related_campaign_id, related_call_id, started_at) VALUES (?, ?, ?, ?, ?, NOW())`,
+    [appUserId, status, relatedCallDirection, relatedCampaignId, relatedCallId]
   );
 
   const current = await getCurrentStatus(appUserId);
@@ -165,12 +165,19 @@ answer or disposition it.
 Fix: require ws.isConnected(appUserId) — an actual live socket — as
 well as the DB status. Loops over ALL READY candidates (not just the
 first row) since the first candidate by DB order might be exactly the
-stale/disconnected one; falls through to the next real candidate
-instead of returning null outright. Still no ranking/priority beyond
-that — v1, single-agent test scope.
+stale/disconnected one, or one already excluded; falls through to the
+next real candidate instead of returning null outright.
+
+excludeAppUserIds (NEW): lets a caller — specifically
+inboundCallService.js's multi-call FIFO matcher — rule out agents
+already claimed by A DIFFERENT waiting call in the same matching pass.
+Without this, two simultaneously-waiting callers could both get
+matched to the SAME ready agent before either Originate finished.
 ==================================================
 */
-async function getAnyReadyAgentWithExtension() {
+async function getAnyReadyAgentWithExtension(excludeAppUserIds = []) {
+  const excludeSet = new Set(excludeAppUserIds);
+
   const [rows] = await db.execute(
     `
       SELECT asl.app_user_id, au.vicidial_user
@@ -184,6 +191,7 @@ async function getAnyReadyAgentWithExtension() {
   for (const row of rows) {
     const { app_user_id: appUserId, vicidial_user: agentUser } = row;
     if (!agentUser) continue;
+    if (excludeSet.has(appUserId)) continue;
 
     if (!ws.isConnected(appUserId)) {
       // Stale/disconnected READY row — not a real candidate. Leaving

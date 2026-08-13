@@ -4,6 +4,8 @@ const express = require("express");
 const db = require("../config/db");
 const inboundCallService = require("../services/inboundCallService");
 const statsService = require("../services/statsService");
+const { transporter } = require("../config/mailer");
+const { buildWelcomeEmail } = require("../services/emailTemplates");
 
 const router = express.Router();
 
@@ -131,6 +133,21 @@ router.post("/users", requireAdmin, async (req, res) => {
 
     await connection.commit();
 
+    // Sent AFTER commit, deliberately outside the transaction and not
+    // awaited into the response's success/failure — a bounced or
+    // slow-to-send welcome email should never make account creation
+    // itself look like it failed. Logged, not surfaced to the admin
+    // who just clicked "Create".
+    transporter
+      .sendMail({
+        from: process.env.SMTP_FROM,
+        to: email,
+        ...buildWelcomeEmail({ fullName, email, accessLevel }),
+      })
+      .catch((err) => {
+        console.error(`[adminRoutes] Failed to send welcome email to ${email}:`, err.message);
+      });
+
     return res.json({ success: true, appUserId });
   } catch (error) {
     await connection.rollback();
@@ -191,10 +208,11 @@ router.get("/live-status", requireAdmin, async (req, res) => {
           au.vicidial_user,
           open_row.status AS open_status,
           open_row.elapsed_seconds AS open_elapsed_seconds,
+          open_row.related_call_id AS open_related_call_id,
           last_closed.logged_out_elapsed_seconds
         FROM cmx_dialer.app_users au
         LEFT JOIN (
-          SELECT app_user_id, status, TIMESTAMPDIFF(SECOND, started_at, NOW()) AS elapsed_seconds
+          SELECT app_user_id, status, related_call_id, TIMESTAMPDIFF(SECOND, started_at, NOW()) AS elapsed_seconds
           FROM cmx_dialer.agent_status_log
           WHERE ended_at IS NULL
         ) open_row ON open_row.app_user_id = au.app_user_id
@@ -218,15 +236,70 @@ router.get("/live-status", requireAdmin, async (req, res) => {
       [campaignId || null, campaignId || null]
     );
 
+    /*
+    ==================================================
+    TOTAL CALL HANDLING TIME (real bug fixed here)
+    ==================================================
+    Previously, an agent's "On a Call" duration reset to 0 the moment
+    they put the customer on hold — because holding/unholding closes
+    the IN_CALL row and opens a fresh ON_HOLD (then a fresh IN_CALL)
+    row, each with its own started_at. open_elapsed_seconds above only
+    ever reflects time since the CURRENT segment started, not the
+    whole call.
+
+    Fix: related_call_id (new column — see add_related_call_id.sql)
+    tags every IN_CALL/ON_HOLD/AFTER_CALL_WORK row with which call it
+    belongs to, REGARDLESS of how many hold/unhold segments that call
+    has been split into. For any agent currently IN_CALL or ON_HOLD,
+    sum every segment (closed ones via their stored duration_seconds,
+    the current open one via TIMESTAMPDIFF) that shares that call_id —
+    giving the TRUE total handling time for that specific call, not
+    just the current segment.
+    ==================================================
+    */
+    const callIdsNeedingTotal = rows
+      .filter((r) => (r.open_status === "IN_CALL" || r.open_status === "ON_HOLD") && r.open_related_call_id)
+      .map((r) => r.open_related_call_id);
+
+    const totalsByCallId = new Map();
+    if (callIdsNeedingTotal.length > 0) {
+      const [totalRows] = await db.execute(
+        `
+          SELECT
+            related_call_id,
+            SUM(
+              CASE
+                WHEN ended_at IS NOT NULL THEN duration_seconds
+                ELSE TIMESTAMPDIFF(SECOND, started_at, NOW())
+              END
+            ) AS total_seconds
+          FROM cmx_dialer.agent_status_log
+          WHERE related_call_id IN (?)
+          GROUP BY related_call_id
+        `,
+        [callIdsNeedingTotal]
+      );
+      for (const t of totalRows) {
+        totalsByCallId.set(t.related_call_id, t.total_seconds);
+      }
+    }
+
     const agents = rows.map((r) => {
       if (r.open_status) {
+        const isCallTied = r.open_status === "IN_CALL" || r.open_status === "ON_HOLD";
+        const totalHandlingSeconds = isCallTied ? totalsByCallId.get(r.open_related_call_id) : undefined;
+
         return {
           appUserId: r.app_user_id,
           fullName: r.full_name,
           email: r.email,
           vicidialUser: r.vicidial_user,
           status: r.open_status,
-          elapsedSeconds: r.open_elapsed_seconds,
+          // Falls back to the single-segment value whenever there's no
+          // related_call_id to aggregate by (pre-migration rows, or a
+          // status genuinely unrelated to any call) — never silently
+          // shows nothing.
+          elapsedSeconds: totalHandlingSeconds !== undefined ? totalHandlingSeconds : r.open_elapsed_seconds,
         };
       }
       return {
@@ -373,29 +446,56 @@ router.delete("/users/:appUserId", requireAdmin, async (req, res) => {
 ==================================================
 QUEUE STATUS
 ==================================================
-GET /api/admin/queue-status
+GET /api/admin/queue-status?campaignId=optional
 
-Honest about current capability: this app supports exactly ONE
-inbound room/DID system-wide today (a real, already-flagged v1
-limitation), so this can only ever report 0 or 1 right now — there is
-no true multi-call queue yet. Shaped as an array (one entry per
-campaign) so this doesn't need reworking once each campaign gets its
-own DID and a real per-campaign queue becomes meaningful.
+Real aggregation across every currently-tracked inbound call, grouped
+by campaign (via inboundCallService's DID_TO_CAMPAIGN mapping) —
+replaces the old hardcoded 0-or-1 guess from when only one fixed room
+existed system-wide.
+
+campaignId filtering added here (not inside getQueueStatus() itself)
+— the service function stays a simple "give me everything, grouped"
+primitive; this route decides whether to narrow that down, matching
+how the Live Status Dashboard's agent-table filtering already works
+via the campaignId query param above.
 ==================================================
 */
 router.get("/queue-status", requireAdmin, async (req, res) => {
   try {
-    const current = inboundCallService.getInboundCallStatus();
-    const queues = [];
+    const { campaignId } = req.query;
+    let queues = inboundCallService.getQueueStatus();
 
-    if (current && current.status === "waiting_for_agent") {
-      queues.push({ campaignId: current.campaignId, waiting: 1 });
+    if (campaignId) {
+      queues = queues.filter((q) => q.campaignId === campaignId);
     }
 
     return res.json({ success: true, queues });
   } catch (error) {
     console.error("GET /api/admin/queue-status failed:", error);
     return res.status(500).json({ success: false, message: "Failed to load queue status." });
+  }
+});
+
+/*
+==================================================
+ABANDONED CALLS
+==================================================
+GET /api/admin/abandoned-calls?campaignId=optional
+
+"Today" boundary reuses the SAME self-calibrating Eastern-day logic
+Today's Stats already uses (see statsService.js) — not a separate,
+possibly-inconsistent definition of "today". Respects the campaign
+filter the same way queue-status does.
+==================================================
+*/
+router.get("/abandoned-calls", requireAdmin, async (req, res) => {
+  try {
+    const { campaignId } = req.query;
+    const calls = await inboundCallService.getAbandonedCallsToday(campaignId || null);
+    return res.json({ success: true, calls });
+  } catch (error) {
+    console.error("GET /api/admin/abandoned-calls failed:", error);
+    return res.status(500).json({ success: false, message: "Failed to load abandoned calls." });
   }
 });
 

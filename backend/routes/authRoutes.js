@@ -2,11 +2,12 @@
 
 const crypto = require("crypto");
 const express = require("express");
-const nodemailer = require("nodemailer");
 const { authenticator } = require("otplib");
 const QRCode = require("qrcode");
 
 const db = require("../config/db");
+const { transporter } = require("../config/mailer");
+const { buildOtpEmail } = require("../services/emailTemplates");
 const agentStatusService = require("../services/agentStatusService");
 
 const router = express.Router();
@@ -14,25 +15,6 @@ const router = express.Router();
 const OTP_EXPIRY_MINUTES = Number(process.env.OTP_EXPIRY_MINUTES || 10);
 const OTP_LENGTH = 6;
 const MAX_OTP_ATTEMPTS = 5; // guesses per code before it's invalidated
-
-// SMTP_ALLOW_SELF_SIGNED is an explicit opt-in, not a default. It disables
-// TLS certificate validation on the SMTP connection — appropriate ONLY if
-// this really is an internal mail server on a trusted network whose cert
-// is self-signed/internally-signed, not a workaround to reach for
-// casually. Prefer fixing the actual cert trust chain if possible instead
-// of leaving this on indefinitely.
-const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST,
-  port: Number(process.env.SMTP_PORT || 587),
-  secure: process.env.SMTP_SECURE === "true",
-  auth: {
-    user: process.env.SMTP_USER,
-    pass: process.env.SMTP_PASS,
-  },
-  tls: {
-    rejectUnauthorized: process.env.SMTP_ALLOW_SELF_SIGNED !== "true",
-  },
-});
 
 function generateOtpCode() {
   // 6-digit numeric code, zero-padded.
@@ -165,8 +147,7 @@ router.post("/request-otp", async (req, res) => {
       await transporter.sendMail({
         from: process.env.SMTP_FROM,
         to: appUser.email,
-        subject: "Your CMX Dialer login code",
-        text: `Your login code is ${code}. It expires in ${OTP_EXPIRY_MINUTES} minutes.`,
+        ...buildOtpEmail({ fullName: appUser.full_name, code, expiryMinutes: OTP_EXPIRY_MINUTES }),
       });
     }
 

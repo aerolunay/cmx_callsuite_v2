@@ -64,9 +64,11 @@ export const api = {
   endCall: (callId) => request(`/dialer/end-call/${callId}`, { method: "POST" }),
   holdCall: (callId) => request(`/dialer/hold/${callId}`, { method: "POST" }),
   unholdCall: (callId) => request(`/dialer/unhold/${callId}`, { method: "POST" }),
-  holdInbound: () => request(`/dialer/inbound/hold`, { method: "POST" }),
-  unholdInbound: () => request(`/dialer/inbound/unhold`, { method: "POST" }),
-  endInboundCall: () => request(`/dialer/inbound/end-call`, { method: "POST" }),
+  // callId is required on all 4 of these now — v2's multi-call inbound
+  // rebuild means there's no more implicit "the" inbound call.
+  holdInbound: (callId) => request(`/dialer/inbound/hold`, { method: "POST", body: JSON.stringify({ callId }) }),
+  unholdInbound: (callId) => request(`/dialer/inbound/unhold`, { method: "POST", body: JSON.stringify({ callId }) }),
+  endInboundCall: (callId) => request(`/dialer/inbound/end-call`, { method: "POST", body: JSON.stringify({ callId }) }),
   saveDisposition: (callId, payload) =>
     request(`/dialer/disposition/${callId}`, { method: "POST", body: JSON.stringify(payload) }),
   saveInboundDisposition: (payload) =>
@@ -83,7 +85,10 @@ export const api = {
     request(`/admin/users/${appUserId}`, { method: "DELETE" }),
   getLiveStatus: (campaignId) =>
     request(`/admin/live-status${campaignId ? `?campaignId=${encodeURIComponent(campaignId)}` : ""}`),
-  getQueueStatus: () => request(`/admin/queue-status`),
+  getQueueStatus: (campaignId) =>
+    request(`/admin/queue-status${campaignId ? `?campaignId=${encodeURIComponent(campaignId)}` : ""}`),
+  getAbandonedCalls: (campaignId) =>
+    request(`/admin/abandoned-calls${campaignId ? `?campaignId=${encodeURIComponent(campaignId)}` : ""}`),
   getAggregateStats: (campaignId) =>
     request(`/admin/stats/today${campaignId ? `?campaignId=${encodeURIComponent(campaignId)}` : ""}`),
 };

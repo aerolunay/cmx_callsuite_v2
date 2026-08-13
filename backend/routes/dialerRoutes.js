@@ -101,8 +101,9 @@ router.get("/dialer/inbound/current", requireAuth, async (req, res) => {
     return res.json({
       success: true,
       call: {
+        callId: current.callId,
         status: current.status,
-        room: inboundCallService.INBOUND_ROOM,
+        room: current.room,
         callerIdNumber: current.callerIdNumber,
         onHold: current.onHold,
       },
@@ -256,7 +257,15 @@ INBOUND: END CALL / HOLD / UNHOLD
 */
 router.post("/dialer/inbound/end-call", requireAuth, async (req, res) => {
   try {
-    await inboundCallService.endInboundCall();
+    const { callId } = req.body;
+    if (!callId) {
+      return res.status(400).json({ success: false, message: "callId is required." });
+    }
+    const call = inboundCallService.findByCallId(callId);
+    if (!call) {
+      return res.status(404).json({ success: false, message: "No inbound call with that ID." });
+    }
+    await inboundCallService.endInboundCall(call.room);
     return res.json({ success: true });
   } catch (error) {
     console.error("POST /api/dialer/inbound/end-call failed:", error);
@@ -266,7 +275,11 @@ router.post("/dialer/inbound/end-call", requireAuth, async (req, res) => {
 
 router.post("/dialer/inbound/hold", requireAuth, async (req, res) => {
   try {
-    const status = await inboundCallService.holdInboundCall();
+    const { callId } = req.body;
+    if (!callId) {
+      return res.status(400).json({ success: false, message: "callId is required." });
+    }
+    const status = await inboundCallService.holdInboundCall(callId);
     return res.json({ success: true, status });
   } catch (error) {
     console.error("POST /api/dialer/inbound/hold failed:", error);
@@ -276,7 +289,11 @@ router.post("/dialer/inbound/hold", requireAuth, async (req, res) => {
 
 router.post("/dialer/inbound/unhold", requireAuth, async (req, res) => {
   try {
-    const status = await inboundCallService.unholdInboundCall();
+    const { callId } = req.body;
+    if (!callId) {
+      return res.status(400).json({ success: false, message: "callId is required." });
+    }
+    const status = await inboundCallService.unholdInboundCall(callId);
     return res.json({ success: true, status });
   } catch (error) {
     console.error("POST /api/dialer/inbound/unhold failed:", error);
@@ -388,7 +405,11 @@ matches the same ID used throughout the call's lifecycle.
 */
 router.post("/dialer/inbound-disposition", requireAuth, async (req, res) => {
   try {
-    const { callerIdNumber, firstName, lastName, comments, disposition, callbackAt, setNotReady } = req.body;
+    const { callId, callerIdNumber, firstName, lastName, comments, disposition, callbackAt, setNotReady } = req.body;
+
+    if (!callId) {
+      return res.status(400).json({ success: false, message: "callId is required." });
+    }
 
     if (!comments || !comments.trim()) {
       return res.status(400).json({ success: false, message: "Comments are required." });
@@ -406,10 +427,13 @@ router.post("/dialer/inbound-disposition", requireAuth, async (req, res) => {
     }
 
     const { appUserId, username: agentUser } = req.session.agent;
-    const current = inboundCallService.getInboundCallStatus();
+
+    // Read BEFORE finalizeInboundCall() below, which deletes this call
+    // from inboundCallService's Map — this is the last point at which
+    // its campaignId/startedAt/endedAt are still readable.
+    const current = inboundCallService.findByCallId(callId);
     const startedAt = current?.startedAt || new Date();
     const endedAt = current?.endedAt || new Date();
-    const inboundCallId = current?.callId || null;
     const inboundCampaignId = current?.campaignId || null;
 
     await db.execute(
@@ -420,12 +444,12 @@ router.post("/dialer/inbound-disposition", requireAuth, async (req, res) => {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
-        agentUser, inboundCampaignId, inboundCallId, callerIdNumber || null, firstName || null, lastName || null,
+        agentUser, inboundCampaignId, callId, callerIdNumber || null, firstName || null, lastName || null,
         comments.trim(), disposition, callbackAt || null, startedAt, endedAt,
       ]
     );
 
-    await inboundCallService.finalizeInboundCall(appUserId, setNotReady);
+    await inboundCallService.finalizeInboundCall(callId, appUserId, setNotReady);
 
     return res.json({ success: true });
   } catch (error) {
