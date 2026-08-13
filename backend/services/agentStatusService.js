@@ -147,10 +147,27 @@ async function setStatus(appUserId, status, options = {}) {
 getAnyReadyAgentWithExtension
 ==================================================
 Used by inboundCallService.js to find someone to ring when a customer
-is waiting. Picks the first READY agent found (no ranking/priority
-logic — v1, single-agent test scope; worth revisiting before this
-matters with multiple concurrent agents). Resolves their PJSIP
-extension the same way authRoutes.js does at login.
+is waiting. Resolves candidates' PJSIP extension the same way
+authRoutes.js does at login.
+
+REAL BUG FIXED HERE (confirmed via code inspection, not guessed): a
+DB status row of READY is NOT proof anyone is actually present in the
+app. agent_status_log rows are only ever closed by the explicit
+/logout route (see authRoutes.js) — a browser close, crash, laptop
+sleep, or session expiry leaves the row open indefinitely. Meanwhile
+MicroSIP's PJSIP registration is completely independent of the app
+session — it stays registered to Asterisk regardless of whether the
+web app is even open. Without this check, inbound routing could (and
+did) ring a softphone that's registered but has nobody behind the
+DialerPage at all — no incoming-call UI, no caller ID, no way to
+answer or disposition it.
+
+Fix: require ws.isConnected(appUserId) — an actual live socket — as
+well as the DB status. Loops over ALL READY candidates (not just the
+first row) since the first candidate by DB order might be exactly the
+stale/disconnected one; falls through to the next real candidate
+instead of returning null outright. Still no ranking/priority beyond
+that — v1, single-agent test scope.
 ==================================================
 */
 async function getAnyReadyAgentWithExtension() {
@@ -160,27 +177,70 @@ async function getAnyReadyAgentWithExtension() {
       FROM cmx_dialer.agent_status_log asl
       JOIN cmx_dialer.app_users au ON au.app_user_id = asl.app_user_id
       WHERE asl.status = 'READY' AND asl.ended_at IS NULL
-      LIMIT 1
+      ORDER BY asl.status_log_id ASC
     `
   );
 
-  if (!rows.length || !rows[0].vicidial_user) return null;
+  for (const row of rows) {
+    const { app_user_id: appUserId, vicidial_user: agentUser } = row;
+    if (!agentUser) continue;
 
-  const { app_user_id: appUserId, vicidial_user: agentUser } = rows[0];
+    if (!ws.isConnected(appUserId)) {
+      // Stale/disconnected READY row — not a real candidate. Leaving
+      // the DB row alone here deliberately: closing it automatically
+      // is a separate decision (would need to distinguish "gone for
+      // good" from "brief network blip / page reload"), out of scope
+      // for this fix. This just stops it from being treated as an
+      // eligible agent for routing purposes.
+      continue;
+    }
 
-  const [extRows] = await db.execute(
-    `
-      SELECT p.extension
-      FROM vicidial_users vu
-      LEFT JOIN phones p ON p.login = vu.phone_login
-      WHERE vu.user = ? AND vu.active = 'Y'
-    `,
-    [agentUser]
-  );
+    const [extRows] = await db.execute(
+      `
+        SELECT p.extension
+        FROM vicidial_users vu
+        LEFT JOIN phones p ON p.login = vu.phone_login
+        WHERE vu.user = ? AND vu.active = 'Y'
+      `,
+      [agentUser]
+    );
 
-  if (!extRows.length || !extRows[0].extension) return null;
+    if (!extRows.length || !extRows[0].extension) continue;
 
-  return { appUserId, agentUser, extension: extRows[0].extension };
+    return { appUserId, agentUser, extension: extRows[0].extension };
+  }
+
+  return null;
+}
+
+/*
+==================================================
+CALL_TIED_STATUSES / isCallTied()
+==================================================
+Single source of truth for "is this agent mid-call right now" — used
+by ws.js (lazy-required there to avoid a circular top-level require,
+since this file already requires ws.js) to decide whether a dropped
+socket should touch the agent's status at all. If they're IN_CALL,
+AFTER_CALL_WORK, or ON_HOLD, ws.js leaves the status completely alone
+on disconnect — the call's own hangup/hold handling in
+dialerService.js/inboundCallService.js is what should end that period,
+not a dropped socket. This is the explicit exception: every OTHER
+status gets closed immediately on disconnect and restored on
+reconnect (see ws.js's pendingRestoreBySid).
+
+KNOWN GAP, named rather than solved here: if an agent's app truly never
+comes back while mid-call (not just a blip), status just sits at
+whatever call-tied state it's in — there's no later re-check once the
+call itself ends via AMI hangup detection. Same class of "agent
+vanished with an open AFTER_CALL_WORK nobody ever dispositions" gap
+that already exists independent of this fix.
+==================================================
+*/
+const CALL_TIED_STATUSES = new Set(["IN_CALL", "AFTER_CALL_WORK", "ON_HOLD"]);
+
+async function isCallTied(appUserId) {
+  const current = await getCurrentStatus(appUserId);
+  return !!(current && CALL_TIED_STATUSES.has(current.status));
 }
 
 module.exports = {
@@ -189,6 +249,7 @@ module.exports = {
   setStatus,
   closeCurrentStatus,
   getAnyReadyAgentWithExtension,
+  isCallTied,
   statusEvents,
   PRODUCTIVE_STATUSES,
   OCCUPANCY_STATUSES,

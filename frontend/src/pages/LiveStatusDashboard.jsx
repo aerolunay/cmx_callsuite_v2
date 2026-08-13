@@ -3,7 +3,7 @@ import { Navigate } from "react-router-dom";
 import Header from "../components/Header";
 import { api } from "../api";
 import { useAuth } from "../context/AuthContext";
-import { formatDuration } from "../utils/format";
+import { formatDurationHMS } from "../utils/format";
 
 // Order matters — this is the display order of the tables on the page.
 const STATUS_GROUPS = [
@@ -61,16 +61,11 @@ export default function LiveStatusDashboard() {
     return <Navigate to="/" replace />;
   }
 
-  function elapsedSecondsFor(a) {
-    if (!a.startedAt) return null;
-    return Math.floor((Date.now() - new Date(a.startedAt).getTime()) / 1000);
-  }
-
   const grouped = STATUS_GROUPS.map((g) => ({
     ...g,
     rows: agents
       .filter((a) => a.status === g.key)
-      .map((a) => ({ ...a, elapsedSeconds: elapsedSecondsFor(a) }))
+      .slice()
       .sort((a, b) => (b.elapsedSeconds ?? -1) - (a.elapsedSeconds ?? -1)),
   }));
 
@@ -136,7 +131,7 @@ export default function LiveStatusDashboard() {
                         <td>{a.fullName}</td>
                         <td>{a.email}</td>
                         <td>{a.vicidialUser || "—"}</td>
-                        <td>{a.elapsedSeconds !== null ? formatDuration(a.elapsedSeconds) : "—"}</td>
+                        <td>{a.elapsedSeconds !== null ? formatDurationHMS(a.elapsedSeconds) : "—"}</td>
                       </tr>
                     ))}
                   </tbody>

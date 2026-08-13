@@ -124,7 +124,7 @@ export default function LoginPage() {
       return;
     }
 
-    navigate("/");
+    navigate("/", { state: { justLoggedIn: true } });
   }
 
   async function handleVerifyOtp(e) {
@@ -165,7 +165,7 @@ export default function LoginPage() {
     if (setupNow) {
       setShowSetupModal(true);
     } else {
-      navigate("/");
+      navigate("/", { state: { justLoggedIn: true } });
     }
   }
 
@@ -307,7 +307,7 @@ export default function LoginPage() {
         <Setup2FAModal
           onClose={() => {
             setShowSetupModal(false);
-            navigate("/");
+            navigate("/", { state: { justLoggedIn: true } });
           }}
           onComplete={() => setTotpEnabled(true)}
         />

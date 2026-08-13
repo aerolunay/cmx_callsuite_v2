@@ -171,6 +171,17 @@ router.get("/live-status", requireAdmin, async (req, res) => {
   try {
     const { campaignId } = req.query;
 
+    // REAL BUG FIXED HERE: this used to return raw started_at/
+    // last_ended_at timestamps and let the frontend diff them against
+    // Date.now() in the browser — the EXACT same class of bug already
+    // found and fixed once for DialerPage's own elapsed-time counter
+    // (see agentStatusService.js/DialerPage.jsx comments on that), just
+    // never applied here when this second dashboard was built
+    // separately. Symptom was identical: a bogus multi-hour reading
+    // from a timezone mismatch between the MySQL server and the app.
+    // Fix is the same one already established elsewhere in this
+    // codebase: let MySQL compute elapsed seconds itself via
+    // TIMESTAMPDIFF, never comparing clocks across the two machines.
     const [rows] = await db.execute(
       `
         SELECT
@@ -179,16 +190,16 @@ router.get("/live-status", requireAdmin, async (req, res) => {
           au.email,
           au.vicidial_user,
           open_row.status AS open_status,
-          open_row.started_at AS open_started_at,
-          last_closed.last_ended_at
+          open_row.elapsed_seconds AS open_elapsed_seconds,
+          last_closed.logged_out_elapsed_seconds
         FROM cmx_dialer.app_users au
         LEFT JOIN (
-          SELECT app_user_id, status, started_at
+          SELECT app_user_id, status, TIMESTAMPDIFF(SECOND, started_at, NOW()) AS elapsed_seconds
           FROM cmx_dialer.agent_status_log
           WHERE ended_at IS NULL
         ) open_row ON open_row.app_user_id = au.app_user_id
         LEFT JOIN (
-          SELECT app_user_id, MAX(ended_at) AS last_ended_at
+          SELECT app_user_id, TIMESTAMPDIFF(SECOND, MAX(ended_at), NOW()) AS logged_out_elapsed_seconds
           FROM cmx_dialer.agent_status_log
           WHERE ended_at IS NOT NULL
           GROUP BY app_user_id
@@ -215,7 +226,7 @@ router.get("/live-status", requireAdmin, async (req, res) => {
           email: r.email,
           vicidialUser: r.vicidial_user,
           status: r.open_status,
-          startedAt: r.open_started_at,
+          elapsedSeconds: r.open_elapsed_seconds,
         };
       }
       return {
@@ -224,7 +235,7 @@ router.get("/live-status", requireAdmin, async (req, res) => {
         email: r.email,
         vicidialUser: r.vicidial_user,
         status: "LOGGED_OUT",
-        startedAt: r.last_ended_at, // null if they've never logged any status at all
+        elapsedSeconds: r.logged_out_elapsed_seconds, // null if they've never logged any status at all
       };
     });
 
