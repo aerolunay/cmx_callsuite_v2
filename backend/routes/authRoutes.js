@@ -415,7 +415,20 @@ router.get("/me", requireAuth, (req, res) => {
   return res.json({ success: true, agent: req.session.agent });
 });
 
-router.post("/logout", (req, res) => {
+router.post("/logout", async (req, res) => {
+  // Close the current open status row BEFORE destroying the session —
+  // without this, the row stays open forever, indistinguishable from
+  // the agent still genuinely being in that status. This is what
+  // makes "Logged Out" a real, detectable state on the live-status
+  // dashboard rather than something that just silently never happens.
+  if (req.session && req.session.agent) {
+    try {
+      await agentStatusService.closeCurrentStatus(req.session.agent.appUserId);
+    } catch (err) {
+      console.error("Failed to close status on logout:", err.message);
+    }
+  }
+
   req.session.destroy((err) => {
     if (err) {
       console.error("Logout failed:", err);

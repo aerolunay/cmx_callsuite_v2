@@ -16,6 +16,7 @@ const ws = require("./config/ws");
 require("./services/inboundCallService"); // self-registers AMI listeners on require
 const authRoutes = require("./routes/authRoutes");
 const dialerRoutes = require("./routes/dialerRoutes");
+const adminRoutes = require("./routes/adminRoutes");
 
 const app = express();
 
@@ -123,6 +124,7 @@ API ROUTES
 
 app.use("/api/auth", authRoutes);
 app.use("/api", dialerRoutes);
+app.use("/api/admin", adminRoutes);
 
 /*
 ==================================================

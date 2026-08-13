@@ -71,4 +71,19 @@ export const api = {
     request(`/dialer/disposition/${callId}`, { method: "POST", body: JSON.stringify(payload) }),
   saveInboundDisposition: (payload) =>
     request(`/dialer/inbound-disposition`, { method: "POST", body: JSON.stringify(payload) }),
+
+  // Admin
+  getAvailableVicidialUsers: () => request("/admin/vicidial-users/available"),
+  getAdminUsers: () => request("/admin/users"),
+  createAdminUser: (payload) =>
+    request("/admin/users", { method: "POST", body: JSON.stringify(payload) }),
+  updateAdminUser: (appUserId, payload) =>
+    request(`/admin/users/${appUserId}`, { method: "PUT", body: JSON.stringify(payload) }),
+  deleteAdminUser: (appUserId) =>
+    request(`/admin/users/${appUserId}`, { method: "DELETE" }),
+  getLiveStatus: (campaignId) =>
+    request(`/admin/live-status${campaignId ? `?campaignId=${encodeURIComponent(campaignId)}` : ""}`),
+  getQueueStatus: () => request(`/admin/queue-status`),
+  getAggregateStats: (campaignId) =>
+    request(`/admin/stats/today${campaignId ? `?campaignId=${encodeURIComponent(campaignId)}` : ""}`),
 };

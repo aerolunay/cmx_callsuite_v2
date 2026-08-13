@@ -35,8 +35,29 @@ by real call events (see dialerService.js).
                        in before the call, e.g. NOT_READY).
 ==================================================
 */
-const MANUAL_STATUSES = new Set(["NOT_READY", "READY", "ON_HOLD", "AUX_CB"]);
-const ALL_STATUSES = new Set(["NOT_READY", "READY", "ON_HOLD", "AUX_CB", "IN_CALL", "AFTER_CALL_WORK"]);
+const MANUAL_STATUSES = new Set(["NOT_READY", "READY", "ON_HOLD", "AUX_CB", "AD_HOC"]);
+const ALL_STATUSES = new Set(["NOT_READY", "READY", "ON_HOLD", "AUX_CB", "AD_HOC", "IN_CALL", "AFTER_CALL_WORK"]);
+
+/*
+==================================================
+STATUS CLASSIFICATION — for future reporting
+==================================================
+No occupancy% or productive-hours report exists yet, but this
+classification is a real business rule established explicitly, so
+it's captured here as the canonical source rather than left to be
+re-derived (and possibly gotten wrong) whenever that reporting is
+eventually built.
+
+PRODUCTIVE_STATUSES: counts as productive work time. Includes AD_HOC
+(admin tasks while logged in — real work, just not call-related).
+
+OCCUPANCY_STATUSES: counts as "available for calls" time. Deliberately
+EXCLUDES AD_HOC — an AD_HOC agent cannot receive a call, so counting
+that time as "available" would be wrong even though it's productive.
+==================================================
+*/
+const PRODUCTIVE_STATUSES = new Set(["READY", "AD_HOC", "IN_CALL", "AFTER_CALL_WORK", "ON_HOLD", "AUX_CB"]);
+const OCCUPANCY_STATUSES = new Set(["READY", "IN_CALL", "AFTER_CALL_WORK", "ON_HOLD", "AUX_CB"]);
 
 function isManualStatus(status) {
   return MANUAL_STATUSES.has(status);
@@ -65,6 +86,28 @@ its real duration) and opens a new one. Broadcasts the change over the
 WebSocket so any connected client for this agent updates live instead
 of needing to poll.
 */
+/*
+==================================================
+closeCurrentStatus
+==================================================
+Closes whatever status row is currently open, WITHOUT opening a new
+one — leaving the agent with no open row at all. That absence is what
+"Logged Out" means on the live-status dashboard. Used by logout;
+without this, a status row would stay open forever after logging out,
+indistinguishable from someone still genuinely active in that status.
+==================================================
+*/
+async function closeCurrentStatus(appUserId) {
+  await db.execute(
+    `
+      UPDATE cmx_dialer.agent_status_log
+      SET ended_at = NOW(), duration_seconds = TIMESTAMPDIFF(SECOND, started_at, NOW())
+      WHERE app_user_id = ? AND ended_at IS NULL
+    `,
+    [appUserId]
+  );
+}
+
 async function setStatus(appUserId, status, options = {}) {
   if (!ALL_STATUSES.has(status)) {
     throw new Error(`Unknown agent status: ${status}`);
@@ -144,6 +187,9 @@ module.exports = {
   isManualStatus,
   getCurrentStatus,
   setStatus,
+  closeCurrentStatus,
   getAnyReadyAgentWithExtension,
   statusEvents,
+  PRODUCTIVE_STATUSES,
+  OCCUPANCY_STATUSES,
 };

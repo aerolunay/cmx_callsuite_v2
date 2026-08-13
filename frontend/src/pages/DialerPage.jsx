@@ -4,6 +4,7 @@ import Header from "../components/Header";
 import ContactDetailsCard from "../components/ContactDetailsCard";
 import CallLogTable from "../components/CallLogTable";
 import StatsPanel from "../components/StatsPanel";
+import AggregateStatsPanel from "../components/AggregateStatsPanel";
 import { api } from "../api";
 import { useAuth } from "../context/AuthContext";
 import { useDialerSocket } from "../hooks/useDialerSocket";
@@ -17,12 +18,14 @@ const MANUAL_STATUSES = [
   { value: "NOT_READY", label: "Not Ready" },
   { value: "READY", label: "Ready" },
   { value: "AUX_CB", label: "Aux CB" },
+  { value: "AD_HOC", label: "Ad-Hoc" },
 ];
 
 const STATUS_LABELS = {
   NOT_READY: "Not Ready",
   READY: "Ready",
   AUX_CB: "Aux CB",
+  AD_HOC: "Ad-Hoc",
   IN_CALL: "In Call",
   AFTER_CALL_WORK: "After Call Work",
   ON_HOLD: "On Hold",
@@ -74,6 +77,7 @@ export default function DialerPage() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [hasLeads, setHasLeads] = useState(true); // optimistic default — avoids a flash of "no leads" before the check resolves
+  const [allCampaigns, setAllCampaigns] = useState([]); // full campaign list, only needed for AggregateStatsPanel's filter (admin/supervisor)
 
   const elapsedTimerRef = useRef(null);
 
@@ -89,6 +93,12 @@ export default function DialerPage() {
   // Hide "Dial Next Number" entirely for campaigns with no leads at
   // all (e.g. CMXBSMSC, which is inbound-only and relies on the
   // Callback feature instead) — checked once campaign is known.
+  useEffect(() => {
+    if (agent?.accessLevel === "admin" || agent?.accessLevel === "supervisor") {
+      api.getCampaigns().then((data) => setAllCampaigns(data.campaigns)).catch(() => {});
+    }
+  }, [agent]);
+
   useEffect(() => {
     if (!campaign) return;
     api
@@ -487,6 +497,10 @@ export default function DialerPage() {
             </div>
 
             <StatsPanel refreshKey={callLogVersion} campaignId={campaign?.campaign_id} />
+
+            {(agent.accessLevel === "admin" || agent.accessLevel === "supervisor") && (
+              <AggregateStatsPanel campaigns={allCampaigns} />
+            )}
 
         {inboundCall && (
           <div className="card">
