@@ -164,10 +164,6 @@ export default function LiveStatusDashboard() {
                   </span>
                 </p>
               )}
-              <p style={{ fontSize: 12, color: "#888" }}>
-                Respects the campaign filter above. Per campaign, based on each campaign's DID —
-                see DID_TO_CAMPAIGN in inboundCallService.js to add a new one.
-              </p>
             </div>
           </div>
 
