@@ -180,7 +180,23 @@ callers should track status via getCallStatus()/WebSocket push rather
 than blocking on the full flow.
 ==================================================
 */
-function startCall({ appUserId, agentUser, agentExtension, lead, leadId, phoneNumber, campaignCid, campaignId }) {
+// Real bug found: a phone number with a leading "+" can't match EITHER
+// outbound dialplan pattern (_1NXXNXXXXXX or _NXXNXXXXXX — both
+// require the first character to be a literal digit, never "+"),
+// causing a silent no-route failure. Normalizing to a bare 10-digit
+// US number here fixes this for BOTH Dial Next Number and Callback,
+// since they share this same function.
+function normalizePhoneNumber(phoneNumber) {
+  if (!phoneNumber) return phoneNumber;
+  let digits = String(phoneNumber).replace(/^\+/, "");
+  if (digits.length === 11 && digits.startsWith("1")) {
+    digits = digits.slice(1);
+  }
+  return digits;
+}
+
+function startCall({ appUserId, agentUser, agentExtension, lead, leadId, phoneNumber, campaignCid, campaignId, callType = "REGULAR" }) {
+  phoneNumber = normalizePhoneNumber(phoneNumber);
   return new Promise(async (resolve, reject) => {
     let suffix;
     try {
@@ -201,6 +217,7 @@ function startCall({ appUserId, agentUser, agentExtension, lead, leadId, phoneNu
       lead, // full lead object — needed to restore ContactDetailsCard after a page refresh/reopen, not just leadId/phoneNumber
       leadId,
       phoneNumber,
+      callType,
       agentUser,
       agentExtension,
       status: "ringing_agent",
@@ -595,6 +612,7 @@ async function saveDisposition({
   const call = activeCalls.get(callId);
   const startedAt = call ? call.startedAt : new Date();
   const endedAt = (call && call.endedAt) || new Date();
+  const callType = (call && call.callType) || "REGULAR";
 
   const connection = await db.getConnection();
   try {
@@ -604,13 +622,13 @@ async function saveDisposition({
       `
         INSERT INTO cmx_dialer.dialer_call_log
           (agent_user, campaign_id, lead_id, phone_number, first_name, last_name,
-           room_number, call_id, call_started_at, call_ended_at, disposition,
+           room_number, call_id, call_type, call_started_at, call_ended_at, disposition,
            comments, callback_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
         agentUser, campaignId, leadId, phoneNumber, firstName || null, lastName || null,
-        room, callId, startedAt, endedAt, disposition, comments.trim(), callbackAt || null,
+        room, callId, callType, startedAt, endedAt, disposition, comments.trim(), callbackAt || null,
       ]
     );
 
@@ -675,6 +693,8 @@ async function getCallLog(agentUser, campaignId, limit = 50) {
           'outbound' AS direction,
           call_log_id,
           call_id,
+          lead_id,
+          call_type,
           call_started_at,
           first_name,
           last_name,
@@ -691,6 +711,8 @@ async function getCallLog(agentUser, campaignId, limit = 50) {
           'inbound' AS direction,
           call_log_id,
           call_id,
+          NULL AS lead_id,
+          NULL AS call_type,
           call_started_at,
           first_name,
           last_name,

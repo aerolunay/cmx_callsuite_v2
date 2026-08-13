@@ -32,12 +32,16 @@ thing that clears it and returns the agent to READY.
 
 const INBOUND_ROOM = "9700000";
 
-// v1 limitation: inbound calls only ever arrive via ONE hardcoded DID,
-// which belongs to CMXBSM specifically. This is why every inbound
-// call gets tagged with this fixed campaign — NOT a general
-// multi-campaign solution. Revisit the moment a second campaign gets
-// its own inbound DID (e.g. CMXBSMSC).
-const INBOUND_CAMPAIGN_ID = "CMXBSM";
+// v1 limitation: inbound calls only ever arrive via ONE hardcoded DID.
+// This is why every inbound call gets tagged with this fixed campaign
+// — NOT a general multi-campaign solution. CMXBSMSC is now the
+// prioritized campaign for this DID (CMXBSM is meant to be pure
+// outbound going forward) — this constant is the ONLY thing that
+// determines that on our side, since this bypass never reads
+// ViciDial's own DID/Ingroup/closer_campaigns linkage at all. Revisit
+// this constant (and the whole single-DID assumption) the moment a
+// second campaign gets its own real inbound DID.
+const INBOUND_CAMPAIGN_ID = "CMXBSMSC";
 
 // null when no inbound call is in progress or awaiting disposition.
 // { callId, status, customerChannel, agentChannel, callerIdNumber,
@@ -248,11 +252,13 @@ function getInboundCallForAgent(appUserId) {
 
 // Called once the agent actually saves the intake/disposition form —
 // this is the ONLY thing that clears inboundCall and returns the
-// agent to READY. Until this runs, the call record (and caller ID)
-// stays available for the frontend to read.
-async function finalizeInboundCall(appUserId) {
+// agent to READY (or NOT_READY, if the agent checked the "set me Not
+// Ready after this" checkbox on the disposition form). Until this
+// runs, the call record (and caller ID) stays available for the
+// frontend to read.
+async function finalizeInboundCall(appUserId, setNotReady = false) {
   inboundCall = null;
-  return agentStatusService.setStatus(appUserId, "READY");
+  return agentStatusService.setStatus(appUserId, setNotReady ? "NOT_READY" : "READY");
 }
 
 /*

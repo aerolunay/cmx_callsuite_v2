@@ -552,6 +552,23 @@ button.primary:disabled {
   color: #888;
 }
 
+.call-log-row {
+  cursor: pointer;
+}
+
+.call-log-row:hover {
+  background: var(--cmx-gray-bg);
+}
+
+.callback-popup {
+  position: fixed;
+  z-index: 1000;
+  background: white;
+  border-radius: 6px;
+  box-shadow: 0 4px 20px rgba(24, 45, 87, 0.25);
+  padding: 8px;
+}
+
 .direction-badge {
   font-size: 11px;
   padding: 2px 8px;
@@ -569,6 +586,11 @@ button.primary:disabled {
 .direction-inbound {
   background: #fff3cd;
   color: #8a6d1a;
+}
+
+.direction-callback {
+  background: #e0e0f0;
+  color: #4a3f8a;
 }
 
 /* ===== Disposition comments ===== */

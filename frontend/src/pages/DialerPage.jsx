@@ -16,12 +16,13 @@ import { formatDuration } from "../utils/format";
 const MANUAL_STATUSES = [
   { value: "NOT_READY", label: "Not Ready" },
   { value: "READY", label: "Ready" },
-  { value: "ON_HOLD", label: "On Hold" },
+  { value: "AUX_CB", label: "Aux CB" },
 ];
 
 const STATUS_LABELS = {
   NOT_READY: "Not Ready",
   READY: "Ready",
+  AUX_CB: "Aux CB",
   IN_CALL: "In Call",
   AFTER_CALL_WORK: "After Call Work",
   ON_HOLD: "On Hold",
@@ -62,14 +63,17 @@ export default function DialerPage() {
   const [inboundComments, setInboundComments] = useState("");
   const [inboundDisposition, setInboundDisposition] = useState("");
   const [inboundCallbackAt, setInboundCallbackAt] = useState("");
+  const [inboundSetNotReady, setInboundSetNotReady] = useState(false);
 
   const [disposition, setDisposition] = useState("");
   const [comments, setComments] = useState("");
   const [callbackAt, setCallbackAt] = useState("");
+  const [setNotReadyAfterSave, setSetNotReadyAfterSave] = useState(false);
   const [callLogVersion, setCallLogVersion] = useState(0);
 
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [hasLeads, setHasLeads] = useState(true); // optimistic default — avoids a flash of "no leads" before the check resolves
 
   const elapsedTimerRef = useRef(null);
 
@@ -81,6 +85,17 @@ export default function DialerPage() {
     }
     setCampaign(JSON.parse(stored));
   }, [navigate]);
+
+  // Hide "Dial Next Number" entirely for campaigns with no leads at
+  // all (e.g. CMXBSMSC, which is inbound-only and relies on the
+  // Callback feature instead) — checked once campaign is known.
+  useEffect(() => {
+    if (!campaign) return;
+    api
+      .hasLeads(campaign.campaign_id)
+      .then((data) => setHasLeads(data.hasLead))
+      .catch(() => setHasLeads(true)); // fail open — don't hide the button just because this check errored
+  }, [campaign]);
 
   // Restore an in-progress call after a page refresh or the app being
   // fully closed and reopened. The backend (dialerService.js's
@@ -225,6 +240,49 @@ export default function DialerPage() {
     }
   }
 
+  // Callback: reuses the same startCall path as "Dial Next Number" but
+  // skips getNextLead entirely — the row from Call Logs already has
+  // everything needed. Outbound-sourced rows carry a real lead_id
+  // (added to getCallLog specifically for this), so their disposition
+  // still updates vicidial_list correctly; inbound-sourced rows have
+  // no real lead at all, so lead_id falls back to 0 (a harmless no-op
+  // for that UPDATE).
+  async function handleCallBack(row) {
+    if (agentStatus?.status !== "AUX_CB") {
+      setError("You must be in Aux CB status to place a callback.");
+      return;
+    }
+    if (call || inboundCall) {
+      setError("You're already on a call.");
+      return;
+    }
+
+    setError("");
+    setBusy(true);
+    try {
+      const callbackLead = {
+        lead_id: row.lead_id || 0,
+        first_name: row.first_name,
+        last_name: row.last_name,
+        phone_number: row.phone_number,
+      };
+      setLead(callbackLead);
+
+      const callData = await api.startCall(
+        campaign.campaign_id,
+        callbackLead.lead_id,
+        callbackLead.phone_number,
+        callbackLead,
+        "CALLBACK"
+      );
+      setCall({ callId: callData.callId, room: callData.room, status: "ringing_agent" });
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function handleEndCall() {
     if (!call) return;
     setError("");
@@ -303,6 +361,7 @@ export default function DialerPage() {
         disposition,
         comments: comments.trim(),
         callbackAt: disposition === "CALLBACK" ? callbackAt : undefined,
+        setNotReady: setNotReadyAfterSave,
       });
 
       setLead(null);
@@ -310,6 +369,7 @@ export default function DialerPage() {
       setDisposition("");
       setComments("");
       setCallbackAt("");
+      setSetNotReadyAfterSave(false);
       setCallLogVersion((v) => v + 1);
     } catch (err) {
       setError(err.message);
@@ -337,6 +397,7 @@ export default function DialerPage() {
         comments: inboundComments.trim(),
         disposition: inboundDisposition,
         callbackAt: inboundDisposition === "CALLBACK_REQUESTED" ? inboundCallbackAt : undefined,
+        setNotReady: inboundSetNotReady,
       });
 
       setInboundCall(null);
@@ -345,6 +406,7 @@ export default function DialerPage() {
       setInboundComments("");
       setInboundDisposition("");
       setInboundCallbackAt("");
+      setInboundSetNotReady(false);
       setCallLogVersion((v) => v + 1);
     } catch (err) {
       setError(err.message);
@@ -521,6 +583,15 @@ export default function DialerPage() {
                   />
                 )}
 
+                <label className="disposition-row" style={{ marginTop: 10 }}>
+                  <input
+                    type="checkbox"
+                    checked={inboundSetNotReady}
+                    onChange={(e) => setInboundSetNotReady(e.target.checked)}
+                  />
+                  Set my status to Not Ready after saving
+                </label>
+
                 <button
                   className="button-secondary"
                   type="submit"
@@ -534,7 +605,7 @@ export default function DialerPage() {
           </div>
         )}
 
-            {agentStatus?.status === "READY" && !call && (
+            {agentStatus?.status === "READY" && !call && hasLeads && (
               <div className="card">
                 <button
                   className="primary"
@@ -619,6 +690,15 @@ export default function DialerPage() {
                     />
                   )}
 
+                  <label className="disposition-row" style={{ marginTop: 10 }}>
+                    <input
+                      type="checkbox"
+                      checked={setNotReadyAfterSave}
+                      onChange={(e) => setSetNotReadyAfterSave(e.target.checked)}
+                    />
+                    Set my status to Not Ready after saving
+                  </label>
+
                   <button
                     className="button-secondary"
                     type="submit"
@@ -642,7 +722,12 @@ export default function DialerPage() {
               </div>
             )}
 
-            <CallLogTable refreshKey={callLogVersion} campaignId={campaign?.campaign_id} />
+            <CallLogTable
+              refreshKey={callLogVersion}
+              campaignId={campaign?.campaign_id}
+              onCallBack={handleCallBack}
+              canCallBack={agentStatus?.status === "AUX_CB"}
+            />
           </div>
         </div>
       </div>

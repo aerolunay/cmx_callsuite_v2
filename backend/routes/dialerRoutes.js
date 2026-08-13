@@ -113,6 +113,20 @@ router.get("/dialer/inbound/current", requireAuth, async (req, res) => {
   }
 });
 
+router.get("/dialer/has-leads", requireAuth, async (req, res) => {
+  try {
+    const { campaignId } = req.query;
+    if (!campaignId) {
+      return res.status(400).json({ success: false, message: "campaignId query param is required." });
+    }
+    const lead = await dialerService.getNextLead(campaignId);
+    return res.json({ success: true, hasLead: Boolean(lead) });
+  } catch (error) {
+    console.error("GET /api/dialer/has-leads failed:", error);
+    return res.status(500).json({ success: false, message: "Failed to check for leads." });
+  }
+});
+
 /*
 ==================================================
 NEXT LEAD
@@ -153,9 +167,9 @@ restore ContactDetailsCard fully, not just the lead's ID/phone number.
 */
 router.post("/dialer/start-call", requireAuth, async (req, res) => {
   try {
-    const { campaignId, leadId, phoneNumber, lead } = req.body;
+    const { campaignId, leadId, phoneNumber, lead, callType } = req.body;
 
-    if (!campaignId || !leadId || !phoneNumber) {
+    if (!campaignId || leadId === undefined || leadId === null || !phoneNumber) {
       return res.status(400).json({
         success: false,
         message: "campaignId, leadId, and phoneNumber are all required.",
@@ -190,6 +204,7 @@ router.post("/dialer/start-call", requireAuth, async (req, res) => {
       phoneNumber,
       campaignCid,
       campaignId,
+      callType,
     });
 
     return res.json({ success: true, ...result });
@@ -311,9 +326,9 @@ SAVE DISPOSITION (outbound)
 router.post("/dialer/disposition/:callId", requireAuth, async (req, res) => {
   try {
     const { callId } = req.params;
-    const { campaignId, leadId, phoneNumber, firstName, lastName, room, disposition, comments, callbackAt } = req.body;
+    const { campaignId, leadId, phoneNumber, firstName, lastName, room, disposition, comments, callbackAt, setNotReady } = req.body;
 
-    if (!campaignId || !leadId || !phoneNumber || !room || !disposition) {
+    if (!campaignId || leadId === undefined || leadId === null || !phoneNumber || !room || !disposition) {
       return res.status(400).json({
         success: false,
         message: "campaignId, leadId, phoneNumber, room, and disposition are all required.",
@@ -345,6 +360,16 @@ router.post("/dialer/disposition/:callId", requireAuth, async (req, res) => {
       callbackAt,
     });
 
+    // NOTE: this used to be a real gap — outbound disposition never
+    // touched agent status at all, unlike inbound's finalizeInboundCall
+    // which always auto-set READY. Fixed here to match, and to support
+    // the "set me Not Ready after this" checkbox.
+    try {
+      await agentStatusService.setStatus(appUserId, setNotReady ? "NOT_READY" : "READY");
+    } catch (statusErr) {
+      console.error("Failed to update agent status after disposition:", statusErr.message);
+    }
+
     return res.json({ success: true, ...result });
   } catch (error) {
     console.error("POST /api/dialer/disposition failed:", error);
@@ -363,7 +388,7 @@ matches the same ID used throughout the call's lifecycle.
 */
 router.post("/dialer/inbound-disposition", requireAuth, async (req, res) => {
   try {
-    const { callerIdNumber, firstName, lastName, comments, disposition, callbackAt } = req.body;
+    const { callerIdNumber, firstName, lastName, comments, disposition, callbackAt, setNotReady } = req.body;
 
     if (!comments || !comments.trim()) {
       return res.status(400).json({ success: false, message: "Comments are required." });
@@ -380,7 +405,7 @@ router.post("/dialer/inbound-disposition", requireAuth, async (req, res) => {
       });
     }
 
-const { appUserId, username: agentUser } = req.session.agent;
+    const { appUserId, username: agentUser } = req.session.agent;
     const current = inboundCallService.getInboundCallStatus();
     const startedAt = current?.startedAt || new Date();
     const endedAt = current?.endedAt || new Date();
@@ -400,7 +425,7 @@ const { appUserId, username: agentUser } = req.session.agent;
       ]
     );
 
-    await inboundCallService.finalizeInboundCall(appUserId);
+    await inboundCallService.finalizeInboundCall(appUserId, setNotReady);
 
     return res.json({ success: true });
   } catch (error) {

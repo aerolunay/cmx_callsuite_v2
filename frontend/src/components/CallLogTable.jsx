@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { dispositionLabel } from "../constants/dispositions";
 import { inboundDispositionLabel } from "../constants/inboundDispositions";
@@ -17,10 +17,15 @@ function formatDate(value) {
 // refreshKey is bumped by the parent (DialerPage) after a disposition
 // is saved, so this table picks up the new row without polling on an
 // interval — it only refetches when something actually changed.
-export default function CallLogTable({ refreshKey, campaignId }) {
+// onCallBack is called with the raw row when the agent confirms the
+// "Call Back" popup for it.
+export default function CallLogTable({ refreshKey, campaignId, onCallBack, canCallBack }) {
   const [rows, setRows] = useState([]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
+  const [popup, setPopup] = useState(null); // { row, x, y } | null
+
+  const popupRef = useRef(null);
 
   useEffect(() => {
     if (!campaignId) return;
@@ -32,10 +37,36 @@ export default function CallLogTable({ refreshKey, campaignId }) {
       .finally(() => setLoading(false));
   }, [refreshKey, campaignId]);
 
+  // Dismiss the popup on any click outside it.
+  useEffect(() => {
+    if (!popup) return;
+
+    function handleOutsideClick(e) {
+      if (popupRef.current && !popupRef.current.contains(e.target)) {
+        setPopup(null);
+      }
+    }
+
+    document.addEventListener("mousedown", handleOutsideClick);
+    return () => document.removeEventListener("mousedown", handleOutsideClick);
+  }, [popup]);
+
   function resolveDispositionLabel(row) {
     return row.direction === "inbound"
       ? inboundDispositionLabel(row.disposition)
       : dispositionLabel(row.disposition);
+  }
+
+  function handleRowDoubleClick(row, e) {
+    if (!canCallBack) return;
+    setPopup({ row, x: e.clientX, y: e.clientY });
+  }
+
+  function handleConfirmCallBack() {
+    if (popup && onCallBack) {
+      onCallBack(popup.row);
+    }
+    setPopup(null);
   }
 
   return (
@@ -61,11 +92,20 @@ export default function CallLogTable({ refreshKey, campaignId }) {
           </thead>
           <tbody>
             {rows.map((row) => (
-              <tr key={`${row.direction}-${row.call_log_id}`}>
+              <tr
+                key={`${row.direction}-${row.call_log_id}`}
+                onDoubleClick={(e) => handleRowDoubleClick(row, e)}
+                className={canCallBack ? "call-log-row" : ""}
+              >
                 <td>
                   <span className={`direction-badge direction-${row.direction}`}>
                     {row.direction === "inbound" ? "Inbound" : "Outbound"}
                   </span>
+                  {row.call_type === "CALLBACK" && (
+                    <span className="direction-badge direction-callback" style={{ marginLeft: 4 }}>
+                      Callback
+                    </span>
+                  )}
                 </td>
                 <td>{formatDate(row.call_started_at)}</td>
                 <td>
@@ -80,6 +120,18 @@ export default function CallLogTable({ refreshKey, campaignId }) {
             ))}
           </tbody>
         </table>
+      )}
+
+      {popup && (
+        <div
+          ref={popupRef}
+          className="callback-popup"
+          style={{ top: popup.y + 8, left: popup.x + 8 }}
+        >
+          <button className="button-secondary" onClick={handleConfirmCallBack}>
+            Call Back {popup.row.phone_number}
+          </button>
+        </div>
       )}
     </div>
   );

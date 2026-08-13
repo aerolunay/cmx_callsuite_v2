@@ -35,8 +35,8 @@ by real call events (see dialerService.js).
                        in before the call, e.g. NOT_READY).
 ==================================================
 */
-const MANUAL_STATUSES = new Set(["NOT_READY", "READY", "ON_HOLD"]);
-const ALL_STATUSES = new Set(["NOT_READY", "READY", "ON_HOLD", "IN_CALL", "AFTER_CALL_WORK"]);
+const MANUAL_STATUSES = new Set(["NOT_READY", "READY", "ON_HOLD", "AUX_CB"]);
+const ALL_STATUSES = new Set(["NOT_READY", "READY", "ON_HOLD", "AUX_CB", "IN_CALL", "AFTER_CALL_WORK"]);
 
 function isManualStatus(status) {
   return MANUAL_STATUSES.has(status);

@@ -49,14 +49,15 @@ export const api = {
   getStatus: () => request("/dialer/status"),
   setStatus: (status) =>
     request("/dialer/status", { method: "POST", body: JSON.stringify({ status }) }),
+  hasLeads: (campaignId) => request(`/dialer/has-leads?campaignId=${encodeURIComponent(campaignId)}`),
 
   // Dialer
   nextLead: (campaignId) =>
     request("/dialer/next-lead", { method: "POST", body: JSON.stringify({ campaignId }) }),
-  startCall: (campaignId, leadId, phoneNumber, lead) =>
+  startCall: (campaignId, leadId, phoneNumber, lead, callType) =>
     request("/dialer/start-call", {
       method: "POST",
-      body: JSON.stringify({ campaignId, leadId, phoneNumber, lead }),
+      body: JSON.stringify({ campaignId, leadId, phoneNumber, lead, callType }),
     }),
   getCurrentCall: () => request("/dialer/current-call"),
   getCurrentInboundCall: () => request("/dialer/inbound/current"),
