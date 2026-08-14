@@ -438,6 +438,24 @@ export default function DialerPage() {
     navigate("/select-campaign");
   }
 
+  // Cross-app handoff to cmx_scn_suite's inbound screening form —
+  // BSMSC-campaign-specific, so this generates a fresh, single-use
+  // code and opens the screening app in a new tab with it, rather than
+  // requiring the agent to log into a second app. See
+  // crossAppHandoffService.js/crossAppRoutes.js for the actual
+  // exchange this code enables on the other end.
+  const SCREENING_APP_URL = "https://scnsuite.cmxinnovations.com";
+
+  async function handleOpenScreeningForm() {
+    setError("");
+    try {
+      const data = await api.getScreeningHandoffCode();
+      window.open(`${SCREENING_APP_URL}/inbound-screening?code=${data.code}`, "_blank", "noopener,noreferrer");
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
   const statusLabel = agentStatus ? STATUS_LABELS[agentStatus.status] : "—";
 
   if (!agent.extension) {
@@ -455,7 +473,7 @@ export default function DialerPage() {
 
   return (
     <>
-      <Header />
+      <Header agentStatus={agentStatus?.status} />
       <div className="page-content page-content-wide">
         <div className="dialer-topbar">
           <div>
@@ -469,6 +487,16 @@ export default function DialerPage() {
             >
               Change campaign
             </button>
+            {campaign?.campaign_id === "CMXBSMSC" && (
+              <button
+                type="button"
+                className="button-secondary"
+                style={{ marginLeft: 12 }}
+                onClick={handleOpenScreeningForm}
+              >
+                Open Screening Form
+              </button>
+            )}
           </div>
         </div>
 

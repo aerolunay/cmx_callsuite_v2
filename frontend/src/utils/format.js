@@ -43,6 +43,7 @@ export const DURATION_THRESHOLDS = {
   ON_HOLD: { orangeAt: 90, redAt: 120, redInclusive: true },
   AFTER_CALL_WORK: { orangeAt: 20, redAt: 60, redInclusive: false },
   AUX_CB: { orangeAt: 5 * 60, redAt: 8 * 60, redInclusive: true },
+  NOT_READY: { orangeAt: 90, redAt: 180, redInclusive: true },
 };
 
 export function durationColorFor(statusKey, seconds) {
@@ -53,6 +54,35 @@ export function durationColorFor(statusKey, seconds) {
   if (isRed) return "var(--cmx-danger)";
   if (seconds >= t.orangeAt) return "var(--cmx-warning)";
   return undefined; // page's normal text color
+}
+
+/*
+==================================================
+occupancyColorFor / serviceLevelColorFor
+==================================================
+Thresholds as specified, not guessed. One boundary resolution needed
+in each — the ranges as literally given leave a single-point gap where
+neither condition technically matches (e.g. Occupancy exactly 60%:
+"below 60%" is exclusive-Red, ">60%" is exclusive-Orange, so 60% itself
+matched neither). Resolved by assigning that exact boundary value to
+the adjacent range stated with ">"/">=" rather than leaving it
+uncolored — every other boundary in both specs already has no gap as
+given. Low real-world impact either way, since a computed percentage
+landing on an exact whole number is uncommon.
+==================================================
+*/
+export function occupancyColorFor(pct) {
+  if (pct === null || pct === undefined) return undefined;
+  if (pct < 60 || pct >= 90) return "var(--cmx-danger)";
+  if (pct >= 70 && pct <= 80) return "var(--cmx-success)";
+  return "var(--cmx-warning)"; // 60–70% or 80–90%
+}
+
+export function serviceLevelColorFor(pct) {
+  if (pct === null || pct === undefined) return undefined;
+  if (pct >= 97) return "var(--cmx-success)";
+  if (pct >= 90) return "var(--cmx-warning)";
+  return "var(--cmx-danger)";
 }
 
 // Formats a fixed historical timestamp for display — NOT an elapsed-

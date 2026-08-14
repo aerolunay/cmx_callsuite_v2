@@ -2,8 +2,31 @@ import { Link } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import logo from "../assets/cmxlogo_white.png";
 
-export default function Header() {
+/*
+==================================================
+agentStatus prop — deliberately scoped to DialerPage only
+==================================================
+Header is shared across every page (DialerPage, Admin, Live Status,
+Landing), but live call-state (READY/NOT_READY/IN_CALL/etc.) is only
+ever tracked on DialerPage itself — no other page has a concept of it
+at all. Rather than build a global status-tracking mechanism just for
+this one button, DialerPage passes its already-known current status in
+directly; every other page renders Header with no status prop at all,
+so logout stays unrestricted there (there's no "mid-call" risk to
+guard against on a page that was never tracking a call in the first
+place). If this needs to apply more broadly later, that's a bigger
+change (status would need to live somewhere shared, like AuthContext),
+not just a Header tweak.
+
+canLogout defaults to true when status is unknown (undefined) —
+covers admin/no-extension accounts, which never go through these
+states at all and shouldn't be blocked from logging out.
+==================================================
+*/
+export default function Header({ agentStatus }) {
   const { agent, logout } = useAuth();
+
+  const canLogout = agentStatus === undefined || agentStatus === "NOT_READY";
 
   return (
     <header className="header">
@@ -29,7 +52,12 @@ export default function Header() {
               {agent.email} · {agent.accessLevel}
             </div>
           </div>
-          <button className="logout-btn" onClick={logout}>
+          <button
+            className="logout-btn"
+            onClick={logout}
+            disabled={!canLogout}
+            title={canLogout ? undefined : "Set your status to Not Ready before logging out."}
+          >
             Log out
           </button>
         </div>

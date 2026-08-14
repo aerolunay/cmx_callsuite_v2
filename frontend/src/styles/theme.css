@@ -14,7 +14,7 @@ official secondary colors, adjust these variables.
   --cmx-text-dark: #182d57;
   --cmx-border: #d9dee6;
   --cmx-danger: #c0392b;
-  --cmx-warning: #e67e22;
+  --cmx-warning: #b8560f;
   --cmx-success: #1e7e34;
 }
 
@@ -92,6 +92,15 @@ body {
 
 .logout-btn:hover {
   background: rgba(255, 255, 255, 0.12);
+}
+
+.logout-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.logout-btn:disabled:hover {
+  background: transparent;
 }
 
 /* ===== Auth (login) page ===== */
@@ -294,20 +303,14 @@ columns, not from anything set on the cards themselves.
 
 /*
 ==================================================
-LIVE STATUS DASHBOARD — Inbound/Outbound KPI summary cards
+LIVE STATUS DASHBOARD — KPI label/value lists
 ==================================================
 Simple label/value list (not a table — these are single aggregate
-numbers, not per-row data). Two equal-width cards side by side above
-the main 10-card grid.
+numbers, not per-row data). Used for the Inbound/Outbound stats cards
+(now in the left/right columns respectively) and the consolidated
+table's summary counts row.
 ==================================================
 */
-.reporting-summary-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
-  margin-bottom: 20px;
-}
-
 .kpi-list {
   margin: 0;
 }
@@ -328,10 +331,37 @@ the main 10-card grid.
   font-weight: 600;
 }
 
-@media (max-width: 700px) {
-  .reporting-summary-grid {
-    grid-template-columns: 1fr;
-  }
+/*
+==================================================
+LIVE STATUS DASHBOARD — consolidated agent-status table
+==================================================
+.live-status-summary-row holds the two count lists (per-state counts,
+Active Inbound/Outbound + Aux CB/Not Ready) side by side above the
+table.
+
+.live-status-consolidated-scroll no longer has a fixed height — its
+sizing now comes entirely from the flex/minHeight set inline on it and
+its parent .card (see LiveStatusDashboard.jsx), which is itself
+constrained by the LEFT column's height being MEASURED to exactly
+match the right column (ResizeObserver, not a guessed px value) — so
+Logged Out's bottom always lines up with the right column's last card,
+regardless of row counts or font changes later. overflow-y here is
+still needed so the actual scrolling happens at this level, not the
+whole page.
+==================================================
+*/
+.live-status-summary-row {
+  display: flex;
+  gap: 48px;
+  margin-bottom: 16px;
+}
+
+.live-status-summary-row .kpi-list {
+  min-width: 200px;
+}
+
+.live-status-consolidated-scroll {
+  overflow-y: auto;
 }
 
 /*
