@@ -487,7 +487,7 @@ export default function DialerPage() {
             >
               Change campaign
             </button>
-            {campaign?.campaign_id === "CMXBSMSC" && (
+            {/* {campaign?.campaign_id === "CMXBSMSC" && (
               <button
                 type="button"
                 className="button-secondary"
@@ -496,7 +496,7 @@ export default function DialerPage() {
               >
                 Open Screening Form
               </button>
-            )}
+            )} */}
           </div>
         </div>
 
