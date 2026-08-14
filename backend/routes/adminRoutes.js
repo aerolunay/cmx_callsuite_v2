@@ -212,6 +212,7 @@ router.get("/live-status", requireAdmin, async (req, res) => {
           open_row.elapsed_seconds AS open_elapsed_seconds,
           open_row.related_call_id AS open_related_call_id,
           open_row.related_campaign_id AS open_related_campaign_id,
+          open_row.related_call_direction AS open_related_call_direction,
           last_closed.logged_out_elapsed_seconds,
           (
             SELECT aca.campaign_id FROM cmx_dialer.agent_campaign_assignments aca
@@ -220,7 +221,7 @@ router.get("/live-status", requireAdmin, async (req, res) => {
           ) AS assigned_campaign_id
         FROM cmx_dialer.app_users au
         LEFT JOIN (
-          SELECT app_user_id, status, related_call_id, related_campaign_id, TIMESTAMPDIFF(SECOND, started_at, NOW()) AS elapsed_seconds
+          SELECT app_user_id, status, related_call_id, related_campaign_id, related_call_direction, TIMESTAMPDIFF(SECOND, started_at, NOW()) AS elapsed_seconds
           FROM cmx_dialer.agent_status_log
           WHERE ended_at IS NULL
         ) open_row ON open_row.app_user_id = au.app_user_id
@@ -352,6 +353,9 @@ router.get("/live-status", requireAdmin, async (req, res) => {
           vicidialUser: r.vicidial_user,
           campaignId: displayCampaignId,
           status: r.open_status,
+          // null for READY/NOT_READY/AUX_CB — those have no call to tag
+          // with a direction at all, unlike IN_CALL/ON_HOLD/AFTER_CALL_WORK.
+          direction: isCallRelated ? r.open_related_call_direction || null : null,
           callerId: isCallRelated ? callerIdsByCallId[r.open_related_call_id] || null : null,
           // Falls back to the single-segment value whenever there's no
           // related_call_id to aggregate by (pre-migration rows, or a
@@ -368,6 +372,7 @@ router.get("/live-status", requireAdmin, async (req, res) => {
         vicidialUser: r.vicidial_user,
         campaignId: displayCampaignId,
         status: "LOGGED_OUT",
+        direction: null,
         elapsedSeconds: r.logged_out_elapsed_seconds, // null if they've never logged any status at all
         lastLoginAt: r.last_login_at, // null if this account has never logged in at all (pre-migration)
       };
@@ -600,12 +605,13 @@ router.get("/total-calls", requireAdmin, async (req, res) => {
           combined.campaign_id,
           combined.phone_number,
           combined.call_started_at,
+          combined.direction,
           agg.handle_time_seconds
         FROM (
-          SELECT campaign_id, phone_number, call_id, call_started_at
+          SELECT campaign_id, phone_number, call_id, call_started_at, 'outbound' AS direction
           FROM cmx_dialer.dialer_call_log
           UNION ALL
-          SELECT campaign_id, caller_id_number AS phone_number, call_id, call_started_at
+          SELECT campaign_id, caller_id_number AS phone_number, call_id, call_started_at, 'inbound' AS direction
           FROM cmx_dialer.inbound_call_log
         ) combined
         LEFT JOIN (
@@ -626,6 +632,7 @@ router.get("/total-calls", requireAdmin, async (req, res) => {
       campaignId: r.campaign_id,
       phoneNumber: r.phone_number,
       callStartedAt: r.call_started_at,
+      direction: r.direction,
       handleTimeSeconds: r.handle_time_seconds, // null if no agent_status_log segments were ever tagged with this call_id (pre-migration calls)
     }));
 
