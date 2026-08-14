@@ -266,23 +266,34 @@ router.get("/live-status", requireAdmin, async (req, res) => {
     just the current segment.
     ==================================================
     */
+    /*
+    ==================================================
+    TOTAL CALL HANDLING TIME — IN_CALL only
+    ==================================================
+    REAL BUG FIXED HERE, per explicit correction: this used to treat
+    IN_CALL and ON_HOLD identically, showing the SAME aggregated
+    call+hold total for both — so putting a call on hold didn't reset
+    to 0 (correctly fixed earlier), but it also never actually showed
+    the hold segment's OWN duration; it kept showing the call's
+    cumulative total instead. Aggregation across every segment sharing
+    a related_call_id belongs ONLY to IN_CALL (representing "how long
+    has this call been handled overall, across any prior hold(s)").
+    ON_HOLD and AUX_CB show ONLY their own current instance's elapsed
+    time — no aggregation — matching the explicit correction: "hold and
+    aux should only count based on it's instance."
+    ==================================================
+    */
     const callIdsNeedingTotal = rows
-      .filter((r) => (r.open_status === "IN_CALL" || r.open_status === "ON_HOLD") && r.open_related_call_id)
+      .filter((r) => r.open_status === "IN_CALL" && r.open_related_call_id)
       .map((r) => r.open_related_call_id);
 
     const totalsByCallId = new Map();
     if (callIdsNeedingTotal.length > 0) {
-      // REAL BUG FIXED HERE: `db.execute()` uses true prepared
-      // statements, which do NOT reliably expand a single `?` bound to
-      // a JS array into a proper IN-list the way `db.query()` does —
-      // this is a well-known mysql2 caveat. That meant this lookup
-      // could silently fail to match a call's ID at all, falling back
-      // to `r.open_elapsed_seconds` (the single-segment value) instead
-      // of the cumulative total — exactly the "duration resets to 0 on
-      // hold" symptom reported, since the moment a fresh ON_HOLD row
-      // opens, its own elapsed_seconds genuinely IS near 0. Fixed by
-      // building an explicit `?,?,?` placeholder list sized to match,
-      // the standard safe pattern for a dynamic IN-list with execute().
+      // `db.execute()` uses true prepared statements, which do NOT
+      // reliably expand a single `?` bound to a JS array into a proper
+      // IN-list the way `db.query()` does — well-known mysql2 caveat,
+      // already fixed once here with an explicit `?,?,?` placeholder
+      // list sized to match, the standard safe pattern.
       const placeholders = callIdsNeedingTotal.map(() => "?").join(",");
       const [totalRows] = await db.execute(
         `
@@ -301,13 +312,9 @@ router.get("/live-status", requireAdmin, async (req, res) => {
         callIdsNeedingTotal
       );
       for (const t of totalRows) {
-        // Same string-vs-number coercion fix applied in statsService.js
-        // tonight — SUM() comes back as a string from mysql2, and this
-        // value later gets compared with >= in durationColorFor(), which
-        // DOES auto-coerce correctly, so that part was already safe —
-        // but coercing explicitly here too, for consistency and so any
-        // future arithmetic on this map's values doesn't quietly
-        // reintroduce the same class of bug.
+        // SUM() comes back as a string from mysql2 — coercing
+        // explicitly so any arithmetic on this map's values can't
+        // quietly reintroduce that class of bug.
         totalsByCallId.set(t.related_call_id, Number(t.total_seconds) || 0);
       }
     }
@@ -342,9 +349,16 @@ router.get("/live-status", requireAdmin, async (req, res) => {
       const displayCampaignId = r.open_related_campaign_id || r.assigned_campaign_id || null;
 
       if (r.open_status) {
-        const isCallTied = r.open_status === "IN_CALL" || r.open_status === "ON_HOLD";
-        const totalHandlingSeconds = isCallTied ? totalsByCallId.get(r.open_related_call_id) : undefined;
-        const isCallRelated = isCallTied || r.open_status === "AFTER_CALL_WORK";
+        // isCallRelated: does this status have a real call attached at
+        // all (for Direction/Caller ID display) — includes ON_HOLD and
+        // AFTER_CALL_WORK, unlike the aggregation decision below.
+        const isCallRelated =
+          r.open_status === "IN_CALL" || r.open_status === "ON_HOLD" || r.open_status === "AFTER_CALL_WORK";
+        // useAggregatedDuration: ONLY IN_CALL shows the cumulative
+        // call+hold total. ON_HOLD/AUX_CB fall through to
+        // r.open_elapsed_seconds below — their own instance only.
+        const useAggregatedDuration = r.open_status === "IN_CALL";
+        const totalHandlingSeconds = useAggregatedDuration ? totalsByCallId.get(r.open_related_call_id) : undefined;
 
         return {
           appUserId: r.app_user_id,
