@@ -271,6 +271,18 @@ router.get("/live-status", requireAdmin, async (req, res) => {
 
     const totalsByCallId = new Map();
     if (callIdsNeedingTotal.length > 0) {
+      // REAL BUG FIXED HERE: `db.execute()` uses true prepared
+      // statements, which do NOT reliably expand a single `?` bound to
+      // a JS array into a proper IN-list the way `db.query()` does —
+      // this is a well-known mysql2 caveat. That meant this lookup
+      // could silently fail to match a call's ID at all, falling back
+      // to `r.open_elapsed_seconds` (the single-segment value) instead
+      // of the cumulative total — exactly the "duration resets to 0 on
+      // hold" symptom reported, since the moment a fresh ON_HOLD row
+      // opens, its own elapsed_seconds genuinely IS near 0. Fixed by
+      // building an explicit `?,?,?` placeholder list sized to match,
+      // the standard safe pattern for a dynamic IN-list with execute().
+      const placeholders = callIdsNeedingTotal.map(() => "?").join(",");
       const [totalRows] = await db.execute(
         `
           SELECT
@@ -282,13 +294,20 @@ router.get("/live-status", requireAdmin, async (req, res) => {
               END
             ) AS total_seconds
           FROM cmx_dialer.agent_status_log
-          WHERE related_call_id IN (?)
+          WHERE related_call_id IN (${placeholders})
           GROUP BY related_call_id
         `,
-        [callIdsNeedingTotal]
+        callIdsNeedingTotal
       );
       for (const t of totalRows) {
-        totalsByCallId.set(t.related_call_id, t.total_seconds);
+        // Same string-vs-number coercion fix applied in statsService.js
+        // tonight — SUM() comes back as a string from mysql2, and this
+        // value later gets compared with >= in durationColorFor(), which
+        // DOES auto-coerce correctly, so that part was already safe —
+        // but coercing explicitly here too, for consistency and so any
+        // future arithmetic on this map's values doesn't quietly
+        // reintroduce the same class of bug.
+        totalsByCallId.set(t.related_call_id, Number(t.total_seconds) || 0);
       }
     }
 

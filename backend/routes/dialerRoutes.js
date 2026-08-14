@@ -430,22 +430,26 @@ router.post("/dialer/inbound-disposition", requireAuth, async (req, res) => {
 
     // Read BEFORE finalizeInboundCall() below, which deletes this call
     // from inboundCallService's Map — this is the last point at which
-    // its campaignId/startedAt/endedAt are still readable.
+    // its campaignId/startedAt/endedAt/waitSeconds are still readable.
     const current = inboundCallService.findByCallId(callId);
     const startedAt = current?.startedAt || new Date();
     const endedAt = current?.endedAt || new Date();
     const inboundCampaignId = current?.campaignId || null;
+    // null if the call never actually reached an agent (shouldn't
+    // happen for a call reaching disposition at all, but guarding
+    // rather than assuming).
+    const waitSeconds = current?.waitSeconds ?? null;
 
     await db.execute(
       `
         INSERT INTO cmx_dialer.inbound_call_log
           (agent_user, campaign_id, call_id, caller_id_number, first_name, last_name, comments,
-           disposition, callback_at, call_started_at, call_ended_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           disposition, callback_at, call_started_at, call_ended_at, wait_seconds)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
         agentUser, inboundCampaignId, callId, callerIdNumber || null, firstName || null, lastName || null,
-        comments.trim(), disposition, callbackAt || null, startedAt, endedAt,
+        comments.trim(), disposition, callbackAt || null, startedAt, endedAt, waitSeconds,
       ]
     );
 

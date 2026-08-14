@@ -199,6 +199,7 @@ export default function LiveStatusDashboard() {
               <dl className="kpi-list">
                 <div><dt>Total Calls</dt><dd>{summary.inbound.totalCalls}</dd></div>
                 <div><dt>Total Abandoned</dt><dd>{summary.inbound.totalAbandoned}</dd></div>
+                <div><dt>Average Wait Time</dt><dd>{fmtSeconds(summary.inbound.avgWaitSeconds)}</dd></div>
                 <div><dt>Average Call Time</dt><dd>{fmtSeconds(summary.inbound.avgCallSeconds)}</dd></div>
                 <div><dt>Average Hold Time</dt><dd>{fmtSeconds(summary.inbound.avgHoldSeconds)}</dd></div>
                 <div><dt>Average ACW Time</dt><dd>{fmtSeconds(summary.inbound.avgAcwSeconds)}</dd></div>

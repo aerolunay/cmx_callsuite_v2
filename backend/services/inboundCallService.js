@@ -413,6 +413,13 @@ function registerInboundEventTracking() {
       call.connectedAppUserId = call.pendingAppUserId;
       call.pendingAppUserId = null;
       call.status = "agent_connected";
+      // How long the caller actually waited before reaching a real
+      // agent — measured from the moment the room was allocated
+      // (before the greeting even plays) to right now. Stored on the
+      // call itself so it can be persisted into inbound_call_log at
+      // disposition time; used for both the new "Average Wait Time"
+      // KPI and Service Level's "answered within 20 seconds" count.
+      call.waitSeconds = Math.floor((new Date() - call.startedAt) / 1000);
       broadcastInboundStatus(call);
     }
   });
