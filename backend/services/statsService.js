@@ -416,6 +416,19 @@ async function getReportingSummary(campaignId) {
     answeredWithin20Seconds(),
   ]);
 
+  // TEMPORARY DEBUG — remove once the Average Call Time investigation
+  // is resolved. Prints the exact raw values this function is working
+  // with, so we can see where a wrong number first appears instead of
+  // guessing from the final displayed output.
+  console.log("[getReportingSummary DEBUG]", {
+    campaignId,
+    start,
+    end,
+    inboundSeg,
+    outboundSeg,
+    counts,
+  });
+
   /*
   REAL BUG FIXED HERE: each average used to divide by "how many calls
   had THAT SPECIFIC segment type" (e.g. hold average ÷ only the calls
