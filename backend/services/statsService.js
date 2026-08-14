@@ -229,11 +229,20 @@ Powers the new Inbound/Outbound KPI summary cards on the Live Status
 Dashboard. Deliberately a SEPARATE function from getTodayStats(Aggregate)
 above rather than reusing their avg ACW/Hold fields — those average the
 raw per-SEGMENT duration directly (fine for their purpose), whereas
-every average here is computed by first SUMMING all segments per call
-(so a call held/unheld multiple times counts as ONE call, not several
-partial segments), then averaging across calls — matching the same
+every average here first SUMS all segments per call (so a call
+held/unheld multiple times counts as ONE call's worth of hold time, not
+several partial segments) before dividing — matching the same
 "aggregate the duration, don't reset" principle already applied to the
 live per-agent Duration column and Total Calls' Handle Time.
+
+Average Call/Hold/ACW Time all share ONE denominator — Total Calls for
+that direction — not "however many calls happened to have that
+specific segment type." Real bug once fixed here: dividing by a
+per-metric count (e.g. hold time ÷ only the calls that were actually
+held) silently excludes every zero-hold call from the denominator,
+inflating the average. A call with no hold time still needs to count
+as a real 0 pulling the average down for these numbers to mean
+anything as genuine per-call averages.
 
 Occupancy and Service Level are INBOUND-only concepts (standard
 call-center queue metrics) — outbound's section is deliberately
@@ -258,7 +267,7 @@ doesn't apply to them at all.
 async function getReportingSummary(campaignId) {
   const { start, end } = await getEasternDayBoundsForServerClock();
 
-  async function perCallDirectionAverages(direction) {
+  async function perCallDirectionTotals(direction) {
     const params = [direction, start, end];
     let campaignFilter = "";
     if (campaignId) {
@@ -291,13 +300,11 @@ async function getReportingSummary(campaignId) {
     }
 
     const calls = Array.from(perCall.values());
-    const avg = (key) => (calls.length ? calls.reduce((s, c) => s + c[key], 0) / calls.length : null);
     const total = (key) => calls.reduce((s, c) => s + c[key], 0);
 
+    // Deliberately NOT averaging here anymore — see the caller
+    // (getReportingSummary) for why. Returns raw totals only.
     return {
-      avgCallSeconds: avg("call"),
-      avgHoldSeconds: avg("hold"),
-      avgAcwSeconds: avg("acw"),
       totalCallSeconds: total("call"),
       totalHoldSeconds: total("hold"),
       totalAcwSeconds: total("acw"),
@@ -402,16 +409,35 @@ async function getReportingSummary(campaignId) {
   }
 
   const [inboundSeg, outboundSeg, readyNotReady, counts, answeredFast] = await Promise.all([
-    perCallDirectionAverages("inbound"),
-    perCallDirectionAverages("outbound"),
+    perCallDirectionTotals("inbound"),
+    perCallDirectionTotals("outbound"),
     readyNotReadyStats(),
     callCounts(),
     answeredWithin20Seconds(),
   ]);
 
+  /*
+  REAL BUG FIXED HERE: each average used to divide by "how many calls
+  had THAT SPECIFIC segment type" (e.g. hold average ÷ only the calls
+  that were actually held) — which inflates every average, since it
+  silently excludes every call with zero hold/ACW time from the
+  denominator instead of counting it as a real 0. Fixed per explicit
+  correction: all three averages share the SAME denominator, Total
+  Calls for that direction — a call with no hold time still counts
+  toward pulling the average down, which is what makes these numbers
+  meaningful as "per call" averages at all.
+  */
+  const inboundAvgCall = counts.totalInbound > 0 ? inboundSeg.totalCallSeconds / counts.totalInbound : null;
+  const inboundAvgHold = counts.totalInbound > 0 ? inboundSeg.totalHoldSeconds / counts.totalInbound : null;
+  const inboundAvgAcw = counts.totalInbound > 0 ? inboundSeg.totalAcwSeconds / counts.totalInbound : null;
+
+  const outboundAvgCall = counts.totalOutbound > 0 ? outboundSeg.totalCallSeconds / counts.totalOutbound : null;
+  const outboundAvgHold = counts.totalOutbound > 0 ? outboundSeg.totalHoldSeconds / counts.totalOutbound : null;
+  const outboundAvgAcw = counts.totalOutbound > 0 ? outboundSeg.totalAcwSeconds / counts.totalOutbound : null;
+
   const inboundAht =
-    inboundSeg.avgCallSeconds !== null || inboundSeg.avgHoldSeconds !== null || inboundSeg.avgAcwSeconds !== null
-      ? (inboundSeg.avgCallSeconds || 0) + (inboundSeg.avgHoldSeconds || 0) + (inboundSeg.avgAcwSeconds || 0)
+    inboundAvgCall !== null || inboundAvgHold !== null || inboundAvgAcw !== null
+      ? (inboundAvgCall || 0) + (inboundAvgHold || 0) + (inboundAvgAcw || 0)
       : null;
 
   const occupancyNumerator = inboundSeg.totalCallSeconds + inboundSeg.totalHoldSeconds + inboundSeg.totalAcwSeconds;
@@ -425,9 +451,9 @@ async function getReportingSummary(campaignId) {
     inbound: {
       totalCalls: counts.totalInbound,
       totalAbandoned: counts.totalAbandoned,
-      avgCallSeconds: inboundSeg.avgCallSeconds,
-      avgHoldSeconds: inboundSeg.avgHoldSeconds,
-      avgAcwSeconds: inboundSeg.avgAcwSeconds,
+      avgCallSeconds: inboundAvgCall,
+      avgHoldSeconds: inboundAvgHold,
+      avgAcwSeconds: inboundAvgAcw,
       ahtSeconds: inboundAht,
       avgReadySeconds: readyNotReady.avgReadySeconds,
       avgNotReadySeconds: readyNotReady.avgNotReadySeconds,
@@ -436,9 +462,9 @@ async function getReportingSummary(campaignId) {
     },
     outbound: {
       totalCalls: counts.totalOutbound,
-      avgCallSeconds: outboundSeg.avgCallSeconds,
-      avgHoldSeconds: outboundSeg.avgHoldSeconds,
-      avgAcwSeconds: outboundSeg.avgAcwSeconds,
+      avgCallSeconds: outboundAvgCall,
+      avgHoldSeconds: outboundAvgHold,
+      avgAcwSeconds: outboundAvgAcw,
     },
   };
 }
