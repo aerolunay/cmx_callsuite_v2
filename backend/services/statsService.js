@@ -292,10 +292,19 @@ async function getReportingSummary(campaignId) {
 
     const perCall = new Map();
     for (const r of segRows) {
+      // REAL BUG FIXED HERE: mysql2 returns SUM() results as STRINGS
+      // (to avoid precision loss on large aggregates) — this was doing
+      // entry.call += r.seg_seconds assuming a number, so "+" did
+      // STRING CONCATENATION instead of addition (e.g. two calls'
+      // totals "83" and "84" became the literal text "8384"/"0083084"
+      // depending on accumulation order, not the sum 167). Coercing
+      // explicitly here, at the moment this value is first read, so
+      // every downstream +/reduce is guaranteed real arithmetic.
+      const segSeconds = Number(r.seg_seconds) || 0;
       const entry = perCall.get(r.related_call_id) || { call: 0, hold: 0, acw: 0 };
-      if (r.status === "IN_CALL") entry.call += r.seg_seconds;
-      else if (r.status === "ON_HOLD") entry.hold += r.seg_seconds;
-      else if (r.status === "AFTER_CALL_WORK") entry.acw += r.seg_seconds;
+      if (r.status === "IN_CALL") entry.call += segSeconds;
+      else if (r.status === "ON_HOLD") entry.hold += segSeconds;
+      else if (r.status === "AFTER_CALL_WORK") entry.acw += segSeconds;
       perCall.set(r.related_call_id, entry);
     }
 
@@ -340,9 +349,11 @@ async function getReportingSummary(campaignId) {
     const byStatus = {};
     for (const r of rows) byStatus[r.status] = r;
 
-    const readyTotal = byStatus.READY?.total_seconds || 0;
+    // Same coercion fix as perCallDirectionTotals — SUM() comes back
+    // as a string from mysql2.
+    const readyTotal = Number(byStatus.READY?.total_seconds) || 0;
     const readyN = byStatus.READY?.n || 0;
-    const notReadyTotal = byStatus.NOT_READY?.total_seconds || 0;
+    const notReadyTotal = Number(byStatus.NOT_READY?.total_seconds) || 0;
     const notReadyN = byStatus.NOT_READY?.n || 0;
 
     return {
@@ -415,19 +426,6 @@ async function getReportingSummary(campaignId) {
     callCounts(),
     answeredWithin20Seconds(),
   ]);
-
-  // TEMPORARY DEBUG — remove once the Average Call Time investigation
-  // is resolved. Prints the exact raw values this function is working
-  // with, so we can see where a wrong number first appears instead of
-  // guessing from the final displayed output.
-  console.log("[getReportingSummary DEBUG]", {
-    campaignId,
-    start,
-    end,
-    inboundSeg,
-    outboundSeg,
-    counts,
-  });
 
   /*
   REAL BUG FIXED HERE: each average used to divide by "how many calls
