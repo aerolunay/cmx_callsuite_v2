@@ -71,6 +71,48 @@ const sessionDestroyTimers = new Map();
 
 /*
 ==================================================
+PING/PONG KEEPALIVE
+==================================================
+REAL BUG FOUND AND FIXED HERE: with no traffic on an otherwise-idle
+WebSocket, Apache's proxy (or any future intermediary — a load
+balancer, a corporate firewall) can silently close it once it's been
+quiet past its own idle timeout (confirmed: Apache's default here is
+60s, unset in this vhost). Every time that happened, our own
+disconnect-then-restore logic above fired for real — closing and
+reopening the agent's status row — even though the agent never
+actually did anything. That's what "Ready resets every minute on the
+Live Status Dashboard" actually was: not a bug in the restore logic
+itself, but the transport underneath it dying on a schedule neither
+side controls.
+
+Fix: send a ping frame every 30s — comfortably under any 60s idle
+window — so the connection is never actually idle from any
+intermediary's point of view, regardless of what's in front of it.
+Standard `ws` library dead-connection pattern as a side benefit: a
+socket that doesn't answer a ping with a pong before the next one goes
+out is presumed dead and terminated proactively, rather than left
+lingering.
+==================================================
+*/
+const PING_INTERVAL_MS = 30000;
+
+function startPingLoop() {
+  setInterval(() => {
+    if (!wss) return;
+    for (const ws of wss.clients) {
+      if (ws.readyState !== WebSocket.OPEN) continue;
+      if (ws.isAlive === false) {
+        ws.terminate(); // no pong since the last ping — presumed dead
+        continue;
+      }
+      ws.isAlive = false;
+      ws.ping();
+    }
+  }, PING_INTERVAL_MS).unref();
+}
+
+/*
+==================================================
 attach(httpServer, store)
 ==================================================
 Wires the WebSocket server onto the SAME HTTP server Express uses
@@ -84,8 +126,14 @@ socket claim to be any agent.
 function attach(httpServer, store) {
   sessionStore = store;
   wss = new WebSocket.Server({ server: httpServer, path: "/ws/dialer" });
+  startPingLoop();
 
   wss.on("connection", (ws, req) => {
+    ws.isAlive = true;
+    ws.on("pong", () => {
+      ws.isAlive = true;
+    });
+
     const cookies = cookie.parse(req.headers.cookie || "");
     const raw = cookies[SESSION_NAME];
 
