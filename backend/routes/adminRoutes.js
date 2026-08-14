@@ -206,13 +206,20 @@ router.get("/live-status", requireAdmin, async (req, res) => {
           au.full_name,
           au.email,
           au.vicidial_user,
+          au.last_login_at,
           open_row.status AS open_status,
           open_row.elapsed_seconds AS open_elapsed_seconds,
           open_row.related_call_id AS open_related_call_id,
-          last_closed.logged_out_elapsed_seconds
+          open_row.related_campaign_id AS open_related_campaign_id,
+          last_closed.logged_out_elapsed_seconds,
+          (
+            SELECT aca.campaign_id FROM cmx_dialer.agent_campaign_assignments aca
+            WHERE aca.app_user_id = au.app_user_id AND aca.active = 1
+            ORDER BY aca.campaign_id LIMIT 1
+          ) AS assigned_campaign_id
         FROM cmx_dialer.app_users au
         LEFT JOIN (
-          SELECT app_user_id, status, related_call_id, TIMESTAMPDIFF(SECOND, started_at, NOW()) AS elapsed_seconds
+          SELECT app_user_id, status, related_call_id, related_campaign_id, TIMESTAMPDIFF(SECOND, started_at, NOW()) AS elapsed_seconds
           FROM cmx_dialer.agent_status_log
           WHERE ended_at IS NULL
         ) open_row ON open_row.app_user_id = au.app_user_id
@@ -285,6 +292,15 @@ router.get("/live-status", requireAdmin, async (req, res) => {
     }
 
     const agents = rows.map((r) => {
+      // Displayed Campaign: for a call-tied status, the campaign that
+      // SPECIFIC call belongs to (open_related_campaign_id) — an agent
+      // assigned to multiple campaigns could be on a call for any of
+      // them, so the call's own campaign is more accurate than their
+      // general assignment. For every other status, there's no call to
+      // derive it from, so fall back to their (first) campaign
+      // assignment instead.
+      const displayCampaignId = r.open_related_campaign_id || r.assigned_campaign_id || null;
+
       if (r.open_status) {
         const isCallTied = r.open_status === "IN_CALL" || r.open_status === "ON_HOLD";
         const totalHandlingSeconds = isCallTied ? totalsByCallId.get(r.open_related_call_id) : undefined;
@@ -294,12 +310,14 @@ router.get("/live-status", requireAdmin, async (req, res) => {
           fullName: r.full_name,
           email: r.email,
           vicidialUser: r.vicidial_user,
+          campaignId: displayCampaignId,
           status: r.open_status,
           // Falls back to the single-segment value whenever there's no
           // related_call_id to aggregate by (pre-migration rows, or a
           // status genuinely unrelated to any call) — never silently
           // shows nothing.
           elapsedSeconds: totalHandlingSeconds !== undefined ? totalHandlingSeconds : r.open_elapsed_seconds,
+          lastLoginAt: r.last_login_at,
         };
       }
       return {
@@ -307,8 +325,10 @@ router.get("/live-status", requireAdmin, async (req, res) => {
         fullName: r.full_name,
         email: r.email,
         vicidialUser: r.vicidial_user,
+        campaignId: displayCampaignId,
         status: "LOGGED_OUT",
         elapsedSeconds: r.logged_out_elapsed_seconds, // null if they've never logged any status at all
+        lastLoginAt: r.last_login_at, // null if this account has never logged in at all (pre-migration)
       };
     });
 
@@ -496,6 +516,82 @@ router.get("/abandoned-calls", requireAdmin, async (req, res) => {
   } catch (error) {
     console.error("GET /api/admin/abandoned-calls failed:", error);
     return res.status(500).json({ success: false, message: "Failed to load abandoned calls." });
+  }
+});
+
+/*
+==================================================
+TOTAL CALLS (Live Status Dashboard's "Total Calls" widget)
+==================================================
+GET /api/admin/total-calls?campaignId=optional
+
+Every call today, outbound and inbound combined (dialer_call_log +
+inbound_call_log, matching how the DialerPage's own Call Logs table
+already unions the two). "Today" reuses the SAME Eastern-day-boundary
+helper Today's Stats and Abandoned Calls already use — one definition
+of "today" everywhere in this app, not several.
+
+Handle Time aggregates via related_call_id — the SAME technique
+already used for the live per-status Duration column above, just as a
+plain historical SUM here (every segment for a completed call is
+already closed, so no TIMESTAMPDIFF-on-the-open-row branch is needed
+the way the live version needs one). Deliberately sums ALL segments
+tied to a call — IN_CALL + ON_HOLD + AFTER_CALL_WORK — not just talk
+time, matching how "Handle Time" is normally defined in call center
+reporting (talk + hold + wrap-up).
+==================================================
+*/
+router.get("/total-calls", requireAdmin, async (req, res) => {
+  try {
+    const { campaignId } = req.query;
+    const { start, end } = await statsService.getEasternDayBoundsForServerClock();
+
+    const params = [start, end];
+    let campaignFilter = "";
+    if (campaignId) {
+      campaignFilter = "AND combined.campaign_id = ?";
+      params.push(campaignId);
+    }
+
+    const [rows] = await db.execute(
+      `
+        SELECT
+          combined.campaign_id,
+          combined.phone_number,
+          combined.call_started_at,
+          agg.handle_time_seconds
+        FROM (
+          SELECT campaign_id, phone_number, call_id, call_started_at
+          FROM cmx_dialer.dialer_call_log
+          UNION ALL
+          SELECT campaign_id, caller_id_number AS phone_number, call_id, call_started_at
+          FROM cmx_dialer.inbound_call_log
+        ) combined
+        LEFT JOIN (
+          SELECT related_call_id, SUM(duration_seconds) AS handle_time_seconds
+          FROM cmx_dialer.agent_status_log
+          WHERE related_call_id IS NOT NULL AND ended_at IS NOT NULL
+          GROUP BY related_call_id
+        ) agg ON agg.related_call_id = combined.call_id
+        WHERE combined.call_started_at >= ? AND combined.call_started_at <= ?
+        ${campaignFilter}
+        ORDER BY combined.call_started_at DESC
+        LIMIT 200
+      `,
+      params
+    );
+
+    const calls = rows.map((r) => ({
+      campaignId: r.campaign_id,
+      phoneNumber: r.phone_number,
+      callStartedAt: r.call_started_at,
+      handleTimeSeconds: r.handle_time_seconds, // null if no agent_status_log segments were ever tagged with this call_id (pre-migration calls)
+    }));
+
+    return res.json({ success: true, calls });
+  } catch (error) {
+    console.error("GET /api/admin/total-calls failed:", error);
+    return res.status(500).json({ success: false, message: "Failed to load total calls." });
   }
 });
 

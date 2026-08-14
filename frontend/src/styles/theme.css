@@ -251,27 +251,35 @@ button.primary:disabled {
 
 /*
 ==================================================
-LIVE STATUS DASHBOARD — Calls in Queue / Abandoned row
+LIVE STATUS DASHBOARD — 2-column layout
 ==================================================
-Two equal-width cards side by side, both pinned to the SAME fixed
-height regardless of content — a long Abandoned list scrolls WITHIN
-its card instead of growing it taller. .queue-row-scroll is the actual
-scrolling element (not the whole card), so the card's h3 title stays
-pinned in view while the list scrolls underneath it.
+LEFT: one single .card holding all 7 status tables stacked inside it
+(.status-subsection per table) — deliberately no fixed/max height, it
+grows with content and is expected to end up the tallest element on
+the page ("stretching to the bottom"), unlike the right column's cards.
+
+RIGHT: three separate .card elements stacked vertically
+(.live-status-right), two of which (Abandoned, Total Calls — set via
+inline height+flex, not a class, since only those two need it) cap
+their height and scroll internally via .queue-row-scroll instead of
+growing indefinitely as the day's call volume accumulates.
 ==================================================
 */
-.queue-row {
+.live-status-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 16px;
-  margin-bottom: 20px;
+  align-items: start;
 }
 
-.queue-row .card {
-  height: 380px;
+.live-status-right {
   display: flex;
   flex-direction: column;
-  margin-bottom: 0;
+  gap: 16px;
+}
+
+.status-subsection h3 {
+  margin-bottom: 8px;
 }
 
 .queue-row-scroll {
@@ -280,7 +288,7 @@ pinned in view while the list scrolls underneath it.
 }
 
 @media (max-width: 700px) {
-  .queue-row {
+  .live-status-grid {
     grid-template-columns: 1fr;
   }
 }

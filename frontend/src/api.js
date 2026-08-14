@@ -89,6 +89,8 @@ export const api = {
     request(`/admin/queue-status${campaignId ? `?campaignId=${encodeURIComponent(campaignId)}` : ""}`),
   getAbandonedCalls: (campaignId) =>
     request(`/admin/abandoned-calls${campaignId ? `?campaignId=${encodeURIComponent(campaignId)}` : ""}`),
+  getTotalCalls: (campaignId) =>
+    request(`/admin/total-calls${campaignId ? `?campaignId=${encodeURIComponent(campaignId)}` : ""}`),
   getAggregateStats: (campaignId) =>
     request(`/admin/stats/today${campaignId ? `?campaignId=${encodeURIComponent(campaignId)}` : ""}`),
 };

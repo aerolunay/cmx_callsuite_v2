@@ -5,15 +5,16 @@ import { api } from "../api";
 import { useAuth } from "../context/AuthContext";
 import { formatDurationHMS, formatDate, durationColorFor } from "../utils/format";
 
-// Order matters — this is the display order of the tables on the page.
+// Order matters — this is the display order of the tables in the left
+// container. AD_HOC deliberately dropped from this dashboard per spec
+// — agents can still BE in that status, it's just not shown here.
 const STATUS_GROUPS = [
-  { key: "READY", label: "Ready" },
-  { key: "NOT_READY", label: "Not Ready" },
   { key: "IN_CALL", label: "On a Call" },
   { key: "ON_HOLD", label: "On Hold" },
   { key: "AFTER_CALL_WORK", label: "ACW" },
   { key: "AUX_CB", label: "Aux CB" },
-  { key: "AD_HOC", label: "Ad-Hoc" },
+  { key: "READY", label: "Ready" },
+  { key: "NOT_READY", label: "Not Ready" },
   { key: "LOGGED_OUT", label: "Logged Out" },
 ];
 
@@ -30,6 +31,7 @@ export default function LiveStatusDashboard() {
   const [agents, setAgents] = useState([]);
   const [queues, setQueues] = useState([]);
   const [abandonedCalls, setAbandonedCalls] = useState([]);
+  const [totalCalls, setTotalCalls] = useState([]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
 
@@ -44,11 +46,13 @@ export default function LiveStatusDashboard() {
       api.getLiveStatus(campaignId || undefined),
       api.getQueueStatus(campaignId || undefined),
       api.getAbandonedCalls(campaignId || undefined),
+      api.getTotalCalls(campaignId || undefined),
     ])
-      .then(([statusData, queueData, abandonedData]) => {
+      .then(([statusData, queueData, abandonedData, totalCallsData]) => {
         setAgents(statusData.agents);
         setQueues(queueData.queues);
         setAbandonedCalls(abandonedData.calls);
+        setTotalCalls(totalCallsData.calls);
       })
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
@@ -116,10 +120,72 @@ export default function LiveStatusDashboard() {
           </select>
         </div>
 
-        <div className="queue-row">
+        {error && <div className="error">{error}</div>}
+
+        <div className="live-status-grid">
+          {/* LEFT: one single container holding all 7 status tables
+              stacked inside it. Deliberately no fixed/max height here —
+              it grows with content and is expected to end up the
+              tallest element on the page ("stretching to the bottom"),
+              unlike the right column's cards which cap their height
+              and scroll internally instead. */}
           <div className="card">
-            <h3>Calls in Queue</h3>
-            <div className="queue-row-scroll">
+            {loading ? (
+              <p>Loading…</p>
+            ) : (
+              grouped.map((g, i) => (
+                <div
+                  key={g.key}
+                  className="status-subsection"
+                  style={{ marginBottom: i < grouped.length - 1 ? 20 : 0 }}
+                >
+                  <h3>
+                    {g.label} ({g.rows.length})
+                  </h3>
+                  {g.rows.length === 0 ? (
+                    <p style={{ color: "#888" }}>No agents currently in this state.</p>
+                  ) : (
+                    <table className="call-log-table">
+                      <thead>
+                        <tr>
+                          <th>Campaign</th>
+                          <th>ViciDial User</th>
+                          <th>Name</th>
+                          <th>{g.key === "LOGGED_OUT" ? "Last Login Date" : "Duration"}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {g.rows.map((a) => (
+                          <tr key={a.appUserId}>
+                            <td>{a.campaignId || "—"}</td>
+                            <td>{a.vicidialUser || "—"}</td>
+                            <td>{a.fullName}</td>
+                            {g.key === "LOGGED_OUT" ? (
+                              <td>{formatDate(a.lastLoginAt)}</td>
+                            ) : (
+                              <td
+                                style={{
+                                  color: durationColorFor(g.key, a.elapsedSeconds),
+                                  fontWeight: durationColorFor(g.key, a.elapsedSeconds) ? 700 : undefined,
+                                }}
+                              >
+                                {a.elapsedSeconds !== null ? formatDurationHMS(a.elapsedSeconds) : "—"}
+                              </td>
+                            )}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              ))
+            )}
+          </div>
+
+          {/* RIGHT: three separate containers, stacked. */}
+          <div className="live-status-right">
+            <div className="card">
+              <h3>Calls in Queue</h3>
               <p style={{ fontSize: 28, fontWeight: 700, color: "var(--cmx-navy)" }}>
                 {queues.reduce((sum, q) => sum + q.waiting, 0)}
               </p>
@@ -141,78 +207,69 @@ export default function LiveStatusDashboard() {
                 see DID_TO_CAMPAIGN in inboundCallService.js to add a new one.
               </p>
             </div>
-          </div>
 
-          <div className="card">
-            <h3>Abandoned ({abandonedCalls.length})</h3>
-            <div className="queue-row-scroll">
-              {abandonedCalls.length === 0 ? (
-                <p style={{ color: "#888" }}>No abandoned calls today.</p>
-              ) : (
-                <table className="call-log-table">
-                  <thead>
-                    <tr>
-                      <th>Campaign</th>
-                      <th>Phone Number</th>
-                      <th>Call DateTime</th>
-                      <th>Wait Duration</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {abandonedCalls.map((c, i) => (
-                      <tr key={i}>
-                        <td>{c.campaignId || "—"}</td>
-                        <td>{c.callerIdNumber || "—"}</td>
-                        <td>{formatDate(c.callStartedAt)}</td>
-                        <td>{formatDurationHMS(c.waitSeconds)}</td>
+            <div className="card" style={{ height: 380, display: "flex", flexDirection: "column" }}>
+              <h3>Abandoned ({abandonedCalls.length})</h3>
+              <div className="queue-row-scroll">
+                {abandonedCalls.length === 0 ? (
+                  <p style={{ color: "#888" }}>No abandoned calls today.</p>
+                ) : (
+                  <table className="call-log-table">
+                    <thead>
+                      <tr>
+                        <th>Campaign</th>
+                        <th>Phone Number</th>
+                        <th>Call DateTime</th>
+                        <th>Wait Duration</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
+                    </thead>
+                    <tbody>
+                      {abandonedCalls.map((c, i) => (
+                        <tr key={i}>
+                          <td>{c.campaignId || "—"}</td>
+                          <td>{c.callerIdNumber || "—"}</td>
+                          <td>{formatDate(c.callStartedAt)}</td>
+                          <td>{formatDurationHMS(c.waitSeconds)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </div>
+
+            <div className="card" style={{ height: 380, display: "flex", flexDirection: "column" }}>
+              <h3>Total Calls ({totalCalls.length})</h3>
+              <div className="queue-row-scroll">
+                {totalCalls.length === 0 ? (
+                  <p style={{ color: "#888" }}>No calls today.</p>
+                ) : (
+                  <table className="call-log-table">
+                    <thead>
+                      <tr>
+                        <th>Campaign</th>
+                        <th>Phone Number</th>
+                        <th>Call DateTime</th>
+                        <th>Handle Time</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {totalCalls.map((c, i) => (
+                        <tr key={i}>
+                          <td>{c.campaignId || "—"}</td>
+                          <td>{c.phoneNumber || "—"}</td>
+                          <td>{formatDate(c.callStartedAt)}</td>
+                          <td>{formatDurationHMS(c.handleTimeSeconds)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
             </div>
           </div>
         </div>
 
-        {error && <div className="error">{error}</div>}
-
-        {loading ? (
-          <p>Loading…</p>
-        ) : (
-          grouped.map((g) => (
-            <div className="card call-log-card" key={g.key} style={{ marginBottom: 16 }}>
-              <h3>
-                {g.label} ({g.rows.length})
-              </h3>
-              {g.rows.length === 0 ? (
-                <p style={{ color: "#888" }}>No agents currently in this state.</p>
-              ) : (
-                <table className="call-log-table">
-                  <thead>
-                    <tr>
-                      <th>Name</th>
-                      <th>Email</th>
-                      <th>ViciDial User</th>
-                      <th>Duration</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {g.rows.map((a) => (
-                      <tr key={a.appUserId}>
-                        <td>{a.fullName}</td>
-                        <td>{a.email}</td>
-                        <td>{a.vicidialUser || "—"}</td>
-                        <td style={{ color: durationColorFor(g.key, a.elapsedSeconds), fontWeight: durationColorFor(g.key, a.elapsedSeconds) ? 700 : undefined }}>
-                          {a.elapsedSeconds !== null ? formatDurationHMS(a.elapsedSeconds) : "—"}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </div>
-          ))
-        )}
       </div>
     </>
   );

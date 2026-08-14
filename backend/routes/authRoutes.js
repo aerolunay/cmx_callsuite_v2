@@ -245,6 +245,18 @@ router.post("/verify-otp", async (req, res) => {
           // just show no status until the agent changes it manually.
         }
 
+        // Powers the Live Status Dashboard's Logged Out table (Last
+        // Login Date column) — non-fatal on failure, same reasoning as
+        // the status init right above: login itself already succeeded.
+        try {
+          await db.execute(
+            "UPDATE cmx_dialer.app_users SET last_login_at = NOW() WHERE app_user_id = ?",
+            [appUser.app_user_id]
+          );
+        } catch (loginTimeErr) {
+          console.error("Failed to record last_login_at:", loginTimeErr);
+        }
+
         return res.json({
           success: true,
           message: "Login successful.",
@@ -381,6 +393,18 @@ router.post("/login-totp", async (req, res) => {
           await agentStatusService.setStatus(appUser.app_user_id, "NOT_READY");
         } catch (statusErr) {
           console.error("Failed to initialize agent status on login:", statusErr);
+        }
+
+        // Powers the Live Status Dashboard's Logged Out table (Last
+        // Login Date column) — non-fatal on failure, same reasoning as
+        // the status init right above: login itself already succeeded.
+        try {
+          await db.execute(
+            "UPDATE cmx_dialer.app_users SET last_login_at = NOW() WHERE app_user_id = ?",
+            [appUser.app_user_id]
+          );
+        } catch (loginTimeErr) {
+          console.error("Failed to record last_login_at:", loginTimeErr);
         }
 
         return res.json({ success: true, message: "Login successful.", agent: req.session.agent });
