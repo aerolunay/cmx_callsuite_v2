@@ -251,18 +251,15 @@ button.primary:disabled {
 
 /*
 ==================================================
-LIVE STATUS DASHBOARD — 2-column layout
+LIVE STATUS DASHBOARD — 2-column layout, 5 uniform cards each side
 ==================================================
-LEFT: one single .card holding all 7 status tables stacked inside it
-(.status-subsection per table) — deliberately no fixed/max height, it
-grows with content and is expected to end up the tallest element on
-the page ("stretching to the bottom"), unlike the right column's cards.
-
-RIGHT: three separate .card elements stacked vertically
-(.live-status-right), two of which (Abandoned, Total Calls — set via
-inline height+flex, not a class, since only those two need it) cap
-their height and scroll internally via .queue-row-scroll instead of
-growing indefinitely as the day's call volume accumulates.
+Both columns hold exactly 5 cards (.live-status-card), ALL the same
+fixed height/width — no card grows with its own content. Each card's
+content scrolls internally (.live-status-scroll) once it exceeds that
+height, sized to comfortably show ~15 rows before scrolling kicks in.
+.live-status-column is a plain vertical stack — width equality between
+the two columns comes for free from the parent grid's equal 1fr/1fr
+columns, not from anything set on the cards themselves.
 ==================================================
 */
 .live-status-grid {
@@ -272,17 +269,19 @@ growing indefinitely as the day's call volume accumulates.
   align-items: start;
 }
 
-.live-status-right {
+.live-status-column {
   display: flex;
   flex-direction: column;
   gap: 16px;
 }
 
-.status-subsection h3 {
-  margin-bottom: 8px;
+.live-status-card {
+  height: 520px;
+  display: flex;
+  flex-direction: column;
 }
 
-.queue-row-scroll {
+.live-status-scroll {
   overflow-y: auto;
   flex: 1;
 }
@@ -291,6 +290,81 @@ growing indefinitely as the day's call volume accumulates.
   .live-status-grid {
     grid-template-columns: 1fr;
   }
+}
+
+/*
+==================================================
+LIVE STATUS DASHBOARD — Inbound/Outbound KPI summary cards
+==================================================
+Simple label/value list (not a table — these are single aggregate
+numbers, not per-row data). Two equal-width cards side by side above
+the main 10-card grid.
+==================================================
+*/
+.reporting-summary-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.kpi-list {
+  margin: 0;
+}
+
+.kpi-list > div {
+  display: flex;
+  justify-content: space-between;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--cmx-border);
+}
+
+.kpi-list dt {
+  color: #888;
+}
+
+.kpi-list dd {
+  margin: 0;
+  font-weight: 600;
+}
+
+@media (max-width: 700px) {
+  .reporting-summary-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/*
+==================================================
+LIVE STATUS DASHBOARD — smaller fonts
+==================================================
+Scoped under .live-status-page (added to this page's root div) so
+these reductions don't bleed into DialerPage's own .call-log-table or
+other pages sharing the same base classes.
+==================================================
+*/
+.live-status-page h2 {
+  font-size: 20px;
+}
+
+.live-status-page h3 {
+  font-size: 14px;
+}
+
+.live-status-page .call-log-table th,
+.live-status-page .call-log-table td {
+  font-size: 12px;
+  padding: 4px 6px;
+}
+
+.live-status-page .comments-label,
+.live-status-page select {
+  font-size: 12px;
+}
+
+.live-status-page p,
+.live-status-page .kpi-list {
+  font-size: 12px;
 }
 
 .badge {

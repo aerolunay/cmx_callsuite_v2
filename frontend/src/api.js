@@ -91,6 +91,8 @@ export const api = {
     request(`/admin/abandoned-calls${campaignId ? `?campaignId=${encodeURIComponent(campaignId)}` : ""}`),
   getTotalCalls: (campaignId) =>
     request(`/admin/total-calls${campaignId ? `?campaignId=${encodeURIComponent(campaignId)}` : ""}`),
+  getReportingSummary: (campaignId) =>
+    request(`/admin/reporting-summary${campaignId ? `?campaignId=${encodeURIComponent(campaignId)}` : ""}`),
   getAggregateStats: (campaignId) =>
     request(`/admin/stats/today${campaignId ? `?campaignId=${encodeURIComponent(campaignId)}` : ""}`),
 };

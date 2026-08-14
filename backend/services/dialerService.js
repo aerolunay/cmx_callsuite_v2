@@ -789,11 +789,36 @@ async function getCallLog(agentUser, campaignId, limit = 50) {
   return rows;
 }
 
+/*
+==================================================
+getActiveCallPhoneNumbers
+==================================================
+Used by adminRoutes.js's /live-status to show the customer's phone
+number ("Caller ID" column) for agents currently IN_CALL/ON_HOLD/ACW —
+NOT available from any database table for a still-in-progress call,
+since dialer_call_log only gets a row once the disposition is SAVED
+(i.e. the call has already ended). This is the one place that phone
+number actually lives while the call is still live: right here, in
+this in-memory Map. Returns a plain { [callId]: phoneNumber } object,
+not the full call objects, since that's all reporting needs.
+==================================================
+*/
+function getActiveCallPhoneNumbers() {
+  const result = {};
+  for (const call of activeCalls.values()) {
+    if (call.status !== "ended") {
+      result[call.callId] = call.phoneNumber;
+    }
+  }
+  return result;
+}
+
 module.exports = {
   getNextLead,
   startCall,
   getCallStatus,
   getActiveCallForAgent,
+  getActiveCallPhoneNumbers,
   endCall,
   holdCall,
   unholdCall,

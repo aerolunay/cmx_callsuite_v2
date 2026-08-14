@@ -2,6 +2,7 @@
 
 const express = require("express");
 const db = require("../config/db");
+const dialerService = require("../services/dialerService");
 const inboundCallService = require("../services/inboundCallService");
 const statsService = require("../services/statsService");
 const { transporter } = require("../config/mailer");
@@ -291,6 +292,25 @@ router.get("/live-status", requireAdmin, async (req, res) => {
       }
     }
 
+    /*
+    ==================================================
+    CALLER ID for currently-active calls (real gap filled here)
+    ==================================================
+    A currently-in-progress call has NO row in dialer_call_log or
+    inbound_call_log yet — those only get written once the disposition
+    is SAVED, i.e. after the call has already ended. So the customer's
+    phone number for a live IN_CALL/ON_HOLD/ACW agent can't come from
+    any database table at all; it only exists in the two services' own
+    in-memory call state. Combining both sources here, keyed by
+    call_id, so it can be looked up the same way regardless of whether
+    the live call happens to be outbound or inbound.
+    ==================================================
+    */
+    const callerIdsByCallId = { ...dialerService.getActiveCallPhoneNumbers() };
+    for (const call of inboundCallService.getAllInboundCalls()) {
+      callerIdsByCallId[call.callId] = call.callerIdNumber;
+    }
+
     const agents = rows.map((r) => {
       // Displayed Campaign: for a call-tied status, the campaign that
       // SPECIFIC call belongs to (open_related_campaign_id) — an agent
@@ -304,6 +324,7 @@ router.get("/live-status", requireAdmin, async (req, res) => {
       if (r.open_status) {
         const isCallTied = r.open_status === "IN_CALL" || r.open_status === "ON_HOLD";
         const totalHandlingSeconds = isCallTied ? totalsByCallId.get(r.open_related_call_id) : undefined;
+        const isCallRelated = isCallTied || r.open_status === "AFTER_CALL_WORK";
 
         return {
           appUserId: r.app_user_id,
@@ -312,6 +333,7 @@ router.get("/live-status", requireAdmin, async (req, res) => {
           vicidialUser: r.vicidial_user,
           campaignId: displayCampaignId,
           status: r.open_status,
+          callerId: isCallRelated ? callerIdsByCallId[r.open_related_call_id] || null : null,
           // Falls back to the single-segment value whenever there's no
           // related_call_id to aggregate by (pre-migration rows, or a
           // status genuinely unrelated to any call) — never silently
@@ -610,6 +632,24 @@ router.get("/stats/today", requireAdmin, async (req, res) => {
   } catch (error) {
     console.error("GET /api/admin/stats/today failed:", error);
     return res.status(500).json({ success: false, message: "Failed to load aggregate stats." });
+  }
+});
+
+/*
+==================================================
+REPORTING SUMMARY (Inbound / Outbound KPI cards)
+==================================================
+GET /api/admin/reporting-summary?campaignId=optional
+==================================================
+*/
+router.get("/reporting-summary", requireAdmin, async (req, res) => {
+  try {
+    const { campaignId } = req.query;
+    const summary = await statsService.getReportingSummary(campaignId || null);
+    return res.json({ success: true, summary });
+  } catch (error) {
+    console.error("GET /api/admin/reporting-summary failed:", error);
+    return res.status(500).json({ success: false, message: "Failed to load reporting summary." });
   }
 });
 

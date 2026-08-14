@@ -221,8 +221,231 @@ async function getTodayStatsAggregate(campaignId) {
   };
 }
 
+/*
+==================================================
+getReportingSummary
+==================================================
+Powers the new Inbound/Outbound KPI summary cards on the Live Status
+Dashboard. Deliberately a SEPARATE function from getTodayStats(Aggregate)
+above rather than reusing their avg ACW/Hold fields — those average the
+raw per-SEGMENT duration directly (fine for their purpose), whereas
+every average here is computed by first SUMMING all segments per call
+(so a call held/unheld multiple times counts as ONE call, not several
+partial segments), then averaging across calls — matching the same
+"aggregate the duration, don't reset" principle already applied to the
+live per-agent Duration column and Total Calls' Handle Time.
+
+Occupancy and Service Level are INBOUND-only concepts (standard
+call-center queue metrics) — outbound's section is deliberately
+simpler, matching what was actually asked for.
+
+Service Level's "answered within 20 seconds" wait time is measured
+from inbound_call_log.call_started_at to the FIRST IN_CALL segment
+tagged with that call's ID — this only works for calls that have a
+related_call_id at all (i.e. everything after tonight's migration);
+older calls are silently excluded from this one specific metric, same
+known, accepted gap as everywhere else related_call_id was introduced.
+
+Ready/Not Ready are NOT direction-specific (an agent is just generally
+available or not — there's no "available for inbound only" concept in
+this system), so both KPI sections show the SAME Ready/Not-Ready
+numbers, scoped by campaign ASSIGNMENT (agent_campaign_assignments) —
+matching how live-status's own campaign filter already works for
+statuses with no call to tag — rather than by call direction, which
+doesn't apply to them at all.
+==================================================
+*/
+async function getReportingSummary(campaignId) {
+  const { start, end } = await getEasternDayBoundsForServerClock();
+
+  async function perCallDirectionAverages(direction) {
+    const params = [direction, start, end];
+    let campaignFilter = "";
+    if (campaignId) {
+      campaignFilter = "AND related_campaign_id = ?";
+      params.push(campaignId);
+    }
+
+    const [segRows] = await db.execute(
+      `
+        SELECT related_call_id, status, SUM(duration_seconds) AS seg_seconds
+        FROM cmx_dialer.agent_status_log
+        WHERE related_call_direction = ?
+          AND status IN ('IN_CALL', 'ON_HOLD', 'AFTER_CALL_WORK')
+          AND ended_at IS NOT NULL
+          AND related_call_id IS NOT NULL
+          AND started_at BETWEEN ? AND ?
+          ${campaignFilter}
+        GROUP BY related_call_id, status
+      `,
+      params
+    );
+
+    const perCall = new Map();
+    for (const r of segRows) {
+      const entry = perCall.get(r.related_call_id) || { call: 0, hold: 0, acw: 0 };
+      if (r.status === "IN_CALL") entry.call += r.seg_seconds;
+      else if (r.status === "ON_HOLD") entry.hold += r.seg_seconds;
+      else if (r.status === "AFTER_CALL_WORK") entry.acw += r.seg_seconds;
+      perCall.set(r.related_call_id, entry);
+    }
+
+    const calls = Array.from(perCall.values());
+    const avg = (key) => (calls.length ? calls.reduce((s, c) => s + c[key], 0) / calls.length : null);
+    const total = (key) => calls.reduce((s, c) => s + c[key], 0);
+
+    return {
+      avgCallSeconds: avg("call"),
+      avgHoldSeconds: avg("hold"),
+      avgAcwSeconds: avg("acw"),
+      totalCallSeconds: total("call"),
+      totalHoldSeconds: total("hold"),
+      totalAcwSeconds: total("acw"),
+    };
+  }
+
+  async function readyNotReadyStats() {
+    const params = [start, end];
+    let assignmentFilter = "";
+    if (campaignId) {
+      assignmentFilter = `
+        AND app_user_id IN (
+          SELECT app_user_id FROM cmx_dialer.agent_campaign_assignments
+          WHERE campaign_id = ? AND active = 1
+        )
+      `;
+      params.push(campaignId);
+    }
+
+    const [rows] = await db.execute(
+      `
+        SELECT status, SUM(duration_seconds) AS total_seconds, COUNT(*) AS n
+        FROM cmx_dialer.agent_status_log
+        WHERE status IN ('READY', 'NOT_READY')
+          AND ended_at IS NOT NULL
+          AND started_at BETWEEN ? AND ?
+          ${assignmentFilter}
+        GROUP BY status
+      `,
+      params
+    );
+
+    const byStatus = {};
+    for (const r of rows) byStatus[r.status] = r;
+
+    const readyTotal = byStatus.READY?.total_seconds || 0;
+    const readyN = byStatus.READY?.n || 0;
+    const notReadyTotal = byStatus.NOT_READY?.total_seconds || 0;
+    const notReadyN = byStatus.NOT_READY?.n || 0;
+
+    return {
+      avgReadySeconds: readyN ? readyTotal / readyN : null,
+      avgNotReadySeconds: notReadyN ? notReadyTotal / notReadyN : null,
+      totalReadySeconds: readyTotal,
+    };
+  }
+
+  async function callCounts() {
+    const inboundParams = [start, end];
+    const abandonedParams = [start, end];
+    const outboundParams = [start, end];
+    let inboundCampaignFilter = "";
+    let abandonedCampaignFilter = "";
+    let outboundCampaignFilter = "";
+    if (campaignId) {
+      inboundCampaignFilter = "AND campaign_id = ?";
+      inboundParams.push(campaignId);
+      abandonedCampaignFilter = "AND campaign_id = ?";
+      abandonedParams.push(campaignId);
+      outboundCampaignFilter = "AND campaign_id = ?";
+      outboundParams.push(campaignId);
+    }
+
+    const [[inboundRow]] = await db.execute(
+      `SELECT COUNT(*) AS n FROM cmx_dialer.inbound_call_log WHERE call_started_at BETWEEN ? AND ? ${inboundCampaignFilter}`,
+      inboundParams
+    );
+    const [[abandonedRow]] = await db.execute(
+      `SELECT COUNT(*) AS n FROM cmx_dialer.abandoned_call_log WHERE call_started_at BETWEEN ? AND ? ${abandonedCampaignFilter}`,
+      abandonedParams
+    );
+    const [[outboundRow]] = await db.execute(
+      `SELECT COUNT(*) AS n FROM cmx_dialer.dialer_call_log WHERE call_started_at BETWEEN ? AND ? ${outboundCampaignFilter}`,
+      outboundParams
+    );
+
+    return { totalInbound: inboundRow.n, totalAbandoned: abandonedRow.n, totalOutbound: outboundRow.n };
+  }
+
+  async function answeredWithin20Seconds() {
+    const params = [start, end];
+    let campaignFilter = "";
+    if (campaignId) {
+      campaignFilter = "AND icl.campaign_id = ?";
+      params.push(campaignId);
+    }
+
+    const [rows] = await db.execute(
+      `
+        SELECT icl.call_id, TIMESTAMPDIFF(SECOND, icl.call_started_at, MIN(asl.started_at)) AS wait_seconds
+        FROM cmx_dialer.inbound_call_log icl
+        JOIN cmx_dialer.agent_status_log asl
+          ON asl.related_call_id = icl.call_id AND asl.status = 'IN_CALL'
+        WHERE icl.call_started_at BETWEEN ? AND ?
+          ${campaignFilter}
+        GROUP BY icl.call_id
+      `,
+      params
+    );
+
+    return rows.filter((r) => r.wait_seconds !== null && r.wait_seconds < 20).length;
+  }
+
+  const [inboundSeg, outboundSeg, readyNotReady, counts, answeredFast] = await Promise.all([
+    perCallDirectionAverages("inbound"),
+    perCallDirectionAverages("outbound"),
+    readyNotReadyStats(),
+    callCounts(),
+    answeredWithin20Seconds(),
+  ]);
+
+  const inboundAht =
+    inboundSeg.avgCallSeconds !== null || inboundSeg.avgHoldSeconds !== null || inboundSeg.avgAcwSeconds !== null
+      ? (inboundSeg.avgCallSeconds || 0) + (inboundSeg.avgHoldSeconds || 0) + (inboundSeg.avgAcwSeconds || 0)
+      : null;
+
+  const occupancyNumerator = inboundSeg.totalCallSeconds + inboundSeg.totalHoldSeconds + inboundSeg.totalAcwSeconds;
+  const occupancyDenominator = occupancyNumerator + readyNotReady.totalReadySeconds;
+  const occupancyPct = occupancyDenominator > 0 ? (occupancyNumerator / occupancyDenominator) * 100 : null;
+
+  const serviceLevelDenominator = counts.totalInbound + counts.totalAbandoned;
+  const serviceLevelPct = serviceLevelDenominator > 0 ? (answeredFast / serviceLevelDenominator) * 100 : null;
+
+  return {
+    inbound: {
+      totalCalls: counts.totalInbound,
+      totalAbandoned: counts.totalAbandoned,
+      avgCallSeconds: inboundSeg.avgCallSeconds,
+      avgHoldSeconds: inboundSeg.avgHoldSeconds,
+      avgAcwSeconds: inboundSeg.avgAcwSeconds,
+      ahtSeconds: inboundAht,
+      avgReadySeconds: readyNotReady.avgReadySeconds,
+      avgNotReadySeconds: readyNotReady.avgNotReadySeconds,
+      occupancyPct,
+      serviceLevelPct,
+    },
+    outbound: {
+      totalCalls: counts.totalOutbound,
+      avgCallSeconds: outboundSeg.avgCallSeconds,
+      avgHoldSeconds: outboundSeg.avgHoldSeconds,
+      avgAcwSeconds: outboundSeg.avgAcwSeconds,
+    },
+  };
+}
+
 module.exports = {
   getTodayStats,
   getTodayStatsAggregate,
   getEasternDayBoundsForServerClock,
+  getReportingSummary,
 };
