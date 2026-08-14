@@ -6,11 +6,11 @@ export default defineConfig({
   server: {
     proxy: {
       "/api": {
-        target: "https://callsuite.cmxinnovations.com",
+        target: "http://localhost:5060",
         changeOrigin: true,
       },
       "/ws": {
-        target: "wss://callsuite.cmxinnovations.com",
+        target: "ws://localhost:5060",
         ws: true,
       },
     },
