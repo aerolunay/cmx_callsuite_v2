@@ -2,6 +2,7 @@
 
 const crypto = require("crypto");
 const express = require("express");
+const db = require("../config/db");
 const inboundCallService = require("../services/inboundCallService");
 
 const router = express.Router();
@@ -74,6 +75,62 @@ router.get("/allocate-inbound-room", (req, res) => {
   } catch (err) {
     console.error(`[internalRoutes] Failed to allocate an inbound room for DID ${did}:`, err.message);
     return res.status(500).type("text/plain").send("");
+  }
+});
+
+/*
+==================================================
+GET /internal/campaign-has-logged-in-agent?secret=...&campaignId=...
+==================================================
+Called from the dialplan, right after the business-hours check passes
+but BEFORE room allocation, to decide whether to route into the normal
+agent queue at all or forward straight to an external number instead.
+
+"Logged in" here means ANY open (ended_at IS NULL) agent_status_log
+row for an agent assigned to this campaign — regardless of WHICH
+status (READY, NOT_READY, IN_CALL, etc.). This is deliberately a much
+coarser, steadier signal than "currently Ready" — an agent's Ready/Not
+Ready status can flip every few seconds, but whether they're logged
+into the app at all doesn't, which is exactly why this check is
+appropriate for a dialplan decision made once per call rather than a
+real-time queue routing decision.
+
+Returns plain text "1" or "0" — same convention as
+allocate-inbound-room, since Asterisk's CURL() has no JSON parsing.
+==================================================
+*/
+router.get("/campaign-has-logged-in-agent", async (req, res) => {
+  const { secret, campaignId } = req.query;
+
+  if (!isValidSecret(secret)) {
+    console.warn("[internalRoutes] Rejected campaign-has-logged-in-agent call with an invalid/missing secret.");
+    return res.status(403).type("text/plain").send("0");
+  }
+  if (!campaignId) {
+    console.warn("[internalRoutes] Rejected campaign-has-logged-in-agent call with no campaignId param.");
+    return res.status(400).type("text/plain").send("0");
+  }
+
+  try {
+    const [rows] = await db.execute(
+      `
+        SELECT COUNT(*) AS n
+        FROM cmx_dialer.agent_status_log asl
+        JOIN cmx_dialer.agent_campaign_assignments aca
+          ON aca.app_user_id = asl.app_user_id AND aca.active = 1
+        WHERE aca.campaign_id = ? AND asl.ended_at IS NULL
+      `,
+      [campaignId]
+    );
+    const hasLoggedInAgent = rows[0].n > 0;
+    return res.type("text/plain").send(hasLoggedInAgent ? "1" : "0");
+  } catch (err) {
+    console.error(`[internalRoutes] Failed to check logged-in agents for campaign ${campaignId}:`, err.message);
+    // Fail OPEN here (assume an agent IS logged in) rather than
+    // silently forwarding every call externally the moment this query
+    // has a problem — an unnecessary queue-routed call is a much
+    // smaller failure mode than accidentally forwarding everything.
+    return res.status(500).type("text/plain").send("1");
   }
 });
 
