@@ -12,6 +12,7 @@ export const INBOUND_DISPOSITIONS = [
   { value: "WRONG_NUMBER", label: "Wrong Number / Misdial" },
   { value: "CALLER_HUNG_UP", label: "Caller Hung Up" },
   { value: "CALL_DISCONNECTED", label: "Call Disconnected" },
+  { value: "GHOST_CALL", label: "Ghost Call" },
 ];
 
 const INBOUND_LABEL_BY_VALUE = Object.fromEntries(INBOUND_DISPOSITIONS.map((d) => [d.value, d.label]));
