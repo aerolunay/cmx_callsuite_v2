@@ -83,6 +83,8 @@ export const api = {
     request(`/admin/users/${appUserId}`, { method: "PUT", body: JSON.stringify(payload) }),
   deleteAdminUser: (appUserId) =>
     request(`/admin/users/${appUserId}`, { method: "DELETE" }),
+  kickAgent: (appUserId) =>
+    request(`/admin/users/${appUserId}/kick`, { method: "POST" }),
   getLiveStatus: (campaignId) =>
     request(`/admin/live-status${campaignId ? `?campaignId=${encodeURIComponent(campaignId)}` : ""}`),
   getQueueStatus: (campaignId) =>
@@ -91,6 +93,7 @@ export const api = {
     request(`/admin/abandoned-calls${campaignId ? `?campaignId=${encodeURIComponent(campaignId)}` : ""}`),
   getTotalCalls: (campaignId) =>
     request(`/admin/total-calls${campaignId ? `?campaignId=${encodeURIComponent(campaignId)}` : ""}`),
+  getScreeningHandoffCode: () => request("/dialer/screening-handoff-code", { method: "POST" }),
   getReportingSummary: (campaignId) =>
     request(`/admin/reporting-summary${campaignId ? `?campaignId=${encodeURIComponent(campaignId)}` : ""}`),
   getAggregateStats: (campaignId) =>

@@ -56,6 +56,7 @@ export default function LiveStatusDashboard() {
   const [totalCalls, setTotalCalls] = useState([]);
   const [summary, setSummary] = useState(null);
   const [error, setError] = useState("");
+  const [kickingId, setKickingId] = useState(null);
   const [loading, setLoading] = useState(true);
 
   /*
@@ -113,6 +114,24 @@ export default function LiveStatusDashboard() {
       })
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
+  }
+
+  async function handleKickAgent(agentRow) {
+    const confirmed = window.confirm(
+      `Force-logout ${agentRow.fullName}? They'll be logged out immediately and shown a notice.`
+    );
+    if (!confirmed) return;
+
+    setKickingId(agentRow.appUserId);
+    setError("");
+    try {
+      await api.kickAgent(agentRow.appUserId);
+      load(); // refresh immediately rather than waiting for the next 5s poll
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setKickingId(null);
+    }
   }
 
   // Polling, not push — a real, honest tradeoff. Building a proper
@@ -299,12 +318,13 @@ export default function LiveStatusDashboard() {
                         <th>State</th>
                         <th>Direction</th>
                         <th>Duration</th>
+                        <th>Action</th>
                       </tr>
                     </thead>
                     <tbody>
                       {consolidatedRows.length === 0 ? (
                         <tr>
-                          <td colSpan={5} style={{ color: "#888" }}>
+                          <td colSpan={6} style={{ color: "#888" }}>
                             No agents currently in a tracked state.
                           </td>
                         </tr>
@@ -322,6 +342,23 @@ export default function LiveStatusDashboard() {
                               }}
                             >
                               {a.elapsedSeconds !== null ? formatDurationHMS(a.elapsedSeconds) : "—"}
+                            </td>
+                            <td>
+                              {/* Only offered for NOT_READY/AUX_CB —
+                                  matches the backend's own restriction
+                                  exactly (POST /users/:id/kick rejects
+                                  any other status), so this never shows
+                                  an action that would just fail. */}
+                              {(a.status === "NOT_READY" || a.status === "AUX_CB") && (
+                                <button
+                                  type="button"
+                                  className="link"
+                                  disabled={kickingId === a.appUserId}
+                                  onClick={() => handleKickAgent(a)}
+                                >
+                                  {kickingId === a.appUserId ? "Kicking…" : "Kick"}
+                                </button>
+                              )}
                             </td>
                           </tr>
                         ))

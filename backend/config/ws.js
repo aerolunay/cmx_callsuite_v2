@@ -55,6 +55,16 @@ expires anyway.
 */
 const pendingRestoreBySid = new Map();
 
+// Sids currently being force-logged-out (admin kick, or the 12-hour
+// auto-logout below) — the normal close handler checks this and skips
+// its own restore-window logic entirely for these, since forceLogout()
+// already closed the status and destroyed the session itself. Without
+// this check, the close event that naturally fires when we forcibly
+// close the socket would ALSO run the normal disconnect logic,
+// re-opening a restore window for a session we just deliberately
+// destroyed.
+const forcedLogoutSids = new Set();
+
 // How long a session survives after its last socket closes (and status
 // got closed/non-call-tied) before it's destroyed server-side, forcing
 // a real login next time. Cancelled if that same sid reconnects first —
@@ -170,6 +180,8 @@ function attach(httpServer, store) {
 }
 
 function registerConnection(appUserId, ws, sid) {
+  ws.sid = sid; // needed by forceLogout() below to destroy the right session
+
   if (!connections.has(appUserId)) {
     connections.set(appUserId, new Set());
   }
@@ -207,6 +219,15 @@ function registerConnection(appUserId, ws, sid) {
     if (set.size > 0) return; // other tabs/devices still connected — not gone
 
     connections.delete(appUserId);
+
+    // forceLogout() below already fully handled closing the status and
+    // destroying the session for this sid — don't redo any of that or
+    // start a restore-window timer for a session that's deliberately
+    // gone for good.
+    if (forcedLogoutSids.has(sid)) {
+      forcedLogoutSids.delete(sid);
+      return;
+    }
 
     try {
       // Mid-call is the one exception named explicitly: don't touch
@@ -279,8 +300,70 @@ function isConnected(appUserId) {
   return false;
 }
 
+/*
+==================================================
+forceLogout(appUserId, reason)
+==================================================
+Used by BOTH the admin "kick" feature and the 12-hour auto-logout
+check below — closes the agent's current status immediately, destroys
+their server-side session outright (not the normal "wait
+RECONNECT_WINDOW_MS in case they reload" path), and pushes a message
+so their open tab(s) can show why and redirect to login, rather than
+just going dead with no explanation.
+
+Deliberately closes status EVEN IF they have no live connection right
+now (a stale DB row with nobody behind it should still be forcibly
+closed) — the loop over live sockets below only handles the
+session-destroy/notify part, which naturally does nothing if they're
+not currently connected at all.
+==================================================
+*/
+async function forceLogout(appUserId, reason) {
+  const agentStatusService = require("../services/agentStatusService");
+
+  try {
+    const current = await agentStatusService.getCurrentStatus(appUserId);
+    if (current) {
+      await agentStatusService.closeCurrentStatus(appUserId);
+    }
+  } catch (err) {
+    console.error(`[ws] forceLogout: failed to close status for appUserId ${appUserId}:`, err.message);
+  }
+
+  const set = connections.get(appUserId);
+  if (!set) return; // not currently connected — status close above is all that's needed
+
+  for (const ws of set) {
+    const sid = ws.sid;
+    if (sid) {
+      forcedLogoutSids.add(sid);
+
+      const pendingDestroy = sessionDestroyTimers.get(sid);
+      if (pendingDestroy) {
+        clearTimeout(pendingDestroy);
+        sessionDestroyTimers.delete(sid);
+      }
+      pendingRestoreBySid.delete(sid);
+
+      if (sessionStore) {
+        sessionStore.destroy(sid, (err) => {
+          if (err) console.error(`[ws] forceLogout: failed to destroy session ${sid}:`, err.message);
+        });
+      }
+    }
+
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "forceLogout", reason: reason || "logged_out" }));
+      ws.close(4002, "Forced logout");
+    }
+  }
+
+  connections.delete(appUserId);
+}
+
 module.exports = {
   attach,
   broadcastToUser,
   isConnected,
+  forceLogout,
 };

@@ -5,6 +5,7 @@ const db = require("../config/db");
 const dialerService = require("../services/dialerService");
 const inboundCallService = require("../services/inboundCallService");
 const statsService = require("../services/statsService");
+const ws = require("../config/ws");
 const { transporter } = require("../config/mailer");
 const { buildWelcomeEmail } = require("../services/emailTemplates");
 
@@ -519,6 +520,46 @@ router.delete("/users/:appUserId", requireAdmin, async (req, res) => {
     return res.status(500).json({ success: false, message: "Failed to delete user." });
   } finally {
     connection.release();
+  }
+});
+
+/*
+==================================================
+POST /users/:appUserId/kick
+==================================================
+Admin-initiated immediate force-logout. Deliberately restricted to
+NOT_READY and AUX_CB only — an agent who's READY, IN_CALL, ON_HOLD, or
+AFTER_CALL_WORK stays kickable-immune here, since forcing out a
+mid-call or actively-available agent risks a dropped/orphaned call in
+a way that logging out an idle agent doesn't.
+==================================================
+*/
+router.post("/users/:appUserId/kick", requireAdmin, async (req, res) => {
+  try {
+    const { appUserId } = req.params;
+
+    const [rows] = await db.execute(
+      `SELECT status FROM cmx_dialer.agent_status_log WHERE app_user_id = ? AND ended_at IS NULL LIMIT 1`,
+      [appUserId]
+    );
+    const currentStatus = rows[0]?.status;
+
+    if (!currentStatus) {
+      return res.status(400).json({ success: false, message: "This agent isn't currently logged in." });
+    }
+    if (!["NOT_READY", "AUX_CB"].includes(currentStatus)) {
+      return res.status(400).json({
+        success: false,
+        message: `Can't kick an agent who is currently ${currentStatus} — only Not Ready or Aux CB agents can be force-logged-out.`,
+      });
+    }
+
+    await ws.forceLogout(appUserId, "kicked_by_admin");
+
+    return res.json({ success: true });
+  } catch (error) {
+    console.error("POST /api/admin/users/:appUserId/kick failed:", error);
+    return res.status(500).json({ success: false, message: "Failed to kick this agent." });
   }
 });
 

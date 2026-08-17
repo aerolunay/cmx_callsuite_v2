@@ -7,6 +7,7 @@ const dialerService = require("../services/dialerService");
 const agentStatusService = require("../services/agentStatusService");
 const statsService = require("../services/statsService");
 const inboundCallService = require("../services/inboundCallService");
+const crossAppHandoffService = require("../services/crossAppHandoffService");
 
 const router = express.Router();
 
@@ -405,7 +406,7 @@ matches the same ID used throughout the call's lifecycle.
 */
 router.post("/dialer/inbound-disposition", requireAuth, async (req, res) => {
   try {
-    const { callId, callerIdNumber, firstName, lastName, comments, disposition, callbackAt, setNotReady } = req.body;
+    const { callId, callerIdNumber, firstName, lastName, comments, disposition, callbackAt, callbackNumber, setNotReady } = req.body;
 
     if (!callId) {
       return res.status(400).json({ success: false, message: "callId is required." });
@@ -444,12 +445,12 @@ router.post("/dialer/inbound-disposition", requireAuth, async (req, res) => {
       `
         INSERT INTO cmx_dialer.inbound_call_log
           (agent_user, campaign_id, call_id, caller_id_number, first_name, last_name, comments,
-           disposition, callback_at, call_started_at, call_ended_at, wait_seconds)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           disposition, callback_at, callback_number, call_started_at, call_ended_at, wait_seconds)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
         agentUser, inboundCampaignId, callId, callerIdNumber || null, firstName || null, lastName || null,
-        comments.trim(), disposition, callbackAt || null, startedAt, endedAt, waitSeconds,
+        comments.trim(), disposition, callbackAt || null, callbackNumber || null, startedAt, endedAt, waitSeconds,
       ]
     );
 
@@ -459,6 +460,29 @@ router.post("/dialer/inbound-disposition", requireAuth, async (req, res) => {
   } catch (error) {
     console.error("POST /api/dialer/inbound-disposition failed:", error);
     return res.status(500).json({ success: false, message: error.message || "Failed to save inbound disposition." });
+  }
+});
+
+/*
+==================================================
+SCREENING APP HANDOFF (cross-app auth)
+==================================================
+POST /api/dialer/screening-handoff-code
+
+Generates a short-lived, single-use code the DialerPage's "Open
+Screening Form" link appends to cmx_scn_suite's URL as ?code=...
+That app's own backend then calls OUR POST /api/auth/cross-app/verify
+(see crossAppRoutes.js) to redeem it — see crossAppHandoffService.js
+for why this is deliberately not a real session/token.
+==================================================
+*/
+router.post("/dialer/screening-handoff-code", requireAuth, (req, res) => {
+  try {
+    const code = crossAppHandoffService.generateHandoffCode(req.session.agent);
+    return res.json({ success: true, code });
+  } catch (error) {
+    console.error("POST /api/dialer/screening-handoff-code failed:", error);
+    return res.status(500).json({ success: false, message: "Failed to generate handoff code." });
   }
 });
 

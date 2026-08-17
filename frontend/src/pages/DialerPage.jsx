@@ -64,6 +64,11 @@ export default function DialerPage() {
   const [inboundFirstName, setInboundFirstName] = useState("");
   const [inboundLastName, setInboundLastName] = useState("");
   const [inboundComments, setInboundComments] = useState("");
+  // Trunk-line calls show the TRUNK's own Caller ID, not the actual
+  // customer's — this lets the agent manually record the real number
+  // to call back, separate from (and preferred over) the unreliable
+  // auto-populated Caller ID for this scenario.
+  const [inboundCallbackNumber, setInboundCallbackNumber] = useState("");
   const [inboundDisposition, setInboundDisposition] = useState("");
   const [inboundCallbackAt, setInboundCallbackAt] = useState("");
   const [inboundSetNotReady, setInboundSetNotReady] = useState(false);
@@ -162,6 +167,18 @@ export default function DialerPage() {
   }, [agentStatus]);
 
   useDialerSocket((message) => {
+    if (message.type === "forceLogout") {
+      const reasonText =
+        message.reason === "kicked_by_admin"
+          ? "An administrator has logged you out."
+          : message.reason === "session_timeout_12h"
+            ? "You've been automatically logged out after 12 hours. Please log back in."
+            : "You've been logged out.";
+      window.alert(reasonText);
+      navigate("/login");
+      return;
+    }
+
     if (message.type === "agentStatus") {
       setAgentStatus({ status: message.status, elapsedSeconds: message.elapsedSeconds });
       setStatusDraft(message.status);
@@ -279,7 +296,14 @@ export default function DialerPage() {
         lead_id: row.lead_id || 0,
         first_name: row.first_name,
         last_name: row.last_name,
-        phone_number: row.phone_number,
+        // Prefers callback_number when present — trunk-line calls show
+        // the TRUNK's own Caller ID in phone_number, not the actual
+        // customer's, so callback_number (manually entered by the
+        // agent during disposition) is the reliable one to actually
+        // dial for a callback. Falls back to phone_number for rows
+        // that never had a callback_number recorded (outbound-sourced
+        // rows, or calls predating this field).
+        phone_number: row.callback_number || row.phone_number,
       };
       setLead(callbackLead);
 
@@ -415,6 +439,7 @@ export default function DialerPage() {
         comments: inboundComments.trim(),
         disposition: inboundDisposition,
         callbackAt: inboundDisposition === "CALLBACK_REQUESTED" ? inboundCallbackAt : undefined,
+        callbackNumber: inboundCallbackNumber.trim() || undefined,
         setNotReady: inboundSetNotReady,
       });
 
@@ -422,6 +447,7 @@ export default function DialerPage() {
       setInboundFirstName("");
       setInboundLastName("");
       setInboundComments("");
+      setInboundCallbackNumber("");
       setInboundDisposition("");
       setInboundCallbackAt("");
       setInboundSetNotReady(false);
@@ -487,7 +513,12 @@ export default function DialerPage() {
             >
               Change campaign
             </button>
-            {/* {campaign?.campaign_id === "CMXBSMSC" && (
+            {/* TEMPORARILY DISABLED — cmx_scn_suite's cross-app auth
+                config isn't correct yet on their end (ORIGIN_APP_VERIFY_URL
+                pointing at the wrong server/path, secret needs
+                confirming). Re-enable once that's fixed — see Phase 7
+                doc, targeted for Monday.
+            {campaign?.campaign_id === "CMXBSMSC" && (
               <button
                 type="button"
                 className="button-secondary"
@@ -496,7 +527,8 @@ export default function DialerPage() {
               >
                 Open Screening Form
               </button>
-            )} */}
+            )}
+            */}
           </div>
         </div>
 
@@ -587,6 +619,14 @@ export default function DialerPage() {
             <div style={{ marginTop: 12 }}>
               <label className="comments-label">Caller ID</label>
               <input type="text" value={inboundCall.callerIdNumber || "Unknown"} readOnly />
+
+              <label className="comments-label">Callback Number</label>
+              <input
+                type="text"
+                value={inboundCallbackNumber}
+                onChange={(e) => setInboundCallbackNumber(e.target.value)}
+                placeholder="If different from Caller ID above (e.g. trunk line calls)"
+              />
 
               <label className="comments-label">First Name</label>
               <input

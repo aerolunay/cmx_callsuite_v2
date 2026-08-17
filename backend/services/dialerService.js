@@ -756,6 +756,7 @@ async function getCallLog(agentUser, campaignId, limit = 50) {
           first_name,
           last_name,
           phone_number,
+          NULL AS callback_number,
           disposition
         FROM cmx_dialer.dialer_call_log
         WHERE agent_user = ?
@@ -774,6 +775,7 @@ async function getCallLog(agentUser, campaignId, limit = 50) {
           first_name,
           last_name,
           caller_id_number AS phone_number,
+          callback_number,
           disposition
         FROM cmx_dialer.inbound_call_log
         WHERE agent_user = ?

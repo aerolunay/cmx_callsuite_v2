@@ -251,6 +251,54 @@ async function isCallTied(appUserId) {
   return !!(current && CALL_TIED_STATUSES.has(current.status));
 }
 
+/*
+==================================================
+12-HOUR AUTO-LOGOUT
+==================================================
+Any non-admin agent still logged in (has an open agent_status_log row,
+any status) more than 12 hours after their last real login gets force-
+logged-out automatically. Admins are exempt entirely — this is aimed
+at agents who left the app open overnight/across shifts, not at
+supervisors who may legitimately stay logged in longer while
+monitoring.
+
+Measured from app_users.last_login_at (set once per real login), not
+from the CURRENT status row's own started_at — an agent's status can
+change many times across a long shift, and each change would
+reset a naive "time since status started" check, defeating the whole
+point of catching someone who's simply been logged in too long overall.
+==================================================
+*/
+const AUTO_LOGOUT_HOURS = 12;
+const AUTO_LOGOUT_CHECK_INTERVAL_MS = 5 * 60 * 1000; // every 5 minutes
+
+async function checkAndForceLogoutExpiredSessions() {
+  try {
+    const [rows] = await db.execute(
+      `
+        SELECT au.app_user_id
+        FROM cmx_dialer.app_users au
+        JOIN cmx_dialer.agent_status_log asl
+          ON asl.app_user_id = au.app_user_id AND asl.ended_at IS NULL
+        WHERE au.access_level != 'admin'
+          AND au.last_login_at IS NOT NULL
+          AND au.last_login_at < DATE_SUB(NOW(), INTERVAL ? HOUR)
+      `,
+      [AUTO_LOGOUT_HOURS]
+    );
+
+    for (const row of rows) {
+      await ws.forceLogout(row.app_user_id, "session_timeout_12h");
+    }
+  } catch (err) {
+    console.error("[agentStatusService] 12-hour auto-logout check failed:", err.message);
+  }
+}
+
+// .unref() so this timer never keeps the Node process alive on its
+// own, same reasoning as the WS ping loop's interval.
+setInterval(checkAndForceLogoutExpiredSessions, AUTO_LOGOUT_CHECK_INTERVAL_MS).unref();
+
 module.exports = {
   isManualStatus,
   getCurrentStatus,
@@ -261,4 +309,5 @@ module.exports = {
   statusEvents,
   PRODUCTIVE_STATUSES,
   OCCUPANCY_STATUSES,
+  checkAndForceLogoutExpiredSessions,
 };
