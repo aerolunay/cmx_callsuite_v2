@@ -173,7 +173,51 @@ function allocateInboundRoom(did) {
 
 /*
 ==================================================
-tryConnectReadyAgents (plural)
+tryConnectReadyAgents (plural) — mutex wrapper
+==================================================
+REAL BUG FIXED HERE: this function has FOUR separate, uncoordinated
+call sites (customer join, agent goes READY, call ends, abandonment
+cleanup) with no serialization between them. Two overlapping passes
+could each read a stale "who's ready" snapshot before an earlier
+pass's IN_CALL status write for an agent had actually committed,
+letting BOTH independently claim the SAME agent for two different
+waiting calls. Only one Originate() would actually land; the other
+left an agent's phone ringing into nothing and the caller stuck on
+hold music — exactly the "only one agent connects properly" symptom
+reported with multiple simultaneous callers and agents.
+
+Fix: a synchronous guard checked BEFORE any await, so two overlapping
+invocations can never interleave — the second one just flags that
+another pass is needed once the current one finishes, rather than
+running concurrently or being silently dropped. The 4 existing call
+sites are UNCHANGED — they still just call tryConnectReadyAgents();
+this wrapper handles serialization transparently underneath them.
+==================================================
+*/
+let isProcessingReadyAgents = false;
+let rerunReadyAgentsRequested = false;
+
+async function tryConnectReadyAgents() {
+  if (isProcessingReadyAgents) {
+    rerunReadyAgentsRequested = true;
+    return;
+  }
+
+  isProcessingReadyAgents = true;
+  try {
+    await tryConnectReadyAgentsInner();
+  } finally {
+    isProcessingReadyAgents = false;
+    if (rerunReadyAgentsRequested) {
+      rerunReadyAgentsRequested = false;
+      tryConnectReadyAgents();
+    }
+  }
+}
+
+/*
+==================================================
+tryConnectReadyAgentsInner
 ==================================================
 Drains as many waiting calls as possible per pass, FIFO by arrival
 time (startedAt) — not just "the one call" like v1. Builds up an
@@ -181,10 +225,13 @@ exclusion set of appUserIds already claimed WITHIN THIS SAME PASS (plus
 anyone already pending/connected on a different call from an earlier
 pass) so two waiting calls can never be matched to the same agent —
 agentStatusService.getAnyReadyAgentWithExtension() skips anyone in that
-set entirely, moving on to the next real candidate.
+set entirely, moving on to the next real candidate. Now guaranteed to
+only ever run one pass at a time — see the tryConnectReadyAgents()
+wrapper above — so this exclusion set can no longer be undermined by a
+second, concurrently-running pass.
 ==================================================
 */
-async function tryConnectReadyAgents() {
+async function tryConnectReadyAgentsInner() {
   const waiting = Array.from(inboundCalls.values())
     .filter((call) => call.status === "waiting_for_agent")
     .sort((a, b) => a.startedAt - b.startedAt);
