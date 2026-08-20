@@ -9,7 +9,7 @@ import { api } from "../api";
 import { useAuth } from "../context/AuthContext";
 import { useDialerSocket } from "../hooks/useDialerSocket";
 import { DISPOSITIONS } from "../constants/dispositions";
-import { INBOUND_DISPOSITIONS } from "../constants/inboundDispositions";
+import { getInboundDispositionsForCampaign } from "../constants/inboundDispositions";
 import { formatDuration, durationColorFor } from "../utils/format";
 
 // Agent-selectable statuses. IN_CALL and AFTER_CALL_WORK are set only
@@ -235,6 +235,13 @@ export default function DialerPage() {
   const isSystemStatus =
     agentStatus?.status === "IN_CALL" || agentStatus?.status === "ON_HOLD" || outboundDispositionPending;
   const isCallActive = call && call.status !== "ended";
+
+  // Campaign-scoped inbound disposition list — BSMSC shows its own
+  // dedicated 6-option set (Screening Completed, etc.), every other
+  // campaign keeps the existing generic list. See
+  // constants/inboundDispositions.js for where this decision actually
+  // lives — this is just consuming it.
+  const inboundDispositionOptions = getInboundDispositionsForCampaign(campaign?.campaign_id);
 
   async function handleStatusSwitch() {
     setError("");
@@ -654,11 +661,15 @@ export default function DialerPage() {
 
             {/* Disposition only appears once the call has actually
                 ended — matches outbound's pattern of dispositioning
-                after the call, not mid-call. */}
+                after the call, not mid-call. Uses
+                inboundDispositionOptions (campaign-scoped, computed
+                above) instead of a hardcoded import — BSMSC gets its
+                own 6-option list, every other campaign keeps the
+                existing generic one. */}
             {inboundCall.status === "ended" && (
               <form onSubmit={handleSaveInboundDisposition} style={{ marginTop: 14 }}>
                 <h3 style={{ marginBottom: 8 }}>Disposition</h3>
-                {INBOUND_DISPOSITIONS.map((d) => (
+                {inboundDispositionOptions.map((d) => (
                   <label key={d.value} className="disposition-row">
                     <input
                       type="radio"

@@ -49,6 +49,22 @@ function roomFromSuffix(suffix) {
 
 /*
 ==================================================
+RECORDING PATH — NEW
+==================================================
+BSMSC-only, automatic, no agent control — per explicit scope decision.
+callId-based (not room-based) since room numbers get reused across
+different calls over time, while callId is stable and unique per call
+— exactly what the later S3 upload step needs to find this file
+deterministically.
+==================================================
+*/
+const RECORDING_DIR = "/var/spool/asterisk/monitor";
+function recordingPathForCall(callId) {
+  return `${RECORDING_DIR}/${callId}.wav`;
+}
+
+/*
+==================================================
 IN-MEMORY CALL STATE
 ==================================================
 Keyed by callId. Holds enough to answer getCallStatus() and to target
@@ -94,6 +110,20 @@ async function markCallEnded(call) {
 
   if (call.afterCallWorkTriggered) return;
   call.afterCallWorkTriggered = true;
+
+  // Stop recording BEFORE marking the call ended/broadcasting —
+  // guarantees the file is fully flushed and closed before any later
+  // step (the S3 upload, built separately) tries to read it. Gated the
+  // same way recording was started (BSMSC only) — a call that was
+  // never recording has nothing to stop, and calling this on a
+  // non-recording room is a harmless no-op we'd rather just skip.
+  if (call.campaignId === "CMXBSMSC") {
+    try {
+      await ami.stopRecording(call.room);
+    } catch (err) {
+      console.error(`[dialerService] Failed to stop recording for call ${call.callId}:`, err.message);
+    }
+  }
 
   call.status = "ended";
   call.endedAt = call.endedAt || new Date();
@@ -459,6 +489,16 @@ function registerCallEventTracking() {
         call.customerChannel = evt.channel;
         call.status = "customer_connected";
         broadcastCallStatus(call);
+
+        // BSMSC-only, automatic, no agent control — per explicit scope
+        // decision. Starts HERE (not at agent_connected) so the
+        // recording captures the actual conversation, not just the
+        // agent sitting alone waiting for the customer to pick up.
+        if (call.campaignId === "CMXBSMSC") {
+          ami.startRecording(call.room, recordingPathForCall(call.callId)).catch((err) => {
+            console.error(`[dialerService] Failed to start recording for call ${call.callId}:`, err.message);
+          });
+        }
       }
     }
   });
@@ -536,6 +576,13 @@ This is also what finally makes ON_HOLD attributable to a real call —
 tagging the transition with relatedCallDirection is what makes Avg
 IB/OB Hold in Today's Stats computable, instead of structurally
 impossible as it was before this feature existed.
+
+NOTE ON RECORDING: deliberately does NOT pause/resume recording during
+hold — ConfbridgeStartRecord keeps recording the whole room regardless
+of who's in it at any given moment, so a hold segment just captures MOH
+audio rather than conversation. Acceptable for a first version; revisit
+only if silence/hold-music-heavy recordings turn out to be a real
+problem worth solving.
 ==================================================
 */
 async function holdCall(callId) {
@@ -710,6 +757,12 @@ async function saveDisposition({
     activeCalls.delete(callId);
   }
 
+  // TODO (next step, not yet built): if campaignId === "CMXBSMSC" and a
+  // recording file exists at recordingPathForCall(callId), kick off the
+  // S3 upload here — fire-and-forget, same pattern as the welcome email
+  // elsewhere in this codebase, never blocking this function's return
+  // on the upload finishing.
+
   // Finishing a disposition always drops the agent back to READY —
   // a product assumption, not confirmed with anyone. The alternative
   // would be returning them to whatever they were in before the call
@@ -826,4 +879,5 @@ module.exports = {
   unholdCall,
   saveDisposition,
   getCallLog,
+  recordingPathForCall,
 };

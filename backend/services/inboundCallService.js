@@ -64,6 +64,24 @@ function roomFromSuffix(suffix) {
   return `${ROOM_PREFIX}${suffix}`;
 }
 
+/*
+==================================================
+RECORDING PATH — NEW
+==================================================
+Same convention as dialerService.js's recordingPathForCall — kept as
+its own small, duplicated helper here rather than a shared module,
+since it's genuinely a one-line function and the two files don't
+otherwise import from each other. What matters is that BOTH produce
+the identical path format for the same callId, so the later S3 upload
+step can find either an inbound or outbound recording the same way,
+regardless of which file actually managed that call.
+==================================================
+*/
+const RECORDING_DIR = "/var/spool/asterisk/monitor";
+function recordingPathForCall(callId) {
+  return `${RECORDING_DIR}/${callId}.wav`;
+}
+
 // How long a pre-allocated room is allowed to sit with no customer
 // ever actually joining it (e.g. the dialplan's CURL() succeeded but a
 // later step failed) before it's released back to the pool. Without
@@ -350,12 +368,18 @@ TWO DIFFERENT OUTCOMES depending on how far the call got:
    mid-ring (ringing_agent), they're returned straight to READY, not
    AFTER_CALL_WORK — they never actually connected to anything, so
    wrap-up time doesn't apply; same "auto-READY" assumption already
-   used elsewhere in this file, not a new one.
+   used elsewhere in this file, not a new one. NOTE: never reaches
+   recording start/stop at all — an abandoned call never had an agent
+   join, so nothing was ever recording in the first place.
 
 2. NORMAL — the call had reached "agent_connected" before ending. Same
    as before: agent flips to AFTER_CALL_WORK, and the call stays in the
    Map (NOT deleted) until the disposition is saved (finalizeInboundCall)
    — the agent still needs caller info to fill out the intake form.
+   Recording (if it was started — BSMSC only) is stopped here, BEFORE
+   the AFTER_CALL_WORK transition, guaranteeing the file is flushed and
+   closed before the later S3 upload step (triggered wherever the
+   inbound disposition actually gets saved) tries to read it.
 ==================================================
 */
 async function endInboundCall(room) {
@@ -408,6 +432,21 @@ async function endInboundCall(room) {
     releaseRoomSuffix(suffix);
     tryConnectReadyAgents();
     return;
+  }
+
+  // BSMSC-only, automatic, no agent control — per explicit scope
+  // decision. Only reached here (never in the abandoned branch above),
+  // since an abandoned call never had an agent join and therefore
+  // never started recording. Stopped BEFORE the AFTER_CALL_WORK
+  // transition below, same reasoning as dialerService.js's outbound
+  // side — guarantees the file is fully flushed/closed before anything
+  // downstream tries to read it.
+  if (call.campaignId === "CMXBSMSC") {
+    try {
+      await ami.stopRecording(call.room);
+    } catch (err) {
+      console.error(`[inboundCallService] Failed to stop recording for call ${call.callId}:`, err.message);
+    }
   }
 
   if (appUserId) {
@@ -468,6 +507,18 @@ function registerInboundEventTracking() {
       // KPI and Service Level's "answered within 20 seconds" count.
       call.waitSeconds = Math.floor((new Date() - call.startedAt) / 1000);
       broadcastInboundStatus(call);
+
+      // BSMSC-only, automatic, no agent control — per explicit scope
+      // decision. Starts HERE — the moment the AGENT joins (the
+      // customer already joined earlier, in the awaiting_customer
+      // branch above) — matching the same "start once both parties
+      // are actually in the room together" principle used for
+      // outbound in dialerService.js.
+      if (call.campaignId === "CMXBSMSC") {
+        ami.startRecording(call.room, recordingPathForCall(call.callId)).catch((err) => {
+          console.error(`[inboundCallService] Failed to start recording for call ${call.callId}:`, err.message);
+        });
+      }
     }
   });
 
@@ -547,6 +598,11 @@ _9700XXX customer-rejoin extension. Only valid once the agent has
 actually connected — matches outbound's equivalent guard. Keyed by
 callId now (v1 had exactly one call, so no ambiguity — v2 needs to
 know WHICH call).
+
+NOTE ON RECORDING: same as outbound's holdCall() — deliberately does
+NOT pause/resume recording during hold. ConfbridgeStartRecord keeps
+recording the whole room regardless of who's in it, so a hold segment
+just captures MOH audio. Acceptable for a first version.
 ==================================================
 */
 async function holdInboundCall(callId) {
@@ -721,4 +777,5 @@ module.exports = {
   getAllInboundCalls,
   getAbandonedCallsToday,
   findByCallId,
+  recordingPathForCall,
 };

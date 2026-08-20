@@ -8,6 +8,7 @@ const agentStatusService = require("../services/agentStatusService");
 const statsService = require("../services/statsService");
 const inboundCallService = require("../services/inboundCallService");
 const crossAppHandoffService = require("../services/crossAppHandoffService");
+const recordingUploadService = require("../services/recordingUploadService");
 
 const router = express.Router();
 
@@ -388,6 +389,27 @@ router.post("/dialer/disposition/:callId", requireAuth, async (req, res) => {
       console.error("Failed to update agent status after disposition:", statusErr.message);
     }
 
+    // BSMSC-only, fire-and-forget — the dialer_call_log row for this
+    // call already committed above (via saveDisposition), so an upload
+    // failure here can never leave the disposition itself half-saved.
+    // Never awaited into the response — same non-blocking pattern
+    // already used for the welcome email in adminRoutes.js. Updates
+    // recording_key on the SAME row once the upload actually completes,
+    // which could be anywhere from under a second to a while later
+    // depending on file size/network — the Call Logs page (built next)
+    // should treat a null recording_key as "still uploading or was
+    // never recorded," not as an error.
+    if (campaignId === "CMXBSMSC") {
+      recordingUploadService
+        .uploadRecording(callId, campaignId)
+        .then((key) =>
+          db.execute(`UPDATE cmx_dialer.dialer_call_log SET recording_key = ? WHERE call_id = ?`, [key, callId])
+        )
+        .catch((err) => {
+          console.error(`[dialerRoutes] Failed to upload recording for call ${callId}:`, err.message);
+        });
+    }
+
     return res.json({ success: true, ...result });
   } catch (error) {
     console.error("POST /api/dialer/disposition failed:", error);
@@ -455,6 +477,21 @@ router.post("/dialer/inbound-disposition", requireAuth, async (req, res) => {
     );
 
     await inboundCallService.finalizeInboundCall(callId, appUserId, setNotReady);
+
+    // BSMSC-only, fire-and-forget — same reasoning as outbound above.
+    // The inbound_call_log row already committed by the time this
+    // runs, so an upload failure here never affects the disposition
+    // save itself.
+    if (inboundCampaignId === "CMXBSMSC") {
+      recordingUploadService
+        .uploadRecording(callId, inboundCampaignId)
+        .then((key) =>
+          db.execute(`UPDATE cmx_dialer.inbound_call_log SET recording_key = ? WHERE call_id = ?`, [key, callId])
+        )
+        .catch((err) => {
+          console.error(`[dialerRoutes] Failed to upload recording for call ${callId}:`, err.message);
+        });
+    }
 
     return res.json({ success: true });
   } catch (error) {

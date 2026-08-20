@@ -124,6 +124,43 @@ function redirectChannel(channel, { context, exten, priority = 1 }) {
   });
 }
 
+/*
+==================================================
+startRecording / stopRecording — NEW
+==================================================
+ConfbridgeStartRecord/StopRecord record the FULL conference mix (both
+legs together) — the whole point, since the recording needs to
+capture the actual conversation, not just one side. `recordfile`
+should be an ABSOLUTE path with an explicit .wav extension — recording
+naming/location is the CALLER's decision (see inboundCallService.js/
+dialerService.js), not something baked in here; this function is
+deliberately just a thin, dumb wrapper matching the same pattern as
+originate()/hangupChannel()/redirectChannel() above.
+
+No stopRecording call is strictly required before a room closes —
+Asterisk stops recording automatically when the ConfBridge itself
+ends — but calling it explicitly, right when a call is marked ended
+(before the room is torn down), guarantees the file is fully flushed
+and closed before anything downstream (the S3 upload) tries to read
+it, rather than racing a teardown that might still be finishing a
+write.
+==================================================
+*/
+function startRecording(conference, recordfile) {
+  return sendAction({
+    action: "ConfbridgeStartRecord",
+    conference,
+    recordfile,
+  });
+}
+
+function stopRecording(conference) {
+  return sendAction({
+    action: "ConfbridgeStopRecord",
+    conference,
+  });
+}
+
 connect();
 
 module.exports = {
@@ -132,4 +169,6 @@ module.exports = {
   hangupChannel,
   redirectChannel,
   isConnected,
+  startRecording,
+  stopRecording,
 };
