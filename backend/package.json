@@ -9,6 +9,8 @@
     "dev": "node --watch server.js"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1115.0",
+    "@aws-sdk/s3-request-presigner": "^3.1115.0",
     "asterisk-manager": "^0.2.0",
     "bcryptjs": "^2.4.3",
     "cookie": "^0.6.0",
