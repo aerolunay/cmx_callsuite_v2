@@ -985,14 +985,24 @@ DELETE USER
 ==================================================
 DELETE /api/admin/users/:appUserId
 
-REAL BUG FOUND AND FIXED HERE: cmx_dialer.agent_status_log has an
-ACTUAL enforced foreign key on app_user_id — this delete previously
-only cleared agent_campaign_assignments, meaning any user who had ever
-actually logged in (i.e. has ANY status history at all) could never be
-deleted at all, failing with a raw FK constraint error surfaced to the
-admin as a generic 500. Confirmed via a real failed delete attempt,
-not theoretical. Fixed by also clearing agent_status_log in the same
-transaction, in the correct order (before app_users itself).
+REAL BUG FOUND AND FIXED HERE: THREE separate tables have actual
+enforced foreign keys on app_user_id, confirmed via information_schema
+(not assumed) — agent_campaign_assignments, agent_status_log,
+otp_codes, and phone_assignments. This delete previously only cleared
+agent_campaign_assignments, meaning any user who had ever actually
+logged in, requested an OTP, or had a phone_assignments row at all
+could never be deleted, failing with a raw FK constraint error
+surfaced to the admin as a generic 500. Confirmed via multiple real
+failed delete attempts, not theoretical. Fixed by clearing all four
+referencing tables in the same transaction before deleting app_users
+itself.
+
+NOTE: phone_assignments appears to be an audit-trail table (assigned_at/
+unassigned_at/active columns) for phone-binding history — but none of
+this file's own user-creation/update endpoints currently write to it
+at all. Either it's populated by something outside this file, or it's
+unused by the current code paths. Worth investigating separately;
+cleared here regardless since it still blocks deletion via its FK.
 ==================================================
 */
 router.delete("/users/:appUserId", requireAdmin, async (req, res) => {
@@ -1009,6 +1019,16 @@ router.delete("/users/:appUserId", requireAdmin, async (req, res) => {
 
     await connection.execute(
       `DELETE FROM cmx_dialer.agent_status_log WHERE app_user_id = ?`,
+      [appUserId]
+    );
+
+    await connection.execute(
+      `DELETE FROM cmx_dialer.otp_codes WHERE app_user_id = ?`,
+      [appUserId]
+    );
+
+    await connection.execute(
+      `DELETE FROM cmx_dialer.phone_assignments WHERE app_user_id = ?`,
       [appUserId]
     );
 
