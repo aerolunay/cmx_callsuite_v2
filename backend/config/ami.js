@@ -161,6 +161,21 @@ function stopRecording(conference) {
   });
 }
 
+/*
+==================================================
+reloadPjsip — NEW
+==================================================
+Needed for the Phones admin feature — after our own backend regenerates
+the phone-wizard PJSIP file (see adminRoutes.js), this actually applies
+it. Uses the "Command" action to run the exact same CLI command we've
+been running by hand all session ("pjsip reload"), just from Node
+instead of an SSH session.
+==================================================
+*/
+function reloadPjsip() {
+  return sendAction({ action: "Command", command: "pjsip reload" });
+}
+
 connect();
 
 module.exports = {
@@ -171,4 +186,5 @@ module.exports = {
   isConnected,
   startRecording,
   stopRecording,
+  reloadPjsip,
 };

@@ -79,6 +79,39 @@ export const api = {
   getAdminUsers: () => request("/admin/users"),
   createAdminUser: (payload) =>
     request("/admin/users", { method: "POST", body: JSON.stringify(payload) }),
+  // Combined creation — writes BOTH a brand new asterisk.vicidial_users
+  // row AND the matching cmx_dialer.app_users row in one transaction
+  // (see adminRoutes.js's POST /users/full). Kept as a genuinely
+  // separate function from createAdminUser above, which still requires
+  // binding to an ALREADY-existing ViciDial user — that path is
+  // untouched.
+  createFullUser: (payload) =>
+    request("/admin/users/full", { method: "POST", body: JSON.stringify(payload) }),
+  // ViciDial Users — standalone CRUD, separated out per explicit
+  // request from being bundled inside app-user creation. A user
+  // created here becomes immediately bindable via
+  // getAvailableVicidialUsers()'s dropdown, same as any pre-existing
+  // account.
+  getVicidialUsers: () => request("/admin/vicidial-users"),
+  createVicidialUser: (payload) =>
+    request("/admin/vicidial-users", { method: "POST", body: JSON.stringify(payload) }),
+  updateVicidialUser: (username, payload) =>
+    request(`/admin/vicidial-users/${encodeURIComponent(username)}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  deleteVicidialUser: (username) =>
+    request(`/admin/vicidial-users/${encodeURIComponent(username)}`, { method: "DELETE" }),
+  // Phones — second piece of the ViciDial-admin-migration project.
+  // extension is treated as immutable — no rename endpoint exists,
+  // matching adminRoutes.js's own design (delete + recreate instead).
+  getPhones: () => request("/admin/phones"),
+  createPhone: (payload) =>
+    request("/admin/phones", { method: "POST", body: JSON.stringify(payload) }),
+  updatePhone: (extension, payload) =>
+    request(`/admin/phones/${encodeURIComponent(extension)}`, { method: "PUT", body: JSON.stringify(payload) }),
+  deletePhone: (extension) =>
+    request(`/admin/phones/${encodeURIComponent(extension)}`, { method: "DELETE" }),
   updateAdminUser: (appUserId, payload) =>
     request(`/admin/users/${appUserId}`, { method: "PUT", body: JSON.stringify(payload) }),
   deleteAdminUser: (appUserId) =>

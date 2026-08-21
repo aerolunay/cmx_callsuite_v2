@@ -1,11 +1,14 @@
 "use strict";
 
+const crypto = require("crypto");
+const fs = require("fs");
 const express = require("express");
 const db = require("../config/db");
 const dialerService = require("../services/dialerService");
 const inboundCallService = require("../services/inboundCallService");
 const statsService = require("../services/statsService");
 const ws = require("../config/ws");
+const ami = require("../config/ami");
 const { transporter } = require("../config/mailer");
 const { buildWelcomeEmail } = require("../services/emailTemplates");
 
@@ -99,6 +102,13 @@ Creates the app_users row AND its campaign assignments in one
 transaction — either both succeed or neither does, so a user is never
 left half-bound to a ViciDial login with no campaign access (or vice
 versa).
+
+NOTE: requires vicidialUser to already exist (picked from the
+"available" list above). For creating a BRAND NEW ViciDial user at the
+same time, see POST /users/full below instead — kept as a genuinely
+separate endpoint rather than modifying this one, since this flow
+(binding to an EXISTING vicidial_users row) is still valid and
+shouldn't be disturbed.
 ==================================================
 */
 router.post("/users", requireAdmin, async (req, res) => {
@@ -167,6 +177,599 @@ router.post("/users", requireAdmin, async (req, res) => {
 
 /*
 ==================================================
+CREATE USER — combined ViciDial + app_users creation
+==================================================
+POST /api/admin/users/full
+Body: {
+  email, fullName, accessLevel, campaignIds, active,       // app_users side
+  vicidialUsername, phoneLogin, phonePass, userLevel, userGroup  // vicidial_users side
+}
+
+First real step of moving ViciDial's own admin.php user-creation into
+this app. Writes BOTH the new asterisk.vicidial_users row AND the
+cmx_dialer.app_users row in ONE transaction — either both succeed or
+neither does, same principle as the existing POST /users above, just
+now covering a brand new ViciDial account too instead of requiring one
+to already exist.
+
+vicidial_users.pass/pass_hash are set to a random, unusable throwaway
+value — DELIBERATE, not a placeholder to fix later. admin.php's own
+web login is the thing this whole project is working toward retiring;
+nobody creating a user through THIS endpoint is expected to ever log
+into admin.php with it. If that assumption changes, this needs real,
+correctly-hashed values instead — flagging that explicitly rather than
+silently leaving it half-right.
+
+Only a practical subset of vicidial_users' 130+ columns is set here —
+everything else takes ViciDial's own table defaults, which matches
+what admin.php's own "Add User" form effectively does for anything the
+form itself doesn't ask about.
+==================================================
+*/
+router.post("/users/full", requireAdmin, async (req, res) => {
+  const {
+    email,
+    fullName,
+    accessLevel,
+    campaignIds,
+    active,
+    vicidialUsername,
+    phoneLogin,
+    phonePass,
+    userLevel,
+    userGroup,
+  } = req.body;
+
+  if (!email || !fullName || !accessLevel) {
+    return res.status(400).json({ success: false, message: "email, fullName, and accessLevel are required." });
+  }
+  if (!["agent", "supervisor", "admin"].includes(accessLevel)) {
+    return res.status(400).json({ success: false, message: "accessLevel must be agent, supervisor, or admin." });
+  }
+  if (!vicidialUsername) {
+    return res.status(400).json({ success: false, message: "vicidialUsername is required." });
+  }
+
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+
+    // Fixed placeholder value, per explicit request — every user
+    // created through this flow gets the IDENTICAL literal string
+    // "CXXXXXXXXXXC" for both pass/pass_hash, rather than a random
+    // throwaway. Same underlying reasoning as before (admin.php's own
+    // web login is being retired, nobody created this way is expected
+    // to use it) — but worth knowing this is a real tradeoff, not a
+    // pure improvement: a FIXED, identical value across every account
+    // is more predictable than a random one. If admin.php's login ever
+    // checks the raw pass column against user input, anyone aware of
+    // this convention could attempt it against ANY account created
+    // this way. Acceptable given admin.php is being phased out and
+    // these accounts aren't meant to use that login path at all — just
+    // flagging the tradeoff explicitly rather than changing it
+    // silently.
+    const throwawayPass = "CXXXXXXXXXXC";
+
+    await connection.execute(
+      `
+        INSERT INTO asterisk.vicidial_users
+          (user, pass, full_name, user_level, user_group, phone_login, phone_pass, email, active)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Y')
+      `,
+      [
+        vicidialUsername,
+        throwawayPass,
+        fullName,
+        userLevel || 1,
+        userGroup || null,
+        phoneLogin || null,
+        phonePass || null,
+        email,
+      ]
+    );
+
+    const [result] = await connection.execute(
+      `INSERT INTO cmx_dialer.app_users (email, full_name, access_level, vicidial_user, active)
+       VALUES (?, ?, ?, ?, ?)`,
+      [email, fullName, accessLevel, vicidialUsername, active === false ? 0 : 1]
+    );
+
+    const appUserId = result.insertId;
+
+    if (Array.isArray(campaignIds) && campaignIds.length > 0) {
+      for (const campaignId of campaignIds) {
+        await connection.execute(
+          `INSERT INTO cmx_dialer.agent_campaign_assignments (app_user_id, campaign_id) VALUES (?, ?)`,
+          [appUserId, campaignId]
+        );
+      }
+    }
+
+    await connection.commit();
+
+    // Same reasoning as POST /users above — sent after commit, never
+    // awaited into the response, a slow/bounced email should never
+    // make account creation itself look like it failed.
+    transporter
+      .sendMail({
+        from: process.env.SMTP_FROM,
+        to: email,
+        ...buildWelcomeEmail({ fullName, email, accessLevel }),
+      })
+      .catch((err) => {
+        console.error(`[adminRoutes] Failed to send welcome email to ${email}:`, err.message);
+      });
+
+    return res.json({ success: true, appUserId, vicidialUsername });
+  } catch (error) {
+    await connection.rollback();
+    console.error("POST /api/admin/users/full failed:", error);
+
+    if (error.code === "ER_DUP_ENTRY") {
+      return res
+        .status(409)
+        .json({ success: false, message: "That ViciDial username, phone login, or email is already taken." });
+    }
+
+    return res.status(500).json({ success: false, message: "Failed to create user." });
+  } finally {
+    connection.release();
+  }
+});
+
+/*
+==================================================
+PHONES CRUD
+==================================================
+Second piece of the ViciDial-admin-migration project (after Users) —
+see the paused-work bookmark for the full sequence.
+
+REAL SCHEMA FINDING, worth stating plainly: phones has NO single-column
+primary key at all. Its actual uniqueness guarantee is a COMPOSITE
+UNIQUE KEY on (extension, server_ip) — confirmed directly via
+SHOW CREATE TABLE, not assumed. Every update/delete below is scoped to
+BOTH columns together, never extension alone — keying on extension
+only would be a real correctness gap in any multi-server ViciDial
+setup (the same extension number can legitimately exist on different
+servers), even though it happens to behave fine on this single-server
+deployment right now.
+
+server_ip is NEVER an admin-editable field — it's always this server's
+own fixed public IP, read from SERVER_IP in .env (same "per-environment
+value lives in .env" pattern as FRONTEND_URL/AMI_HOST/MYSQL_HOST
+elsewhere in this app). protocol is hardcoded to PJSIP, not the
+table's own legacy default of SIP — PJSIP is what this app's actual
+trunk/dialplan setup uses throughout, confirmed across tonight's own
+Asterisk config work.
+
+Only a practical subset of the 90+ real columns is exposed here —
+everything else takes the table's own defaults, same reasoning as
+vicidial_users' MVP field set.
+==================================================
+*/
+const SERVER_IP = process.env.SERVER_IP;
+if (!SERVER_IP) {
+  console.warn(
+    "[adminRoutes] SERVER_IP is not set in .env — phone creation/updates will fail until it is."
+  );
+}
+
+// Fixed, constant values per explicit request — every phone created
+// or updated through this app uses the SAME login password and
+// registration secret, rather than an admin choosing one per phone.
+// pass = "Login Password" (legacy admin.php concept), conf_secret =
+// "Registration Password" (the actual SIP/PJSIP registration secret a
+// softphone like MicroSIP authenticates with) — confirmed directly
+// against a real, working production phone row, not assumed. These
+// are documented in .env specifically so whoever is manually
+// configuring a physical/soft phone's SIP client knows what to type —
+// the admin UI itself never asks for or displays them, since they're
+// no longer a per-phone choice at all.
+const PHONE_LOGIN_PASSWORD = process.env.PHONE_LOGIN_PASSWORD;
+const PHONE_REGISTRATION_PASSWORD = process.env.PHONE_REGISTRATION_PASSWORD;
+if (!PHONE_LOGIN_PASSWORD || !PHONE_REGISTRATION_PASSWORD) {
+  console.warn(
+    "[adminRoutes] PHONE_LOGIN_PASSWORD / PHONE_REGISTRATION_PASSWORD are not set in .env — phone creation/updates will fail until they are."
+  );
+}
+
+/*
+==================================================
+PJSIP WIZARD FILE GENERATION FOR PHONES
+==================================================
+Real finding from tonight's investigation: this ViciDial install
+normally has phones' PJSIP config regenerated by a Perl daemon
+(ADMIN_keepalive_ALL.pl) that reads the phones table and rewrites
+pjsip_wizard-vicidial.conf — but that daemon isn't running continuously
+on sandbox (confirmed via `ps aux`), and wasn't found running on
+production either when checked. Rather than depend on starting or
+scheduling that external Perl process, this app generates its OWN
+separate file and triggers the reload directly here — bypassing
+ViciDial's mechanism entirely, matching the same direct-PJSIP-config
+approach already used for the CMXSandbox trunk earlier this session.
+
+Kept in a SEPARATE file (not pjsip.conf, not
+pjsip_wizard-vicidial.conf) specifically so this never touches or
+conflicts with either the manually-built trunk config or whatever
+ViciDial's own daemon might someday also try to write to the same
+filename.
+
+ONE-TIME MANUAL SETUP STEP, not done by this code: add
+`#include "pjsip-phones-cmxdialer.conf"` to /etc/asterisk/pjsip.conf,
+and create an empty starting file at that path so the include doesn't
+fail before this ever runs for the first time.
+
+Block format confirmed directly against a REAL, working production
+phone's own generated wizard block (bsmsc901) — not guessed.
+inbound_auth/password uses PHONE_REGISTRATION_PASSWORD, matching
+conf_secret's confirmed role.
+
+Regenerates the WHOLE file from scratch every time (all active phones
+on this server), rather than trying to patch just the one changed
+entry — simpler, and correctness-by-construction: the file can never
+drift from what's actually in the database.
+==================================================
+*/
+const PHONE_WIZARD_CONF_PATH = "/etc/asterisk/pjsip-phones-cmxdialer.conf";
+
+function buildPhoneWizardBlock({ extension, login, fullname }) {
+  const callerName = (fullname || login || extension).replace(/"/g, "");
+  return [
+    `[${extension}]`,
+    `type=wizard`,
+    `accepts_auth=yes`,
+    `accepts_registrations=yes`,
+    `inbound_auth/username=${login}`,
+    `inbound_auth/password=${PHONE_REGISTRATION_PASSWORD}`,
+    `aor/max_contacts = 2`,
+    `aor/maximum_expiration = 3600`,
+    `aor/minimum_expiration = 60`,
+    `aor/default_expiration = 120`,
+    `aor/qualify_frequency = 15`,
+    `endpoint/context=default`,
+    `endpoint/callerid="${callerName}" <0000000000>`,
+    `endpoint/disallow=all`,
+    `endpoint/allow=ulaw`,
+    `endpoint/dtmf_mode = rfc4733`,
+    `endpoint/trust_id_inbound = no`,
+    `endpoint/send_rpid = yes`,
+    `endpoint/inband_progress = no`,
+    ``,
+  ].join("\n");
+}
+
+async function regeneratePhoneWizardFile() {
+  const [rows] = await db.execute(
+    `SELECT extension, login, fullname FROM asterisk.phones WHERE server_ip = ? AND active = 'Y'`,
+    [SERVER_IP]
+  );
+
+  let content =
+    "; AUTO-GENERATED by cmx_dialer's own admin panel — DO NOT EDIT MANUALLY.\n" +
+    "; Regenerated automatically on every phone create/update/delete via\n" +
+    "; POST/PUT/DELETE /api/admin/phones. See adminRoutes.js.\n\n";
+
+  for (const row of rows) {
+    content += buildPhoneWizardBlock(row) + "\n";
+  }
+
+  fs.writeFileSync(PHONE_WIZARD_CONF_PATH, content);
+  await ami.reloadPjsip();
+}
+
+router.get("/phones", requireAdmin, async (req, res) => {
+  try {
+    const [rows] = await db.execute(
+      `
+        SELECT extension, login, fullname, active, protocol, server_ip
+        FROM asterisk.phones
+        WHERE server_ip = ?
+        ORDER BY extension ASC
+      `,
+      [SERVER_IP]
+    );
+    return res.json({ success: true, phones: rows });
+  } catch (error) {
+    console.error("GET /api/admin/phones failed:", error);
+    return res.status(500).json({ success: false, message: "Failed to load phones." });
+  }
+});
+
+router.post("/phones", requireAdmin, async (req, res) => {
+  const { extension, login, fullname, active } = req.body;
+
+  if (!SERVER_IP) {
+    return res.status(500).json({ success: false, message: "SERVER_IP is not configured on this server." });
+  }
+  if (!PHONE_LOGIN_PASSWORD || !PHONE_REGISTRATION_PASSWORD) {
+    return res
+      .status(500)
+      .json({ success: false, message: "PHONE_LOGIN_PASSWORD/PHONE_REGISTRATION_PASSWORD are not configured on this server." });
+  }
+  if (!extension || !login) {
+    return res.status(400).json({ success: false, message: "extension and login are required." });
+  }
+
+  try {
+    await db.execute(
+      `
+        INSERT INTO asterisk.phones
+          (extension, server_ip, login, pass, conf_secret, fullname, active, protocol)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'PJSIP')
+      `,
+      [
+        extension,
+        SERVER_IP,
+        login,
+        PHONE_LOGIN_PASSWORD,
+        PHONE_REGISTRATION_PASSWORD,
+        fullname || null,
+        active === false ? "N" : "Y",
+      ]
+    );
+
+    let reloadWarning;
+    try {
+      await regeneratePhoneWizardFile();
+    } catch (reloadError) {
+      console.error(`[adminRoutes] Failed to regenerate PJSIP wizard file after creating ${extension}:`, reloadError.message);
+      reloadWarning =
+        "Phone was saved, but applying it to Asterisk failed — it may not be callable yet. Check server logs.";
+    }
+
+    return res.json({ success: true, reloadWarning });
+  } catch (error) {
+    console.error("POST /api/admin/phones failed:", error);
+    if (error.code === "ER_DUP_ENTRY") {
+      return res
+        .status(409)
+        .json({ success: false, message: `Extension ${extension} already exists on this server.` });
+    }
+    return res.status(500).json({ success: false, message: "Failed to create phone." });
+  }
+});
+
+// extension is treated as immutable once created — matching how the
+// rest of this app already treats vicidial_users.user (no rename path
+// exists there either). Changing which extension number a phone
+// answers to is rare enough, and risky enough (an active user binding
+// could be pointing at the old value), that "delete and recreate" is
+// the safer, simpler path for now rather than building a rename flow.
+//
+// pass/conf_secret are ALWAYS reset to the current PHONE_LOGIN_PASSWORD/
+// PHONE_REGISTRATION_PASSWORD on every save, not left untouched — a
+// deliberate choice, not an oversight: if those fixed values are ever
+// rotated in .env, saving an existing phone brings it back in sync
+// with the current standard rather than silently drifting on an old one.
+router.put("/phones/:extension", requireAdmin, async (req, res) => {
+  const { extension } = req.params;
+  const { login, fullname, active } = req.body;
+
+  if (!SERVER_IP) {
+    return res.status(500).json({ success: false, message: "SERVER_IP is not configured on this server." });
+  }
+  if (!PHONE_LOGIN_PASSWORD || !PHONE_REGISTRATION_PASSWORD) {
+    return res
+      .status(500)
+      .json({ success: false, message: "PHONE_LOGIN_PASSWORD/PHONE_REGISTRATION_PASSWORD are not configured on this server." });
+  }
+  if (!login) {
+    return res.status(400).json({ success: false, message: "login is required." });
+  }
+
+  try {
+    const [result] = await db.execute(
+      `
+        UPDATE asterisk.phones
+        SET login = ?, pass = ?, conf_secret = ?, fullname = ?, active = ?
+        WHERE extension = ? AND server_ip = ?
+      `,
+      [login, PHONE_LOGIN_PASSWORD, PHONE_REGISTRATION_PASSWORD, fullname || null, active === false ? "N" : "Y", extension, SERVER_IP]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ success: false, message: "Phone not found on this server." });
+    }
+
+    let reloadWarning;
+    try {
+      await regeneratePhoneWizardFile();
+    } catch (reloadError) {
+      console.error(`[adminRoutes] Failed to regenerate PJSIP wizard file after updating ${extension}:`, reloadError.message);
+      reloadWarning =
+        "Phone was saved, but applying it to Asterisk failed — changes may not be live yet. Check server logs.";
+    }
+
+    return res.json({ success: true, reloadWarning });
+  } catch (error) {
+    console.error("PUT /api/admin/phones/:extension failed:", error);
+    return res.status(500).json({ success: false, message: "Failed to update phone." });
+  }
+});
+
+router.delete("/phones/:extension", requireAdmin, async (req, res) => {
+  const { extension } = req.params;
+
+  if (!SERVER_IP) {
+    return res.status(500).json({ success: false, message: "SERVER_IP is not configured on this server." });
+  }
+
+  try {
+    const [result] = await db.execute(
+      `DELETE FROM asterisk.phones WHERE extension = ? AND server_ip = ?`,
+      [extension, SERVER_IP]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ success: false, message: "Phone not found on this server." });
+    }
+
+    let reloadWarning;
+    try {
+      await regeneratePhoneWizardFile();
+    } catch (reloadError) {
+      console.error(`[adminRoutes] Failed to regenerate PJSIP wizard file after deleting ${extension}:`, reloadError.message);
+      reloadWarning = "Phone was deleted from the database, but Asterisk wasn't reloaded. Check server logs.";
+    }
+
+    return res.json({ success: true, reloadWarning });
+  } catch (error) {
+    console.error("DELETE /api/admin/phones/:extension failed:", error);
+    return res.status(500).json({ success: false, message: "Failed to delete phone." });
+  }
+});
+
+/*
+==================================================
+VICIDIAL USERS — standalone CRUD
+==================================================
+Separated out per explicit request — creating a ViciDial user is now
+its own, independent action (matching admin.php's own separation of
+concerns), not something that only happens bundled inside app-user
+creation. This is the SAME resource pool GET /vicidial-users/available
+already draws from for the "bind to an existing ViciDial user"
+dropdown — a user created here becomes immediately bindable to any app
+user afterward, no different from a pre-existing account.
+
+POST /users/full (further up this file) still exists and still works —
+left in place rather than removed, since it's tested and functional,
+just no longer the primary path the frontend uses for this. If a
+future need for "create both together in one step" comes back, it's
+already there.
+
+Same practical MVP field subset and fixed-placeholder-password
+reasoning as POST /users/full above.
+==================================================
+*/
+router.get("/vicidial-users", requireAdmin, async (req, res) => {
+  try {
+    const [rows] = await db.execute(
+      `
+        SELECT user, full_name, user_level, user_group, phone_login, email, active
+        FROM asterisk.vicidial_users
+        ORDER BY user ASC
+      `
+    );
+    return res.json({ success: true, vicidialUsers: rows });
+  } catch (error) {
+    console.error("GET /api/admin/vicidial-users failed:", error);
+    return res.status(500).json({ success: false, message: "Failed to load ViciDial users." });
+  }
+});
+
+router.post("/vicidial-users", requireAdmin, async (req, res) => {
+  const { username, fullName, phoneLogin, phonePass, userLevel, userGroup, email, active } = req.body;
+
+  if (!username) {
+    return res.status(400).json({ success: false, message: "username is required." });
+  }
+
+  try {
+    await db.execute(
+      `
+        INSERT INTO asterisk.vicidial_users
+          (user, pass, full_name, user_level, user_group, phone_login, phone_pass, email, active)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+      [
+        username,
+        "CXXXXXXXXXXC",
+        fullName || null,
+        userLevel || 1,
+        userGroup || null,
+        phoneLogin || null,
+        phonePass || null,
+        email || null,
+        active === false ? "N" : "Y",
+      ]
+    );
+    return res.json({ success: true, username });
+  } catch (error) {
+    console.error("POST /api/admin/vicidial-users failed:", error);
+    if (error.code === "ER_DUP_ENTRY") {
+      return res.status(409).json({ success: false, message: `ViciDial username ${username} already exists.` });
+    }
+    return res.status(500).json({ success: false, message: "Failed to create ViciDial user." });
+  }
+});
+
+router.put("/vicidial-users/:username", requireAdmin, async (req, res) => {
+  const { username } = req.params;
+  const { fullName, phoneLogin, phonePass, userLevel, userGroup, email, active } = req.body;
+
+  try {
+    const params = [
+      fullName || null,
+      userLevel || 1,
+      userGroup || null,
+      phoneLogin || null,
+      email || null,
+      active === false ? "N" : "Y",
+    ];
+    let setClause = "full_name = ?, user_level = ?, user_group = ?, phone_login = ?, email = ?, active = ?";
+
+    // phonePass optional on update, same reasoning as the phones
+    // section — an admin editing other fields shouldn't be forced to
+    // re-type/reset the SIP password every time.
+    if (phonePass) {
+      setClause += ", phone_pass = ?";
+      params.push(phonePass);
+    }
+
+    params.push(username);
+
+    const [result] = await db.execute(
+      `UPDATE asterisk.vicidial_users SET ${setClause} WHERE user = ?`,
+      params
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ success: false, message: "ViciDial user not found." });
+    }
+
+    return res.json({ success: true });
+  } catch (error) {
+    console.error("PUT /api/admin/vicidial-users/:username failed:", error);
+    return res.status(500).json({ success: false, message: "Failed to update ViciDial user." });
+  }
+});
+
+router.delete("/vicidial-users/:username", requireAdmin, async (req, res) => {
+  const { username } = req.params;
+
+  try {
+    // Guard: refuse to delete a ViciDial user still bound to an app
+    // user — that would leave app_users.vicidial_user pointing at a
+    // row that no longer exists. The admin needs to release the
+    // binding first (edit that app user, set ViciDial User to
+    // None/Release) before deleting the ViciDial account itself.
+    const [boundCheck] = await db.execute(
+      `SELECT app_user_id FROM cmx_dialer.app_users WHERE vicidial_user = ?`,
+      [username]
+    );
+    if (boundCheck.length > 0) {
+      return res.status(409).json({
+        success: false,
+        message:
+          "This ViciDial user is still bound to an app account. Unbind it first (edit that app user, set ViciDial User to None/Release).",
+      });
+    }
+
+    const [result] = await db.execute(`DELETE FROM asterisk.vicidial_users WHERE user = ?`, [username]);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ success: false, message: "ViciDial user not found." });
+    }
+
+    return res.json({ success: true });
+  } catch (error) {
+    console.error("DELETE /api/admin/vicidial-users/:username failed:", error);
+    return res.status(500).json({ success: false, message: "Failed to delete ViciDial user." });
+  }
+});
+
+/*
+==================================================
 LIVE AGENT STATUS
 ==================================================
 GET /api/admin/live-status?campaignId=optional
@@ -190,17 +793,6 @@ router.get("/live-status", requireAdmin, async (req, res) => {
   try {
     const { campaignId } = req.query;
 
-    // REAL BUG FIXED HERE: this used to return raw started_at/
-    // last_ended_at timestamps and let the frontend diff them against
-    // Date.now() in the browser — the EXACT same class of bug already
-    // found and fixed once for DialerPage's own elapsed-time counter
-    // (see agentStatusService.js/DialerPage.jsx comments on that), just
-    // never applied here when this second dashboard was built
-    // separately. Symptom was identical: a bogus multi-hour reading
-    // from a timezone mismatch between the MySQL server and the app.
-    // Fix is the same one already established elsewhere in this
-    // codebase: let MySQL compute elapsed seconds itself via
-    // TIMESTAMPDIFF, never comparing clocks across the two machines.
     const [rows] = await db.execute(
       `
         SELECT
@@ -246,55 +838,12 @@ router.get("/live-status", requireAdmin, async (req, res) => {
       [campaignId || null, campaignId || null]
     );
 
-    /*
-    ==================================================
-    TOTAL CALL HANDLING TIME (real bug fixed here)
-    ==================================================
-    Previously, an agent's "On a Call" duration reset to 0 the moment
-    they put the customer on hold — because holding/unholding closes
-    the IN_CALL row and opens a fresh ON_HOLD (then a fresh IN_CALL)
-    row, each with its own started_at. open_elapsed_seconds above only
-    ever reflects time since the CURRENT segment started, not the
-    whole call.
-
-    Fix: related_call_id (new column — see add_related_call_id.sql)
-    tags every IN_CALL/ON_HOLD/AFTER_CALL_WORK row with which call it
-    belongs to, REGARDLESS of how many hold/unhold segments that call
-    has been split into. For any agent currently IN_CALL or ON_HOLD,
-    sum every segment (closed ones via their stored duration_seconds,
-    the current open one via TIMESTAMPDIFF) that shares that call_id —
-    giving the TRUE total handling time for that specific call, not
-    just the current segment.
-    ==================================================
-    */
-    /*
-    ==================================================
-    TOTAL CALL HANDLING TIME — IN_CALL only
-    ==================================================
-    REAL BUG FIXED HERE, per explicit correction: this used to treat
-    IN_CALL and ON_HOLD identically, showing the SAME aggregated
-    call+hold total for both — so putting a call on hold didn't reset
-    to 0 (correctly fixed earlier), but it also never actually showed
-    the hold segment's OWN duration; it kept showing the call's
-    cumulative total instead. Aggregation across every segment sharing
-    a related_call_id belongs ONLY to IN_CALL (representing "how long
-    has this call been handled overall, across any prior hold(s)").
-    ON_HOLD and AUX_CB show ONLY their own current instance's elapsed
-    time — no aggregation — matching the explicit correction: "hold and
-    aux should only count based on it's instance."
-    ==================================================
-    */
     const callIdsNeedingTotal = rows
       .filter((r) => r.open_status === "IN_CALL" && r.open_related_call_id)
       .map((r) => r.open_related_call_id);
 
     const totalsByCallId = new Map();
     if (callIdsNeedingTotal.length > 0) {
-      // `db.execute()` uses true prepared statements, which do NOT
-      // reliably expand a single `?` bound to a JS array into a proper
-      // IN-list the way `db.query()` does — well-known mysql2 caveat,
-      // already fixed once here with an explicit `?,?,?` placeholder
-      // list sized to match, the standard safe pattern.
       const placeholders = callIdsNeedingTotal.map(() => "?").join(",");
       const [totalRows] = await db.execute(
         `
@@ -313,51 +862,21 @@ router.get("/live-status", requireAdmin, async (req, res) => {
         callIdsNeedingTotal
       );
       for (const t of totalRows) {
-        // SUM() comes back as a string from mysql2 — coercing
-        // explicitly so any arithmetic on this map's values can't
-        // quietly reintroduce that class of bug.
         totalsByCallId.set(t.related_call_id, Number(t.total_seconds) || 0);
       }
     }
 
-    /*
-    ==================================================
-    CALLER ID for currently-active calls (real gap filled here)
-    ==================================================
-    A currently-in-progress call has NO row in dialer_call_log or
-    inbound_call_log yet — those only get written once the disposition
-    is SAVED, i.e. after the call has already ended. So the customer's
-    phone number for a live IN_CALL/ON_HOLD/ACW agent can't come from
-    any database table at all; it only exists in the two services' own
-    in-memory call state. Combining both sources here, keyed by
-    call_id, so it can be looked up the same way regardless of whether
-    the live call happens to be outbound or inbound.
-    ==================================================
-    */
     const callerIdsByCallId = { ...dialerService.getActiveCallPhoneNumbers() };
     for (const call of inboundCallService.getAllInboundCalls()) {
       callerIdsByCallId[call.callId] = call.callerIdNumber;
     }
 
     const agents = rows.map((r) => {
-      // Displayed Campaign: for a call-tied status, the campaign that
-      // SPECIFIC call belongs to (open_related_campaign_id) — an agent
-      // assigned to multiple campaigns could be on a call for any of
-      // them, so the call's own campaign is more accurate than their
-      // general assignment. For every other status, there's no call to
-      // derive it from, so fall back to their (first) campaign
-      // assignment instead.
       const displayCampaignId = r.open_related_campaign_id || r.assigned_campaign_id || null;
 
       if (r.open_status) {
-        // isCallRelated: does this status have a real call attached at
-        // all (for Direction/Caller ID display) — includes ON_HOLD and
-        // AFTER_CALL_WORK, unlike the aggregation decision below.
         const isCallRelated =
           r.open_status === "IN_CALL" || r.open_status === "ON_HOLD" || r.open_status === "AFTER_CALL_WORK";
-        // useAggregatedDuration: ONLY IN_CALL shows the cumulative
-        // call+hold total. ON_HOLD/AUX_CB fall through to
-        // r.open_elapsed_seconds below — their own instance only.
         const useAggregatedDuration = r.open_status === "IN_CALL";
         const totalHandlingSeconds = useAggregatedDuration ? totalsByCallId.get(r.open_related_call_id) : undefined;
 
@@ -368,14 +887,8 @@ router.get("/live-status", requireAdmin, async (req, res) => {
           vicidialUser: r.vicidial_user,
           campaignId: displayCampaignId,
           status: r.open_status,
-          // null for READY/NOT_READY/AUX_CB — those have no call to tag
-          // with a direction at all, unlike IN_CALL/ON_HOLD/AFTER_CALL_WORK.
           direction: isCallRelated ? r.open_related_call_direction || null : null,
           callerId: isCallRelated ? callerIdsByCallId[r.open_related_call_id] || null : null,
-          // Falls back to the single-segment value whenever there's no
-          // related_call_id to aggregate by (pre-migration rows, or a
-          // status genuinely unrelated to any call) — never silently
-          // shows nothing.
           elapsedSeconds: totalHandlingSeconds !== undefined ? totalHandlingSeconds : r.open_elapsed_seconds,
           lastLoginAt: r.last_login_at,
         };
@@ -388,8 +901,8 @@ router.get("/live-status", requireAdmin, async (req, res) => {
         campaignId: displayCampaignId,
         status: "LOGGED_OUT",
         direction: null,
-        elapsedSeconds: r.logged_out_elapsed_seconds, // null if they've never logged any status at all
-        lastLoginAt: r.last_login_at, // null if this account has never logged in at all (pre-migration)
+        elapsedSeconds: r.logged_out_elapsed_seconds,
+        lastLoginAt: r.last_login_at,
       };
     });
 
@@ -406,16 +919,6 @@ UPDATE USER
 ==================================================
 PUT /api/admin/users/:appUserId
 Body: { email, fullName, accessLevel, vicidialUser (nullable), campaignIds: [] }
-
-Changing vicidialUser to a different value, or to null, immediately
-releases whatever it was bound to before — the "available ViciDial
-users" query above is computed dynamically (no matching app_users
-row), so there's nothing extra to clean up on release; the old
-binding just stops being referenced.
-
-Campaign assignments are replaced wholesale (delete all, re-insert the
-new set) rather than diffed — simpler and correct for this size of
-list.
 ==================================================
 */
 router.put("/users/:appUserId", requireAdmin, async (req, res) => {
@@ -481,13 +984,6 @@ router.put("/users/:appUserId", requireAdmin, async (req, res) => {
 DELETE USER
 ==================================================
 DELETE /api/admin/users/:appUserId
-
-A real, permanent deletion — not a deactivate flag. Removes the
-campaign assignments first (the FK would otherwise block deleting the
-user row), then the user itself. Their vicidial_user binding, if any,
-becomes immediately available for a new/different app user, since the
-"available" query only ever checks whether a referencing row exists
-at all.
 ==================================================
 */
 router.delete("/users/:appUserId", requireAdmin, async (req, res) => {
@@ -527,12 +1023,6 @@ router.delete("/users/:appUserId", requireAdmin, async (req, res) => {
 ==================================================
 POST /users/:appUserId/kick
 ==================================================
-Admin-initiated immediate force-logout. Deliberately restricted to
-NOT_READY and AUX_CB only — an agent who's READY, IN_CALL, ON_HOLD, or
-AFTER_CALL_WORK stays kickable-immune here, since forcing out a
-mid-call or actively-available agent risks a dropped/orphaned call in
-a way that logging out an idle agent doesn't.
-==================================================
 */
 router.post("/users/:appUserId/kick", requireAdmin, async (req, res) => {
   try {
@@ -568,17 +1058,6 @@ router.post("/users/:appUserId/kick", requireAdmin, async (req, res) => {
 QUEUE STATUS
 ==================================================
 GET /api/admin/queue-status?campaignId=optional
-
-Real aggregation across every currently-tracked inbound call, grouped
-by campaign (via inboundCallService's DID_TO_CAMPAIGN mapping) —
-replaces the old hardcoded 0-or-1 guess from when only one fixed room
-existed system-wide.
-
-campaignId filtering added here (not inside getQueueStatus() itself)
-— the service function stays a simple "give me everything, grouped"
-primitive; this route decides whether to narrow that down, matching
-how the Live Status Dashboard's agent-table filtering already works
-via the campaignId query param above.
 ==================================================
 */
 router.get("/queue-status", requireAdmin, async (req, res) => {
@@ -602,11 +1081,6 @@ router.get("/queue-status", requireAdmin, async (req, res) => {
 ABANDONED CALLS
 ==================================================
 GET /api/admin/abandoned-calls?campaignId=optional
-
-"Today" boundary reuses the SAME self-calibrating Eastern-day logic
-Today's Stats already uses (see statsService.js) — not a separate,
-possibly-inconsistent definition of "today". Respects the campaign
-filter the same way queue-status does.
 ==================================================
 */
 router.get("/abandoned-calls", requireAdmin, async (req, res) => {
@@ -625,21 +1099,6 @@ router.get("/abandoned-calls", requireAdmin, async (req, res) => {
 TOTAL CALLS (Live Status Dashboard's "Total Calls" widget)
 ==================================================
 GET /api/admin/total-calls?campaignId=optional
-
-Every call today, outbound and inbound combined (dialer_call_log +
-inbound_call_log, matching how the DialerPage's own Call Logs table
-already unions the two). "Today" reuses the SAME Eastern-day-boundary
-helper Today's Stats and Abandoned Calls already use — one definition
-of "today" everywhere in this app, not several.
-
-Handle Time aggregates via related_call_id — the SAME technique
-already used for the live per-status Duration column above, just as a
-plain historical SUM here (every segment for a completed call is
-already closed, so no TIMESTAMPDIFF-on-the-open-row branch is needed
-the way the live version needs one). Deliberately sums ALL segments
-tied to a call — IN_CALL + ON_HOLD + AFTER_CALL_WORK — not just talk
-time, matching how "Handle Time" is normally defined in call center
-reporting (talk + hold + wrap-up).
 ==================================================
 */
 router.get("/total-calls", requireAdmin, async (req, res) => {
@@ -688,7 +1147,7 @@ router.get("/total-calls", requireAdmin, async (req, res) => {
       phoneNumber: r.phone_number,
       callStartedAt: r.call_started_at,
       direction: r.direction,
-      handleTimeSeconds: r.handle_time_seconds, // null if no agent_status_log segments were ever tagged with this call_id (pre-migration calls)
+      handleTimeSeconds: r.handle_time_seconds,
     }));
 
     return res.json({ success: true, calls });
