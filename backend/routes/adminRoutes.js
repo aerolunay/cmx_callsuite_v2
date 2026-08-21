@@ -984,6 +984,15 @@ router.put("/users/:appUserId", requireAdmin, async (req, res) => {
 DELETE USER
 ==================================================
 DELETE /api/admin/users/:appUserId
+
+REAL BUG FOUND AND FIXED HERE: cmx_dialer.agent_status_log has an
+ACTUAL enforced foreign key on app_user_id — this delete previously
+only cleared agent_campaign_assignments, meaning any user who had ever
+actually logged in (i.e. has ANY status history at all) could never be
+deleted at all, failing with a raw FK constraint error surfaced to the
+admin as a generic 500. Confirmed via a real failed delete attempt,
+not theoretical. Fixed by also clearing agent_status_log in the same
+transaction, in the correct order (before app_users itself).
 ==================================================
 */
 router.delete("/users/:appUserId", requireAdmin, async (req, res) => {
@@ -995,6 +1004,11 @@ router.delete("/users/:appUserId", requireAdmin, async (req, res) => {
 
     await connection.execute(
       `DELETE FROM cmx_dialer.agent_campaign_assignments WHERE app_user_id = ?`,
+      [appUserId]
+    );
+
+    await connection.execute(
+      `DELETE FROM cmx_dialer.agent_status_log WHERE app_user_id = ?`,
       [appUserId]
     );
 
