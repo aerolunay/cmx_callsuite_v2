@@ -412,28 +412,53 @@ drift from what's actually in the database.
 */
 const PHONE_WIZARD_CONF_PATH = "/etc/asterisk/pjsip-phones-cmxdialer.conf";
 
+/*
+==================================================
+PHONE PJSIP OBJECT GENERATION — endpoint/auth/aor triplet
+==================================================
+REAL FINDING, confirmed via direct testing tonight: type=wizard blocks
+specifically fail to load from an #included file on this Asterisk
+instance — a plain type=endpoint test object (testendpoint) loaded
+correctly via the exact same #include mechanism, isolating the
+failure specifically to the wizard config layer, not #include itself
+or file permissions/encoding (all separately ruled out first).
+
+Switched to the same verbose endpoint/auth/aor triplet pattern already
+confirmed working for the CMXSandbox trunk earlier this session —
+matches the standard reference pattern (same bracket name reused
+across all three object types, distinguished by their own type=
+field), not guessed.
+==================================================
+*/
 function buildPhoneWizardBlock({ extension, login, fullname }) {
   const callerName = (fullname || login || extension).replace(/"/g, "");
   return [
     `[${extension}]`,
-    `type=wizard`,
-    `accepts_auth=yes`,
-    `accepts_registrations=yes`,
-    `inbound_auth/username=${login}`,
-    `inbound_auth/password=${PHONE_REGISTRATION_PASSWORD}`,
-    `aor/max_contacts = 2`,
-    `aor/maximum_expiration = 3600`,
-    `aor/minimum_expiration = 60`,
-    `aor/default_expiration = 120`,
-    `aor/qualify_frequency = 15`,
-    `endpoint/context=default`,
-    `endpoint/callerid="${callerName}" <0000000000>`,
-    `endpoint/disallow=all`,
-    `endpoint/allow=ulaw`,
-    `endpoint/dtmf_mode = rfc4733`,
-    `endpoint/trust_id_inbound = no`,
-    `endpoint/send_rpid = yes`,
-    `endpoint/inband_progress = no`,
+    `type = endpoint`,
+    `transport = transport-udp`,
+    `context = default`,
+    `disallow = all`,
+    `allow = ulaw`,
+    `auth = ${extension}`,
+    `aors = ${extension}`,
+    `callerid = "${callerName}" <0000000000>`,
+    `dtmf_mode = rfc4733`,
+    `send_rpid = yes`,
+    `trust_id_inbound = no`,
+    ``,
+    `[${extension}]`,
+    `type = auth`,
+    `auth_type = userpass`,
+    `username = ${login}`,
+    `password = ${PHONE_REGISTRATION_PASSWORD}`,
+    ``,
+    `[${extension}]`,
+    `type = aor`,
+    `max_contacts = 2`,
+    `qualify_frequency = 15`,
+    `maximum_expiration = 3600`,
+    `minimum_expiration = 60`,
+    `default_expiration = 120`,
     ``,
   ].join("\n");
 }
