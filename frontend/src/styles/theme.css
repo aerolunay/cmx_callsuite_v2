@@ -615,7 +615,7 @@ other pages sharing the same base classes.
 
 @media (min-width: 900px) {
   .dialer-layout {
-    grid-template-columns: 1fr 3fr;
+    grid-template-columns: 1fr 2fr;
     gap: 20px;
     align-items: start;
   }

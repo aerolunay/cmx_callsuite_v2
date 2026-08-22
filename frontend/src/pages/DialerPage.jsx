@@ -591,18 +591,19 @@ export default function DialerPage() {
           </div>
         </div>
 
-        {/* Stats now sit at the top, where the phone widget used to be —
-            swapped per redesign request. */}
-        <StatsPanel refreshKey={callLogVersion} campaignId={campaign?.campaign_id} />
-
-        {(agent.accessLevel === "admin" || agent.accessLevel === "supervisor") && (
-          <AggregateStatsPanel campaigns={allCampaigns} />
-        )}
-
         {error && <div className="error">{error}</div>}
 
         <div className="dialer-layout">
           <div className="dialer-main">
+            {/* Stats moved INSIDE dialer-main — previously sat above
+                the whole grid as a full-width section, which is why it
+                never lined up with the (narrower) left column below it. */}
+            <StatsPanel refreshKey={callLogVersion} campaignId={campaign?.campaign_id} />
+
+            {(agent.accessLevel === "admin" || agent.accessLevel === "supervisor") && (
+              <AggregateStatsPanel campaigns={allCampaigns} />
+            )}
+
             <div className="card status-bar">
               <div>
                 <span className="badge">{statusLabel}</span>
