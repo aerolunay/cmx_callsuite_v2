@@ -817,6 +817,10 @@ other pages sharing the same base classes.
   margin-top: 14px;
 }
 
+.stats-grid-4 {
+  grid-template-columns: repeat(4, 1fr);
+}
+
 .stats-cell {
   background: var(--cmx-gray-bg);
   border-radius: 6px;

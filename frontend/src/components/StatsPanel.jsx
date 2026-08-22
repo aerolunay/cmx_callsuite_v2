@@ -6,7 +6,6 @@ import { formatDuration } from "../utils/format";
 // per-direction rows now that Stats lives in the wider right column
 // (above Call Logs) instead of the narrower 1/3-width left column.
 const STAT_ROWS = [
-  { key: "totalCalls", label: "Total Calls", type: "count" },
   { key: "totalInbound", label: "Total Inbound", type: "count" },
   { key: "ahtInboundSeconds", label: "AHT Inbound", type: "duration" },
   { key: "totalOutbound", label: "Total Outbound", type: "count" },
@@ -51,7 +50,7 @@ export default function StatsPanel({ refreshKey, campaignId }) {
       {error && <div className="error">{error}</div>}
 
       {expanded && (
-        <div className="stats-grid">
+        <div className="stats-grid stats-grid-4">
           {STAT_ROWS.map((row) => (
             <div className="stats-cell" key={row.key}>
               <div className="stats-cell-label">{row.label}</div>
