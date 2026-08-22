@@ -47,6 +47,7 @@ export const api = {
 
   // Agent status
   getStatus: () => request("/dialer/status"),
+  getWebrtcCredentials: () => request("/dialer/webrtc-credentials"),
   setStatus: (status) =>
     request("/dialer/status", { method: "POST", body: JSON.stringify({ status }) }),
   hasLeads: (campaignId) => request(`/dialer/has-leads?campaignId=${encodeURIComponent(campaignId)}`),

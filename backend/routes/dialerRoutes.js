@@ -23,6 +23,61 @@ function requireAuth(req, res, next) {
   return next();
 }
 
+// Shared registration password for every PJSIP phone endpoint — same
+// value adminRoutes.js writes into every wizard-generated endpoint's
+// auth block (see PHONE_REGISTRATION_PASSWORD there). Not per-agent
+// secret; MicroSIP required agents to know this same value to manually
+// configure their softphone, so exposing it to an authenticated
+// agent's own session here is no greater an exposure than today.
+const PHONE_REGISTRATION_PASSWORD = process.env.PHONE_REGISTRATION_PASSWORD;
+// wss:// endpoint JsSIP connects to — Asterisk's PJSIP transport-wss,
+// riding on the HTTP/HTTPS server's /ws route (see http.conf tlsbindport).
+const ASTERISK_WSS_URL = process.env.ASTERISK_WSS_URL;
+
+/*
+==================================================
+JSSIP/WEBRTC CREDENTIALS
+==================================================
+GET /api/dialer/webrtc-credentials
+
+Returns what the frontend's JsSIP UA needs to register as THIS agent's
+own extension — the same extension Originate() already targets for
+both inbound and outbound agent-leg calls (PJSIP/${agent.extension}).
+Once JsSIP is registered here instead of a MicroSIP softphone, both
+call directions ring the browser automatically — no dialerService.js
+or inboundCallService.js changes needed for that part.
+==================================================
+*/
+router.get("/dialer/webrtc-credentials", requireAuth, async (req, res) => {
+  const { extension } = req.session.agent;
+
+  if (!extension) {
+    return res.status(409).json({
+      success: false,
+      message: "Your agent account has no phone extension configured.",
+    });
+  }
+
+  if (!PHONE_REGISTRATION_PASSWORD || !ASTERISK_WSS_URL) {
+    console.error(
+      "[dialerRoutes] PHONE_REGISTRATION_PASSWORD / ASTERISK_WSS_URL are not set in .env — JsSIP registration will fail until they are."
+    );
+    return res.status(500).json({
+      success: false,
+      message: "Softphone registration is not configured on this server.",
+    });
+  }
+
+  return res.json({
+    success: true,
+    credentials: {
+      extension,
+      password: PHONE_REGISTRATION_PASSWORD,
+      wssUrl: ASTERISK_WSS_URL,
+    },
+  });
+});
+
 /*
 ==================================================
 CAMPAIGN LIST

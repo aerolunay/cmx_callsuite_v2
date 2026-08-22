@@ -8,6 +8,7 @@ import AggregateStatsPanel from "../components/AggregateStatsPanel";
 import { api } from "../api";
 import { useAuth } from "../context/AuthContext";
 import { useDialerSocket } from "../hooks/useDialerSocket";
+import { useJsSipPhone } from "../hooks/useJsSipPhone";
 import { DISPOSITIONS, getInboundDispositionsForCampaign } from "../constants/dispositions";
 import { formatDuration, durationColorFor } from "../utils/format";
 
@@ -46,6 +47,14 @@ const CALL_STATUS_LABELS = {
 export default function DialerPage() {
   const { agent } = useAuth();
   const navigate = useNavigate();
+
+  // PHASE B — JsSIP replaces MicroSIP as the browser's SIP endpoint.
+  // Registers as this agent's own extension; both inbound customer
+  // calls and outbound agent-leg calls already ring PJSIP/${extension}
+  // via Originate (dialerService.js / inboundCallService.js) regardless
+  // of what's registered there, so no change needed to either of those
+  // — this just becomes the thing that answers.
+  const phone = useJsSipPhone();
 
   const [campaign, setCampaign] = useState(null);
   const [agentStatus, setAgentStatus] = useState(null); // { status, elapsedSeconds }
@@ -535,6 +544,39 @@ export default function DialerPage() {
             */}
           </div>
         </div>
+
+        {/* PHASE B — softphone status. Not styled/polished yet; just
+            proving registration + answer works end-to-end before this
+            gets folded into Header or its own component. */}
+        <div style={{ marginBottom: 8, fontSize: 13 }}>
+          Softphone:{" "}
+          {phone.registrationError
+            ? `Error — ${phone.registrationError}`
+            : phone.registered
+              ? "Registered"
+              : "Connecting…"}
+        </div>
+
+        {phone.callState === phone.CALL_STATES.INCOMING && (
+          <div className="error" style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <span>Incoming call{phone.remoteIdentity ? ` — ${phone.remoteIdentity}` : ""}</span>
+            <button type="button" className="button-primary" onClick={phone.answer}>
+              Answer
+            </button>
+            <button type="button" className="button-secondary" onClick={phone.hangup}>
+              Decline
+            </button>
+          </div>
+        )}
+
+        {phone.callState === phone.CALL_STATES.ACTIVE && (
+          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }}>
+            <span>On call{phone.remoteIdentity ? ` with ${phone.remoteIdentity}` : ""}</span>
+            <button type="button" className="button-secondary" onClick={phone.hangup}>
+              Hang Up
+            </button>
+          </div>
+        )}
 
         {error && <div className="error">{error}</div>}
 
