@@ -12,9 +12,21 @@ const { getEasternDayBoundsForServerClock } = require("./statsService");
 ==================================================
 ROOM ALLOCATION
 ==================================================
-Dialplan pattern confirmed working end-to-end against a real test call:
-  Agent leg:    PJSIP/<ext>  -> Exten 2<room>  (context "default")
-  Customer leg: Local/<room>@default -> Exten <phone number>
+Dialplan pattern confirmed working end-to-end against a real test call
+ON PRODUCTION, which appears to have a genuine [default] context
+(standard in stock ViciDial configs). SANDBOX's extensions.conf is a
+stripped-down custom file with ONLY [trunkinbound] defined — no
+[default] at all. The Context values below were changed from
+"default" to "trunkinbound" specifically to fix sandbox; this has
+NOT been re-validated against production, and should NOT be assumed
+safe to deploy there without first confirming whether production's
+[default] context still needs to be targeted instead. If both
+environments ever need to diverge here, this should become an env var
+rather than a hardcoded string.
+
+  Agent leg:    PJSIP/<ext>  -> Exten 2<room>  (context "trunkinbound"
+                on sandbox — see caveat above)
+  Customer leg: Local/<room>@trunkinbound -> Exten <phone number>
 where <room> is a 7-digit string "9600XXX" and only the last 3 digits
 (000-999) actually vary — confirmed via the real ConfbridgeJoin event's
 "conference": "9600000" field during testing.
@@ -308,8 +320,10 @@ function startCall({ appUserId, agentUser, agentExtension, lead, leadId, phoneNu
 
       try {
         await ami.originate({
-          Channel: `Local/${room}@default`,
-          Context: "default",
+          // SANDBOX-SPECIFIC FIX — was Local/${room}@default /
+          // Context: "default". See ROOM ALLOCATION comment above.
+          Channel: `Local/${room}@trunkinbound`,
+          Context: "trunkinbound",
           Exten: phoneNumber,
           Priority: 1,
           CallerID: `"CMX Outbound" <${campaignCid}>`,
@@ -401,8 +415,10 @@ function startCall({ appUserId, agentUser, agentExtension, lead, leadId, phoneNu
     ami.events.on("OriginateResponse", onOriginateResponse);
 
     ami.originate({
+      // SANDBOX-SPECIFIC FIX — was Context: "default". See ROOM
+      // ALLOCATION comment above.
       Channel: `PJSIP/${agentExtension}`,
-      Context: "default",
+      Context: "trunkinbound",
       Exten: `2${room}`,
       Priority: 1,
       CallerID: `"${agentUser}" <${campaignCid}>`,

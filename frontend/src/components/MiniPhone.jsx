@@ -79,6 +79,7 @@ function statusLabel(phone) {
 export function MiniPhone({
   agentStatus,
   hasActiveCall,
+  canHold,
   onHold,
   onToggleHold,
   onManualDial,
@@ -223,7 +224,7 @@ export function MiniPhone({
           type="button"
           className="phone-btn phone-btn-mute"
           onClick={onToggleHold}
-          disabled={!hasActiveCall}
+          disabled={!canHold}
           title={onHold ? "Unhold" : "Hold"}
         >
           {onHold ? "Unhold" : "Hold"}

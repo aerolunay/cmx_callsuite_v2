@@ -628,6 +628,10 @@ export default function DialerPage() {
             <MiniPhone
               agentStatus={agentStatus?.status}
               hasActiveCall={Boolean(call || inboundCall)}
+              canHold={Boolean(
+                (call && call.status === "customer_connected") ||
+                  (inboundCall && inboundCall.status === "agent_connected")
+              )}
               onHold={Boolean(call?.onHold || inboundCall?.onHold)}
               onToggleHold={handlePhoneToggleHold}
               onManualDial={handleManualDial}
