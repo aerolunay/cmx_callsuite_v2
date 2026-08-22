@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
-import { dispositionLabel } from "../constants/dispositions";
-import { inboundDispositionLabel } from "../constants/inboundDispositions";
+import { dispositionLabel, inboundDispositionLabel } from "../constants/dispositions";
 import { formatDate } from "../utils/format";
 
 // refreshKey is bumped by the parent (DialerPage) after a disposition

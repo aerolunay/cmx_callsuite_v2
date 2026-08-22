@@ -8,9 +8,9 @@ import AggregateStatsPanel from "../components/AggregateStatsPanel";
 import { api } from "../api";
 import { useAuth } from "../context/AuthContext";
 import { useDialerSocket } from "../hooks/useDialerSocket";
-import { DISPOSITIONS } from "../constants/dispositions";
-import { getInboundDispositionsForCampaign } from "../constants/inboundDispositions";
+import { DISPOSITIONS, getInboundDispositionsForCampaign } from "../constants/dispositions";
 import { formatDuration, durationColorFor } from "../utils/format";
+
 
 // Agent-selectable statuses. IN_CALL and AFTER_CALL_WORK are set only
 // by the backend in response to real call events — never offered here.
@@ -29,6 +29,7 @@ const STATUS_LABELS = {
   IN_CALL: "In Call",
   AFTER_CALL_WORK: "After Call Work",
   ON_HOLD: "On Hold",
+  MICROSIP_OUTBOUND: "On a MicroSIP Call",
 };
 
 // Internal call-progress states from dialerService.js, mapped to
@@ -233,15 +234,11 @@ export default function DialerPage() {
   // manually returning to READY, or there'd be no way out of it.
   const outboundDispositionPending = agentStatus?.status === "AFTER_CALL_WORK" && call && lead;
   const isSystemStatus =
-    agentStatus?.status === "IN_CALL" || agentStatus?.status === "ON_HOLD" || outboundDispositionPending;
+    agentStatus?.status === "IN_CALL" ||
+    agentStatus?.status === "ON_HOLD" ||
+    agentStatus?.status === "MICROSIP_OUTBOUND" ||
+    outboundDispositionPending;
   const isCallActive = call && call.status !== "ended";
-
-  // Campaign-scoped inbound disposition list — BSMSC shows its own
-  // dedicated 6-option set (Screening Completed, etc.), every other
-  // campaign keeps the existing generic list. See
-  // constants/inboundDispositions.js for where this decision actually
-  // lives — this is just consuming it.
-  const inboundDispositionOptions = getInboundDispositionsForCampaign(campaign?.campaign_id);
 
   async function handleStatusSwitch() {
     setError("");
@@ -661,15 +658,11 @@ export default function DialerPage() {
 
             {/* Disposition only appears once the call has actually
                 ended — matches outbound's pattern of dispositioning
-                after the call, not mid-call. Uses
-                inboundDispositionOptions (campaign-scoped, computed
-                above) instead of a hardcoded import — BSMSC gets its
-                own 6-option list, every other campaign keeps the
-                existing generic one. */}
+                after the call, not mid-call. */}
             {inboundCall.status === "ended" && (
               <form onSubmit={handleSaveInboundDisposition} style={{ marginTop: 14 }}>
                 <h3 style={{ marginBottom: 8 }}>Disposition</h3>
-                {inboundDispositionOptions.map((d) => (
+                {getInboundDispositionsForCampaign(campaign?.campaign_id).map((d) => (
                   <label key={d.value} className="disposition-row">
                     <input
                       type="radio"

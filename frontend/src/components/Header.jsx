@@ -41,6 +41,9 @@ export default function Header({ agentStatus }) {
               <Link to="/live-status" className="header-admin-link">
                 Live Status
               </Link>
+              <Link to="/reports" className="header-admin-link">
+                Reports
+              </Link>
               <Link to="/admin" className="header-admin-link">
                 Admin
               </Link>

@@ -412,53 +412,28 @@ drift from what's actually in the database.
 */
 const PHONE_WIZARD_CONF_PATH = "/etc/asterisk/pjsip-phones-cmxdialer.conf";
 
-/*
-==================================================
-PHONE PJSIP OBJECT GENERATION — endpoint/auth/aor triplet
-==================================================
-REAL FINDING, confirmed via direct testing tonight: type=wizard blocks
-specifically fail to load from an #included file on this Asterisk
-instance — a plain type=endpoint test object (testendpoint) loaded
-correctly via the exact same #include mechanism, isolating the
-failure specifically to the wizard config layer, not #include itself
-or file permissions/encoding (all separately ruled out first).
-
-Switched to the same verbose endpoint/auth/aor triplet pattern already
-confirmed working for the CMXSandbox trunk earlier this session —
-matches the standard reference pattern (same bracket name reused
-across all three object types, distinguished by their own type=
-field), not guessed.
-==================================================
-*/
 function buildPhoneWizardBlock({ extension, login, fullname }) {
   const callerName = (fullname || login || extension).replace(/"/g, "");
   return [
     `[${extension}]`,
-    `type = endpoint`,
-    `transport = transport-udp`,
-    `context = default`,
-    `disallow = all`,
-    `allow = ulaw`,
-    `auth = ${extension}`,
-    `aors = ${extension}`,
-    `callerid = "${callerName}" <0000000000>`,
-    `dtmf_mode = rfc4733`,
-    `send_rpid = yes`,
-    `trust_id_inbound = no`,
-    ``,
-    `[${extension}]`,
-    `type = auth`,
-    `auth_type = userpass`,
-    `username = ${login}`,
-    `password = ${PHONE_REGISTRATION_PASSWORD}`,
-    ``,
-    `[${extension}]`,
-    `type = aor`,
-    `max_contacts = 2`,
-    `qualify_frequency = 15`,
-    `maximum_expiration = 3600`,
-    `minimum_expiration = 60`,
-    `default_expiration = 120`,
+    `type=wizard`,
+    `accepts_auth=yes`,
+    `accepts_registrations=yes`,
+    `inbound_auth/username=${login}`,
+    `inbound_auth/password=${PHONE_REGISTRATION_PASSWORD}`,
+    `aor/max_contacts = 2`,
+    `aor/maximum_expiration = 3600`,
+    `aor/minimum_expiration = 60`,
+    `aor/default_expiration = 120`,
+    `aor/qualify_frequency = 15`,
+    `endpoint/context=default`,
+    `endpoint/callerid="${callerName}" <0000000000>`,
+    `endpoint/disallow=all`,
+    `endpoint/allow=ulaw`,
+    `endpoint/dtmf_mode = rfc4733`,
+    `endpoint/trust_id_inbound = no`,
+    `endpoint/send_rpid = yes`,
+    `endpoint/inband_progress = no`,
     ``,
   ].join("\n");
 }
@@ -1249,6 +1224,43 @@ router.get("/reporting-summary", requireAdmin, async (req, res) => {
   } catch (error) {
     console.error("GET /api/admin/reporting-summary failed:", error);
     return res.status(500).json({ success: false, message: "Failed to load reporting summary." });
+  }
+});
+
+/*
+==================================================
+REPORTS — campaign-level down to agent-level breakdown (from
+production, Phase 8)
+==================================================
+GET /api/admin/reports/campaign-agent-breakdown?startDate=yyyy-MM-dd&endDate=yyyy-MM-dd&campaignId=optional
+
+startDate/endDate are required (both inclusive, interpreted as
+America/New_York calendar days — same self-calibrating boundary
+technique used everywhere else in this app). campaignId is optional
+("All Campaigns" = no filter). See statsService.getCampaignAgentBreakdown
+for the actual aggregation.
+
+NOTE: statsService.getCampaignAgentBreakdown itself needs to be pulled
+in from production too (backend/services/statsService.js) — this route
+alone won't work without that corresponding function existing.
+==================================================
+*/
+router.get("/reports/campaign-agent-breakdown", requireAdmin, async (req, res) => {
+  try {
+    const { startDate, endDate, campaignId } = req.query;
+    if (!startDate || !endDate) {
+      return res.status(400).json({ success: false, message: "startDate and endDate query params are required." });
+    }
+
+    const report = await statsService.getCampaignAgentBreakdown({
+      startDate,
+      endDate,
+      campaignId: campaignId || null,
+    });
+    return res.json({ success: true, report });
+  } catch (error) {
+    console.error("GET /api/admin/reports/campaign-agent-breakdown failed:", error);
+    return res.status(500).json({ success: false, message: error.message || "Failed to load report." });
   }
 });
 

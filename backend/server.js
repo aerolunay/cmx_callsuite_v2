@@ -14,6 +14,7 @@ require("dotenv").config();
 const db = require("./config/db");
 const ws = require("./config/ws");
 require("./services/inboundCallService"); // self-registers AMI listeners on require
+require("./services/microsipOutboundService").start(); // Phase 8 — direct MicroSIP outbound detection
 const authRoutes = require("./routes/authRoutes");
 const dialerRoutes = require("./routes/dialerRoutes");
 const adminRoutes = require("./routes/adminRoutes");

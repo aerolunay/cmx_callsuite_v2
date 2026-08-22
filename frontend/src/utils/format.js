@@ -40,6 +40,7 @@ copy-paste slip.
 */
 export const DURATION_THRESHOLDS = {
   IN_CALL: { orangeAt: 5 * 60, redAt: 8 * 60, redInclusive: true },
+  MICROSIP_OUTBOUND: { orangeAt: 5 * 60, redAt: 8 * 60, redInclusive: true },
   ON_HOLD: { orangeAt: 90, redAt: 120, redInclusive: true },
   AFTER_CALL_WORK: { orangeAt: 20, redAt: 60, redInclusive: false },
   AUX_CB: { orangeAt: 5 * 60, redAt: 8 * 60, redInclusive: true },

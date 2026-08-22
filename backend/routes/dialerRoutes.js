@@ -198,6 +198,38 @@ router.post("/dialer/start-call", requireAuth, async (req, res) => {
       });
     }
 
+    /*
+    ==================================================
+    DISPOSITION-PENDING BLOCK (from production, Phase 8)
+    ==================================================
+    REAL GAP FIXED HERE: this route previously trusted the frontend
+    entirely — "Dial Next Number"/"Callback" only being SHOWN while
+    READY/AUX_CB was the sole protection. A direct POST here (or a
+    stale button click, or a race between a disposition save and a
+    dial click) could start a new call while a real outbound call's
+    disposition was still genuinely pending (AFTER_CALL_WORK). Note:
+    MicroSIP-direct calls (MICROSIP_OUTBOUND) do NOT require a
+    disposition at all — explicit product decision — so they're not
+    part of what this block guards against; MICROSIP_OUTBOUND already
+    isn't READY/AUX_CB anyway, so it's naturally excluded below too.
+
+    Only READY (Dial Next Number) and AUX_CB (Callback) are legitimate
+    states to start a new outbound call from — everything else is
+    rejected here regardless of what the frontend allowed through.
+    ==================================================
+    */
+    const currentStatus = await agentStatusService.getCurrentStatus(appUserId);
+    const allowedToDial = currentStatus && (currentStatus.status === "READY" || currentStatus.status === "AUX_CB");
+    if (!allowedToDial) {
+      return res.status(409).json({
+        success: false,
+        message:
+          currentStatus && currentStatus.status === "AFTER_CALL_WORK"
+            ? "You must save a disposition for your last call before dialing again."
+            : "You can't start a new call from your current status.",
+      });
+    }
+
     const result = await dialerService.startCall({
       appUserId,
       agentUser,

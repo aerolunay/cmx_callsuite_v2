@@ -131,4 +131,11 @@ export const api = {
     request(`/admin/reporting-summary${campaignId ? `?campaignId=${encodeURIComponent(campaignId)}` : ""}`),
   getAggregateStats: (campaignId) =>
     request(`/admin/stats/today${campaignId ? `?campaignId=${encodeURIComponent(campaignId)}` : ""}`),
+
+  // Reports (from production, Phase 8)
+  getCampaignAgentBreakdown: (startDate, endDate, campaignId) => {
+    const params = new URLSearchParams({ startDate, endDate });
+    if (campaignId) params.set("campaignId", campaignId);
+    return request(`/admin/reports/campaign-agent-breakdown?${params.toString()}`);
+  },
 };

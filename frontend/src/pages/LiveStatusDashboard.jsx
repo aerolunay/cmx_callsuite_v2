@@ -17,10 +17,11 @@ this consolidated view entirely, matching the exact 6 states listed.
 exactly (not "Ready").
 ==================================================
 */
-const CONSOLIDATED_STATES = ["IN_CALL", "ON_HOLD", "AFTER_CALL_WORK", "READY", "AUX_CB", "NOT_READY"];
+const CONSOLIDATED_STATES = ["IN_CALL", "MICROSIP_OUTBOUND", "ON_HOLD", "AFTER_CALL_WORK", "READY", "AUX_CB", "NOT_READY"];
 
 const STATE_LABELS = {
   IN_CALL: "On a Call",
+  MICROSIP_OUTBOUND: "MicroSIP Call",
   ON_HOLD: "On Hold",
   AFTER_CALL_WORK: "ACW",
   READY: "Avail",

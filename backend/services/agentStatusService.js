@@ -36,7 +36,16 @@ by real call events (see dialerService.js).
 ==================================================
 */
 const MANUAL_STATUSES = new Set(["NOT_READY", "READY", "ON_HOLD", "AUX_CB", "AD_HOC"]);
-const ALL_STATUSES = new Set(["NOT_READY", "READY", "ON_HOLD", "AUX_CB", "AD_HOC", "IN_CALL", "AFTER_CALL_WORK"]);
+const ALL_STATUSES = new Set([
+  "NOT_READY",
+  "READY",
+  "ON_HOLD",
+  "AUX_CB",
+  "AD_HOC",
+  "IN_CALL",
+  "AFTER_CALL_WORK",
+  "MICROSIP_OUTBOUND",
+]);
 
 /*
 ==================================================
@@ -244,7 +253,11 @@ vanished with an open AFTER_CALL_WORK nobody ever dispositions" gap
 that already exists independent of this fix.
 ==================================================
 */
-const CALL_TIED_STATUSES = new Set(["IN_CALL", "AFTER_CALL_WORK", "ON_HOLD"]);
+const CALL_TIED_STATUSES = new Set(["IN_CALL", "AFTER_CALL_WORK", "ON_HOLD", "MICROSIP_OUTBOUND"]);
+// MICROSIP_OUTBOUND included here for the same reason as the other
+// three: microsipOutboundService.js's own Hangup listener is what
+// should end this period (restoring the agent's prior status), NOT a
+// dropped socket in the meantime.
 
 async function isCallTied(appUserId) {
   const current = await getCurrentStatus(appUserId);

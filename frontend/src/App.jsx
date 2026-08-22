@@ -5,6 +5,7 @@ import CampaignSelectPage from "./pages/CampaignSelectPage";
 import DialerPage from "./pages/DialerPage";
 import AdminPage from "./pages/AdminPage";
 import LiveStatusDashboard from "./pages/LiveStatusDashboard";
+import ReportsPage from "./pages/ReportsPage";
 import ProtectedRoute from "./components/ProtectedRoute";
 
 export default function App() {
@@ -48,6 +49,14 @@ export default function App() {
         element={
           <ProtectedRoute>
             <LiveStatusDashboard />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/reports"
+        element={
+          <ProtectedRoute>
+            <ReportsPage />
           </ProtectedRoute>
         }
       />
