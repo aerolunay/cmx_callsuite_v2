@@ -44,6 +44,13 @@ export const DURATION_THRESHOLDS = {
   ON_HOLD: { orangeAt: 90, redAt: 120, redInclusive: true },
   AFTER_CALL_WORK: { orangeAt: 20, redAt: 60, redInclusive: false },
   NOT_READY: { orangeAt: 90, redAt: 180, redInclusive: true },
+  // 50-60 min = warning, >60 min = red. Explicitly NOT applied to
+  // ADMIN or AD_HOC — excluded per request, unlike the other 4 new
+  // aux statuses added alongside them this session.
+  LUNCH_BREAK: { orangeAt: 50 * 60, redAt: 60 * 60, redInclusive: false },
+  BIO_BREAK: { orangeAt: 50 * 60, redAt: 60 * 60, redInclusive: false },
+  MEETING: { orangeAt: 50 * 60, redAt: 60 * 60, redInclusive: false },
+  TRAINING: { orangeAt: 50 * 60, redAt: 60 * 60, redInclusive: false },
 };
 
 export function durationColorFor(statusKey, seconds) {
