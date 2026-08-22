@@ -412,28 +412,66 @@ drift from what's actually in the database.
 */
 const PHONE_WIZARD_CONF_PATH = "/etc/asterisk/pjsip-phones-cmxdialer.conf";
 
+/*
+==================================================
+PHONE PJSIP OBJECT GENERATION — endpoint/auth/aor triplet
+==================================================
+REAL FINDING, confirmed via direct testing: type=wizard blocks
+specifically fail to load from an #included file on this Asterisk
+instance — a plain type=endpoint test object loaded correctly via the
+exact same #include mechanism, isolating the failure specifically to
+the wizard config layer, not #include itself or file
+permissions/encoding (both separately ruled out). Uses the same
+verbose endpoint/auth/aor triplet pattern already confirmed working
+for the CMXSandbox trunk.
+
+rewrite_contact=yes on the aor — REAL BUG FOUND AND FIXED HERE: without
+this, a softphone registering from behind NAT (the normal case, not an
+edge case) has its Contact stored using its own self-reported LOCAL
+network IP (e.g. 192.168.x.x) instead of the real, observed public
+source address the REGISTER request actually arrived from. Asterisk
+then can't route an Originate to that endpoint at all — fails with
+"Could not create dialog to invalid URI" even though the phone shows
+as registered. Confirmed via a real failed test call, not theoretical.
+==================================================
+*/
 function buildPhoneWizardBlock({ extension, login, fullname }) {
   const callerName = (fullname || login || extension).replace(/"/g, "");
   return [
     `[${extension}]`,
-    `type=wizard`,
-    `accepts_auth=yes`,
-    `accepts_registrations=yes`,
-    `inbound_auth/username=${login}`,
-    `inbound_auth/password=${PHONE_REGISTRATION_PASSWORD}`,
-    `aor/max_contacts = 2`,
-    `aor/maximum_expiration = 3600`,
-    `aor/minimum_expiration = 60`,
-    `aor/default_expiration = 120`,
-    `aor/qualify_frequency = 15`,
-    `endpoint/context=default`,
-    `endpoint/callerid="${callerName}" <0000000000>`,
-    `endpoint/disallow=all`,
-    `endpoint/allow=ulaw`,
-    `endpoint/dtmf_mode = rfc4733`,
-    `endpoint/trust_id_inbound = no`,
-    `endpoint/send_rpid = yes`,
-    `endpoint/inband_progress = no`,
+    `type = endpoint`,
+    `transport = transport-udp`,
+    `context = default`,
+    `disallow = all`,
+    `allow = ulaw`,
+    `auth = ${extension}`,
+    `aors = ${extension}`,
+    `callerid = "${callerName}" <0000000000>`,
+    `dtmf_mode = rfc4733`,
+    `send_rpid = yes`,
+    `trust_id_inbound = no`,
+    // Real, confirmed finding: rewrite_contact exists as a SEPARATE
+    // setting on the endpoint AND the aor in PJSIP — setting it only
+    // on the aor (below) was not sufficient; `pjsip show endpoint`
+    // showed rewrite_contact: false even after the aor had it set to
+    // yes. Both are needed for a NAT'd softphone's registered contact
+    // to actually get corrected to its real observed public address.
+    `rewrite_contact = yes`,
+    ``,
+    `[${extension}]`,
+    `type = auth`,
+    `auth_type = userpass`,
+    `username = ${login}`,
+    `password = ${PHONE_REGISTRATION_PASSWORD}`,
+    ``,
+    `[${extension}]`,
+    `type = aor`,
+    `max_contacts = 2`,
+    `qualify_frequency = 15`,
+    `maximum_expiration = 3600`,
+    `minimum_expiration = 60`,
+    `default_expiration = 120`,
+    `rewrite_contact = yes`,
     ``,
   ].join("\n");
 }
