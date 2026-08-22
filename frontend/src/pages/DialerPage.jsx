@@ -606,15 +606,6 @@ export default function DialerPage() {
 
         <div className="dialer-layout">
           <div className="dialer-main">
-            {/* Stats moved INSIDE dialer-main — previously sat above
-                the whole grid as a full-width section, which is why it
-                never lined up with the (narrower) left column below it. */}
-            <StatsPanel refreshKey={callLogVersion} campaignId={campaign?.campaign_id} />
-
-            {(agent.accessLevel === "admin" || agent.accessLevel === "supervisor") && (
-              <AggregateStatsPanel campaigns={allCampaigns} />
-            )}
-
             <div className="card status-bar">
               <div>
                 <span className="badge">{statusLabel}</span>
@@ -931,6 +922,14 @@ export default function DialerPage() {
               <div className="contact-desktop-only">
                 <ContactDetailsCard lead={lead} />
               </div>
+            )}
+
+            {/* Stats moved here per redesign request — right column,
+                above Call Logs, each stat as its own card. */}
+            <StatsPanel refreshKey={callLogVersion} campaignId={campaign?.campaign_id} />
+
+            {(agent.accessLevel === "admin" || agent.accessLevel === "supervisor") && (
+              <AggregateStatsPanel campaigns={allCampaigns} />
             )}
 
             <CallLogTable

@@ -779,7 +779,6 @@ other pages sharing the same base classes.
 /* ===== Today's stats panel ===== */
 .stats-panel {
   padding-bottom: 12px;
-  max-width: 420px;
 }
 
 .stats-header {
@@ -806,56 +805,6 @@ other pages sharing the same base classes.
   font-size: 13px;
   font-weight: 600;
   color: #444;
-}
-
-.stats-direction-rows {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-top: 12px;
-}
-
-.stats-direction-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  background: var(--cmx-gray-bg);
-  border-radius: 6px;
-  padding: 8px 10px;
-}
-
-.stats-direction-label {
-  font-size: 12px;
-  font-weight: 700;
-  color: var(--cmx-navy);
-  width: 60px;
-  flex-shrink: 0;
-}
-
-.stats-direction-metrics {
-  display: flex;
-  gap: 14px;
-  flex-wrap: wrap;
-}
-
-.stats-metric {
-  display: flex;
-  flex-direction: column;
-  min-width: 46px;
-}
-
-.stats-metric-label {
-  font-size: 10px;
-  color: #888;
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
-}
-
-.stats-metric-value {
-  font-size: 14px;
-  font-weight: 700;
-  color: var(--cmx-navy);
-  font-family: monospace;
 }
 
 /* Still used by AggregateStatsPanel.jsx (admin/supervisor "All Agents"

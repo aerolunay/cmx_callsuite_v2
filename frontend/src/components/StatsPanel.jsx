@@ -2,30 +2,19 @@ import { useEffect, useState } from "react";
 import { api } from "../api";
 import { formatDuration } from "../utils/format";
 
-// One row per direction instead of a flat grid of 9 cells — much more
-// compact, and reads more naturally ("here's everything about inbound,
-// here's everything about outbound") than a 3-column grid mixing both.
-const DIRECTIONS = [
-  {
-    key: "inbound",
-    label: "Inbound",
-    metrics: [
-      { key: "totalInbound", label: "Calls", type: "count" },
-      { key: "ahtInboundSeconds", label: "AHT", type: "duration" },
-      { key: "avgIbAcwSeconds", label: "ACW", type: "duration" },
-      { key: "avgIbHoldSeconds", label: "Hold", type: "duration" },
-    ],
-  },
-  {
-    key: "outbound",
-    label: "Outbound",
-    metrics: [
-      { key: "totalOutbound", label: "Calls", type: "count" },
-      { key: "ahtOutboundSeconds", label: "AHT", type: "duration" },
-      { key: "avgObAcwSeconds", label: "ACW", type: "duration" },
-      { key: "avgObHoldSeconds", label: "Hold", type: "duration" },
-    ],
-  },
+// One card per stat, laid out in a grid — reverted from the compact
+// per-direction rows now that Stats lives in the wider right column
+// (above Call Logs) instead of the narrower 1/3-width left column.
+const STAT_ROWS = [
+  { key: "totalCalls", label: "Total Calls", type: "count" },
+  { key: "totalInbound", label: "Total Inbound", type: "count" },
+  { key: "ahtInboundSeconds", label: "AHT Inbound", type: "duration" },
+  { key: "totalOutbound", label: "Total Outbound", type: "count" },
+  { key: "ahtOutboundSeconds", label: "AHT Outbound", type: "duration" },
+  { key: "avgIbAcwSeconds", label: "Avg IB ACW", type: "duration" },
+  { key: "avgObAcwSeconds", label: "Avg OB ACW", type: "duration" },
+  { key: "avgIbHoldSeconds", label: "Avg IB Hold", type: "duration" },
+  { key: "avgObHoldSeconds", label: "Avg OB Hold", type: "duration" },
 ];
 
 // refreshKey is bumped by the parent whenever something happened that
@@ -44,11 +33,11 @@ export default function StatsPanel({ refreshKey, campaignId }) {
       .catch((err) => setError(err.message));
   }, [refreshKey, campaignId]);
 
-  function formatValue(key, type) {
+  function formatValue(row) {
     if (!stats) return "—";
-    const value = stats[key];
+    const value = stats[row.key];
     if (value === null || value === undefined) return "—";
-    return type === "duration" ? formatDuration(value) : value;
+    return row.type === "duration" ? formatDuration(value) : value;
   }
 
   return (
@@ -62,18 +51,11 @@ export default function StatsPanel({ refreshKey, campaignId }) {
       {error && <div className="error">{error}</div>}
 
       {expanded && (
-        <div className="stats-direction-rows">
-          {DIRECTIONS.map((dir) => (
-            <div className="stats-direction-row" key={dir.key}>
-              <span className="stats-direction-label">{dir.label}</span>
-              <div className="stats-direction-metrics">
-                {dir.metrics.map((m) => (
-                  <div className="stats-metric" key={m.key}>
-                    <div className="stats-metric-label">{m.label}</div>
-                    <div className="stats-metric-value">{formatValue(m.key, m.type)}</div>
-                  </div>
-                ))}
-              </div>
+        <div className="stats-grid">
+          {STAT_ROWS.map((row) => (
+            <div className="stats-cell" key={row.key}>
+              <div className="stats-cell-label">{row.label}</div>
+              <div className="stats-cell-value">{formatValue(row)}</div>
             </div>
           ))}
         </div>
