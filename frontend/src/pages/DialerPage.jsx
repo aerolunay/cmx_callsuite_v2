@@ -591,17 +591,13 @@ export default function DialerPage() {
           </div>
         </div>
 
-        {/* All phone/JsSIP logic now lives in MiniPhone — DialerPage
-            supplies agent status (for auto-answer gating) and the
-            handlers for manual dial / conference / transfer, which all
-            need campaign/call context that lives here, not in MiniPhone. */}
-        <MiniPhone
-          agentStatus={agentStatus?.status}
-          hasActiveCall={Boolean(call || inboundCall)}
-          onManualDial={handleManualDial}
-          onConferenceAdd={handleConferenceAdd}
-          onTransferBlind={handleTransferBlind}
-        />
+        {/* Stats now sit at the top, where the phone widget used to be —
+            swapped per redesign request. */}
+        <StatsPanel refreshKey={callLogVersion} campaignId={campaign?.campaign_id} />
+
+        {(agent.accessLevel === "admin" || agent.accessLevel === "supervisor") && (
+          <AggregateStatsPanel campaigns={allCampaigns} />
+        )}
 
         {error && <div className="error">{error}</div>}
 
@@ -643,11 +639,19 @@ export default function DialerPage() {
               </div>
             </div>
 
-            <StatsPanel refreshKey={callLogVersion} campaignId={campaign?.campaign_id} />
-
-            {(agent.accessLevel === "admin" || agent.accessLevel === "supervisor") && (
-              <AggregateStatsPanel campaigns={allCampaigns} />
-            )}
+            {/* All phone/JsSIP logic now lives in MiniPhone — DialerPage
+                supplies agent status (for auto-answer gating) and the
+                handlers for manual dial / conference / transfer, which
+                all need campaign/call context that lives here, not in
+                MiniPhone. Moved here from the top of the page, where
+                Stats used to be — swapped per redesign request. */}
+            <MiniPhone
+              agentStatus={agentStatus?.status}
+              hasActiveCall={Boolean(call || inboundCall)}
+              onManualDial={handleManualDial}
+              onConferenceAdd={handleConferenceAdd}
+              onTransferBlind={handleTransferBlind}
+            />
 
         {inboundCall && (
           <div className="card">
