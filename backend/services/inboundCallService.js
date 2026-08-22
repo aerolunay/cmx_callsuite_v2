@@ -304,7 +304,12 @@ async function tryConnectReadyAgentsInner() {
     try {
       await ami.originate({
         Channel: `PJSIP/${agent.extension}`,
-        Context: "default",
+        // Was "default" — that context doesn't exist in extensions.conf
+        // at all (confirmed via `grep "^\[" extensions.conf` on sandbox,
+        // Aug 22 JsSIP rollout session). Every _29700XXX/_9700XXX/etc.
+        // agent-leg pattern actually lives in [trunkinbound], so that's
+        // the only context this Originate can ever reach.
+        Context: "trunkinbound",
         Exten: `2${call.room}`,
         Priority: 1,
         CallerID: `"Inbound Caller" <${call.room}>`,
