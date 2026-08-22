@@ -3,7 +3,9 @@ import { useJsSipPhone } from "../hooks/useJsSipPhone";
 
 /*
 ==================================================
-MiniPhone — self-contained softphone widget.
+MiniPhone — self-contained softphone widget, styled to read like a
+physical phone (status line, number display, circular action buttons)
+without an actual dial-pad keypad.
 
 Owns the useJsSipPhone hook entirely; DialerPage never touches JsSIP
 directly. DialerPage supplies:
@@ -15,6 +17,15 @@ directly. DialerPage supplies:
     disposition-enforced path as Callback/Dial Next Number
   - onConferenceAdd(target, isExtension) / onTransferBlind(target,
     isExtension): add a participant to / hand off the live call
+
+ALL action buttons are always rendered (Answer, Decline, Call, Hang
+Up, Mute, Conference, Transfer) — none are conditionally hidden;
+each is individually enabled/disabled based on current call state.
+
+The main dial field only accepts digits — it's a phone number field.
+The Conference/Transfer "target" fields deliberately still allow
+letters, since this app's extensions are named like "bsmsc901", not
+purely numeric.
 
 CONFERENCE AND TRANSFER ARE NOT YET CONFIRMED against a real test
 call — the backend primitive they call (conferenceService.js) is new
@@ -39,6 +50,18 @@ deliberately left for a separate pass rather than guessed at here.
 // session yet) is the normal, expected result of having just been
 // READY a moment ago, not a different manual status the agent chose.
 const isAutoAnswerStatus = (status) => status === "READY" || status === "IN_CALL";
+
+function statusLabel(phone) {
+  if (phone.registrationError) return `Error — ${phone.registrationError}`;
+  if (!phone.registered) return "Connecting…";
+  if (phone.callState === phone.CALL_STATES.INCOMING) {
+    return `Incoming — ${phone.remoteIdentity || "Unknown"}`;
+  }
+  if (phone.callState === phone.CALL_STATES.ACTIVE) {
+    return `On call — ${phone.remoteIdentity || "Unknown"}`;
+  }
+  return "Ready";
+}
 
 export function MiniPhone({ agentStatus, hasActiveCall, onManualDial, onConferenceAdd, onTransferBlind }) {
   const phone = useJsSipPhone();
@@ -92,9 +115,15 @@ export function MiniPhone({ agentStatus, hasActiveCall, onManualDial, onConferen
     setIsMuted(phone.toggleMute());
   }
 
-  function handleDial(e) {
-    e.preventDefault();
-    if (!dialNumber.trim()) return;
+  function handleDialNumberChange(e) {
+    // Digits only — this field is a phone number, not an extension
+    // (Conference/Transfer targets below deliberately stay free-text,
+    // since this app's own extensions are named like "bsmsc901").
+    setDialNumber(e.target.value.replace(/\D/g, ""));
+  }
+
+  function handleCall() {
+    if (!canDial || !dialNumber.trim()) return;
     onManualDial(dialNumber.trim());
     setDialNumber("");
   }
@@ -129,56 +158,59 @@ export function MiniPhone({ agentStatus, hasActiveCall, onManualDial, onConferen
     }
   }
 
-  const canDial = phone.registered && agentStatus === "READY" && !hasActiveCall;
+  const isIdle = phone.callState === phone.CALL_STATES.IDLE || phone.callState === phone.CALL_STATES.ENDED;
+  const isIncoming = phone.callState === phone.CALL_STATES.INCOMING;
+  const isActive = phone.callState === phone.CALL_STATES.ACTIVE;
+  const canDial = phone.registered && agentStatus === "READY" && !hasActiveCall && isIdle;
 
   return (
-    <div className="card" style={{ marginBottom: 16 }}>
-      <div style={{ marginBottom: 8, fontSize: 13 }}>
-        Softphone:{" "}
-        {phone.registrationError
-          ? `Error — ${phone.registrationError}`
-          : phone.registered
-            ? "Registered"
-            : "Connecting…"}
+    <div className="phone-widget">
+      <div className="phone-widget-status">
+        <span className={`phone-status-dot${phone.registered ? " phone-status-dot-on" : ""}`} />
+        {statusLabel(phone)}
       </div>
 
-      {phone.callState === phone.CALL_STATES.INCOMING && (
-        <div className="error" style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <span>
-            Incoming call{phone.remoteIdentity ? ` — ${phone.remoteIdentity}` : ""}
-            {isAutoAnswerStatus(agentStatus) ? " (auto-answering…)" : ""}
-          </span>
-          {/* Manual Answer/Decline stay available even when auto-answer
-              is enabled — the effect above may not have fired yet on
-              the very first render tick, and Decline is the only way
-              to reject a call that auto-answer wouldn't otherwise
-              cover (e.g. agent not in READY). */}
-          <button type="button" className="button-primary" onClick={phone.answer}>
-            Answer
-          </button>
-          <button type="button" className="button-secondary" onClick={phone.hangup}>
-            Decline
-          </button>
-        </div>
-      )}
+      <input
+        type="tel"
+        className="phone-display-input"
+        placeholder="Enter a number"
+        value={dialNumber}
+        onChange={handleDialNumberChange}
+        disabled={!isIdle}
+      />
 
-      {phone.callState !== phone.CALL_STATES.ACTIVE && phone.callState !== phone.CALL_STATES.INCOMING && (
-        <form onSubmit={handleDial} style={{ display: "flex", gap: 8, marginTop: 8 }}>
-          <input
-            type="tel"
-            placeholder="Enter a number to dial"
-            value={dialNumber}
-            onChange={(e) => setDialNumber(e.target.value)}
-            disabled={!canDial}
-            style={{ flex: 1 }}
-          />
-          <button type="submit" className="button-primary" disabled={!canDial || !dialNumber.trim()}>
-            Call
-          </button>
-        </form>
-      )}
-      {!canDial && phone.callState !== phone.CALL_STATES.ACTIVE && phone.callState !== phone.CALL_STATES.INCOMING && (
-        <p style={{ fontSize: 12, color: "#888", marginTop: 4 }}>
+      <div className="phone-actions">
+        <button
+          type="button"
+          className="phone-btn phone-btn-call"
+          onClick={isIncoming ? phone.answer : handleCall}
+          disabled={isIncoming ? false : !canDial || !dialNumber.trim()}
+          title={isIncoming ? "Answer" : "Call"}
+        >
+          {isIncoming ? "Answer" : "Call"}
+        </button>
+        <button
+          type="button"
+          className="phone-btn phone-btn-mute"
+          onClick={handleToggleMute}
+          disabled={!isActive}
+          title={isMuted ? "Unmute" : "Mute"}
+        >
+          {isMuted ? "Unmute" : "Mute"}
+        </button>
+        <button
+          type="button"
+          className="phone-btn phone-btn-end"
+          onClick={phone.hangup}
+          disabled={!isIncoming && !isActive}
+          title={isIncoming ? "Decline" : "Hang Up"}
+        >
+          {isIncoming ? "Decline" : "Hang Up"}
+        </button>
+      </div>
+
+      {!canDial && isIdle && (
+        <p className="phone-hint">
           {!phone.registered
             ? "Softphone must be registered before dialing."
             : hasActiveCall
@@ -187,67 +219,51 @@ export function MiniPhone({ agentStatus, hasActiveCall, onManualDial, onConferen
         </p>
       )}
 
-      {phone.callState === phone.CALL_STATES.ACTIVE && (
-        <div style={{ marginTop: 8 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
-            <span>On call{phone.remoteIdentity ? ` with ${phone.remoteIdentity}` : ""}</span>
-            <button type="button" className="button-secondary" onClick={handleToggleMute}>
-              {isMuted ? "Unmute" : "Mute"}
-            </button>
-            <button type="button" className="button-secondary" onClick={phone.hangup}>
-              Hang Up
-            </button>
-          </div>
+      <form onSubmit={handleAddParticipant} className="phone-extra-row">
+        <input
+          type="text"
+          placeholder="Extension or number"
+          value={addTarget}
+          onChange={(e) => setAddTarget(e.target.value)}
+          disabled={!isActive || addBusy}
+        />
+        <label className="phone-extra-checkbox">
+          <input
+            type="checkbox"
+            checked={addIsExtension}
+            onChange={(e) => setAddIsExtension(e.target.checked)}
+            disabled={!isActive || addBusy}
+          />
+          Ext
+        </label>
+        <button type="submit" className="button-secondary" disabled={!isActive || addBusy || !addTarget.trim()}>
+          {addBusy ? "Adding…" : "Conference"}
+        </button>
+      </form>
+      {addError && <div className="error phone-extra-error">{addError}</div>}
 
-          <form onSubmit={handleAddParticipant} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
-            <input
-              type="text"
-              placeholder="Extension or number"
-              value={addTarget}
-              onChange={(e) => setAddTarget(e.target.value)}
-              disabled={addBusy}
-              style={{ flex: 1 }}
-            />
-            <label style={{ fontSize: 13, whiteSpace: "nowrap" }}>
-              <input
-                type="checkbox"
-                checked={addIsExtension}
-                onChange={(e) => setAddIsExtension(e.target.checked)}
-                disabled={addBusy}
-              />{" "}
-              Extension
-            </label>
-            <button type="submit" className="button-secondary" disabled={addBusy || !addTarget.trim()}>
-              {addBusy ? "Adding…" : "Conference"}
-            </button>
-          </form>
-          {addError && <div className="error" style={{ marginBottom: 8 }}>{addError}</div>}
-
-          <form onSubmit={handleTransfer} style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <input
-              type="text"
-              placeholder="Extension or number"
-              value={transferTarget}
-              onChange={(e) => setTransferTarget(e.target.value)}
-              disabled={transferBusy}
-              style={{ flex: 1 }}
-            />
-            <label style={{ fontSize: 13, whiteSpace: "nowrap" }}>
-              <input
-                type="checkbox"
-                checked={transferIsExtension}
-                onChange={(e) => setTransferIsExtension(e.target.checked)}
-                disabled={transferBusy}
-              />{" "}
-              Extension
-            </label>
-            <button type="submit" className="button-secondary" disabled={transferBusy || !transferTarget.trim()}>
-              {transferBusy ? "Transferring…" : "Transfer"}
-            </button>
-          </form>
-          {transferError && <div className="error" style={{ marginTop: 8 }}>{transferError}</div>}
-        </div>
-      )}
+      <form onSubmit={handleTransfer} className="phone-extra-row">
+        <input
+          type="text"
+          placeholder="Extension or number"
+          value={transferTarget}
+          onChange={(e) => setTransferTarget(e.target.value)}
+          disabled={!isActive || transferBusy}
+        />
+        <label className="phone-extra-checkbox">
+          <input
+            type="checkbox"
+            checked={transferIsExtension}
+            onChange={(e) => setTransferIsExtension(e.target.checked)}
+            disabled={!isActive || transferBusy}
+          />
+          Ext
+        </label>
+        <button type="submit" className="button-secondary" disabled={!isActive || transferBusy || !transferTarget.trim()}>
+          {transferBusy ? "Transferring…" : "Transfer"}
+        </button>
+      </form>
+      {transferError && <div className="error phone-extra-error">{transferError}</div>}
     </div>
   );
 }

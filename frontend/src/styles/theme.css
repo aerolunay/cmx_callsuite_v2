@@ -778,6 +778,7 @@ other pages sharing the same base classes.
 /* ===== Today's stats panel ===== */
 .stats-panel {
   padding-bottom: 12px;
+  max-width: 420px;
 }
 
 .stats-header {
@@ -806,6 +807,59 @@ other pages sharing the same base classes.
   color: #444;
 }
 
+.stats-direction-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.stats-direction-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--cmx-gray-bg);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+
+.stats-direction-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--cmx-navy);
+  width: 60px;
+  flex-shrink: 0;
+}
+
+.stats-direction-metrics {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.stats-metric {
+  display: flex;
+  flex-direction: column;
+  min-width: 46px;
+}
+
+.stats-metric-label {
+  font-size: 10px;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.stats-metric-value {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--cmx-navy);
+  font-family: monospace;
+}
+
+/* Still used by AggregateStatsPanel.jsx (admin/supervisor "All Agents"
+   view) — StatsPanel.jsx itself moved to the compact per-direction
+   rows above, but this wider grid layout stays for the aggregate view. */
 .stats-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -833,10 +887,157 @@ other pages sharing the same base classes.
   color: var(--cmx-navy);
   font-family: monospace;
 }
+/* ===== MiniPhone — softphone widget ===== */
+.phone-widget {
+  background: var(--cmx-navy);
+  border-radius: 16px;
+  padding: 18px 20px 20px;
+  color: white;
+  max-width: 340px;
+  margin-bottom: 16px;
+  box-shadow: 0 4px 16px rgba(24, 45, 87, 0.25);
+}
 
-.stats-footnote {
-  margin: 12px 0 0;
-  font-size: 11px;
-  color: #999;
-  line-height: 1.4;
+.phone-widget-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #cfd6e4;
+  margin-bottom: 12px;
+}
+
+.phone-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #7c869c;
+  flex-shrink: 0;
+}
+
+.phone-status-dot-on {
+  background: var(--cmx-success);
+}
+
+.phone-display-input {
+  width: 100%;
+  box-sizing: border-box;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 10px;
+  padding: 12px 14px;
+  color: white;
+  font-size: 18px;
+  font-family: monospace;
+  letter-spacing: 1px;
+  margin-bottom: 14px;
+}
+
+.phone-display-input::placeholder {
+  color: #8994ab;
+  font-family: inherit;
+  letter-spacing: normal;
+}
+
+.phone-display-input:disabled {
+  opacity: 0.5;
+}
+
+.phone-actions {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+
+.phone-btn {
+  flex: 1;
+  border: none;
+  border-radius: 24px;
+  padding: 12px 8px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  color: white;
+  background: #4a5473;
+}
+
+.phone-btn:disabled {
+  background: #3a4054;
+  color: #7c869c;
+  cursor: not-allowed;
+}
+
+.phone-btn-call {
+  background: var(--cmx-success);
+}
+
+.phone-btn-call:hover:not(:disabled) {
+  background: #176430;
+}
+
+.phone-btn-end {
+  background: var(--cmx-danger);
+}
+
+.phone-btn-end:hover:not(:disabled) {
+  background: #96271d;
+}
+
+.phone-btn-mute:not(:disabled) {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.phone-btn-mute:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.phone-hint {
+  font-size: 12px;
+  color: #a7afc2;
+  margin: 6px 0 0;
+}
+
+.phone-extra-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.phone-extra-row input[type="text"] {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.08);
+  color: white;
+  font-size: 13px;
+}
+
+.phone-extra-row input[type="text"]::placeholder {
+  color: #8994ab;
+}
+
+.phone-extra-row input[type="text"]:disabled {
+  opacity: 0.5;
+}
+
+.phone-extra-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: #cfd6e4;
+  white-space: nowrap;
+}
+
+.phone-extra-row button {
+  padding: 8px 14px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.phone-extra-error {
+  margin-top: 6px;
 }

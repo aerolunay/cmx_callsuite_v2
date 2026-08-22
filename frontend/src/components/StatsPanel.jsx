@@ -2,21 +2,30 @@ import { useEffect, useState } from "react";
 import { api } from "../api";
 import { formatDuration } from "../utils/format";
 
-// Metrics genuinely computable today are marked; the rest are real
-// gaps in what this app currently tracks (no inbound call handling
-// exists yet, and hold time isn't tied to a specific call/direction)
-// — those render as "—" rather than a fabricated number. See
-// statsService.js for the full explanation.
-const STAT_ROWS = [
-  { key: "totalCalls", label: "Total Calls", type: "count" },
-  { key: "totalInbound", label: "Total Inbound", type: "count" },
-  { key: "ahtInboundSeconds", label: "AHT Inbound", type: "duration" },
-  { key: "totalOutbound", label: "Total Outbound", type: "count" },
-  { key: "ahtOutboundSeconds", label: "AHT Outbound", type: "duration" },
-  { key: "avgIbAcwSeconds", label: "Avg IB ACW", type: "duration" },
-  { key: "avgObAcwSeconds", label: "Avg OB ACW", type: "duration" },
-  { key: "avgIbHoldSeconds", label: "Avg IB Hold", type: "duration" },
-  { key: "avgObHoldSeconds", label: "Avg OB Hold", type: "duration" },
+// One row per direction instead of a flat grid of 9 cells — much more
+// compact, and reads more naturally ("here's everything about inbound,
+// here's everything about outbound") than a 3-column grid mixing both.
+const DIRECTIONS = [
+  {
+    key: "inbound",
+    label: "Inbound",
+    metrics: [
+      { key: "totalInbound", label: "Calls", type: "count" },
+      { key: "ahtInboundSeconds", label: "AHT", type: "duration" },
+      { key: "avgIbAcwSeconds", label: "ACW", type: "duration" },
+      { key: "avgIbHoldSeconds", label: "Hold", type: "duration" },
+    ],
+  },
+  {
+    key: "outbound",
+    label: "Outbound",
+    metrics: [
+      { key: "totalOutbound", label: "Calls", type: "count" },
+      { key: "ahtOutboundSeconds", label: "AHT", type: "duration" },
+      { key: "avgObAcwSeconds", label: "ACW", type: "duration" },
+      { key: "avgObHoldSeconds", label: "Hold", type: "duration" },
+    ],
+  },
 ];
 
 // refreshKey is bumped by the parent whenever something happened that
@@ -35,11 +44,11 @@ export default function StatsPanel({ refreshKey, campaignId }) {
       .catch((err) => setError(err.message));
   }, [refreshKey, campaignId]);
 
-  function formatValue(row) {
+  function formatValue(key, type) {
     if (!stats) return "—";
-    const value = stats[row.key];
+    const value = stats[key];
     if (value === null || value === undefined) return "—";
-    return row.type === "duration" ? formatDuration(value) : value;
+    return type === "duration" ? formatDuration(value) : value;
   }
 
   return (
@@ -47,30 +56,27 @@ export default function StatsPanel({ refreshKey, campaignId }) {
       <button className="stats-header" onClick={() => setExpanded((v) => !v)} type="button">
         <span className="stats-toggle-icon">{expanded ? "▾" : "▸"}</span>
         <strong>Today's Stats</strong>
-        {!expanded && (
-          <span className="stats-inline-total">
-            Total Calls: {stats ? stats.totalCalls : "—"}
-          </span>
-        )}
+        <span className="stats-inline-total">Total Calls: {stats ? stats.totalCalls : "—"}</span>
       </button>
 
       {error && <div className="error">{error}</div>}
 
       {expanded && (
-        <div className="stats-grid">
-          {STAT_ROWS.map((row) => (
-            <div className="stats-cell" key={row.key}>
-              <div className="stats-cell-label">{row.label}</div>
-              <div className="stats-cell-value">{formatValue(row)}</div>
+        <div className="stats-direction-rows">
+          {DIRECTIONS.map((dir) => (
+            <div className="stats-direction-row" key={dir.key}>
+              <span className="stats-direction-label">{dir.label}</span>
+              <div className="stats-direction-metrics">
+                {dir.metrics.map((m) => (
+                  <div className="stats-metric" key={m.key}>
+                    <div className="stats-metric-label">{m.label}</div>
+                    <div className="stats-metric-value">{formatValue(m.key, m.type)}</div>
+                  </div>
+                ))}
+              </div>
             </div>
           ))}
         </div>
-      )}
-
-      {expanded && (
-        <p className="stats-footnote">
-          Hold-time-by-direction isn't tracked — hold isn't currently tied to a specific call.
-        </p>
       )}
     </div>
   );
