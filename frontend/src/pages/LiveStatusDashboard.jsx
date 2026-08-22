@@ -11,13 +11,28 @@ CONSOLIDATED_STATES
 ==================================================
 Replaces the previous 6 separate per-status cards with ONE table,
 per explicit request. Order here IS the sort order (state is the
-primary sort key) — LOGGED_OUT and AD_HOC deliberately excluded from
-this consolidated view entirely, matching the exact 6 states listed.
-"Avail" is the display label for READY, matching the requested mockup
-exactly (not "Ready").
+primary sort key). LOGGED_OUT is still deliberately excluded (it has
+its own separate table further down). Originally AD_HOC was excluded
+too, along with the 5 newer aux statuses (Lunch/Break, Bio-Break,
+Admin, Meeting, Training) — both since added per explicit request, so
+now every non-LOGGED_OUT manual status shows here.
+"Avail" is the display label for READY (not "Ready").
 ==================================================
 */
-const CONSOLIDATED_STATES = ["IN_CALL", "MICROSIP_OUTBOUND", "ON_HOLD", "AFTER_CALL_WORK", "READY", "NOT_READY"];
+const CONSOLIDATED_STATES = [
+  "IN_CALL",
+  "MICROSIP_OUTBOUND",
+  "ON_HOLD",
+  "AFTER_CALL_WORK",
+  "READY",
+  "AD_HOC",
+  "LUNCH_BREAK",
+  "BIO_BREAK",
+  "ADMIN",
+  "MEETING",
+  "TRAINING",
+  "NOT_READY",
+];
 
 const STATE_LABELS = {
   IN_CALL: "On a Call",
@@ -25,6 +40,12 @@ const STATE_LABELS = {
   ON_HOLD: "On Hold",
   AFTER_CALL_WORK: "ACW",
   READY: "Avail",
+  AD_HOC: "Ad-Hoc",
+  LUNCH_BREAK: "Lunch/Break",
+  BIO_BREAK: "Bio-Break",
+  ADMIN: "Admin",
+  MEETING: "Meeting",
+  TRAINING: "Training",
   NOT_READY: "Not Ready",
 };
 
