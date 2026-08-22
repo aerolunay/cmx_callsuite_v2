@@ -8,11 +8,11 @@ import { formatDuration } from "../utils/format";
 const STAT_ROWS = [
   { key: "totalInbound", label: "Total Inbound", type: "count" },
   { key: "ahtInboundSeconds", label: "AHT Inbound", type: "duration" },
+  { key: "avgIbAcwSeconds", label: "Avg IB ACW", type: "duration" },
+  { key: "avgIbHoldSeconds", label: "Avg IB Hold", type: "duration" },
   { key: "totalOutbound", label: "Total Outbound", type: "count" },
   { key: "ahtOutboundSeconds", label: "AHT Outbound", type: "duration" },
-  { key: "avgIbAcwSeconds", label: "Avg IB ACW", type: "duration" },
   { key: "avgObAcwSeconds", label: "Avg OB ACW", type: "duration" },
-  { key: "avgIbHoldSeconds", label: "Avg IB Hold", type: "duration" },
   { key: "avgObHoldSeconds", label: "Avg OB Hold", type: "duration" },
 ];
 
