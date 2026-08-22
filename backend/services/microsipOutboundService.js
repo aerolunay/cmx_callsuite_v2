@@ -23,7 +23,8 @@ change itself, not a separate mechanism.
 
 Per explicit product decision: restoring to READY only happens if
 READY is genuinely what they were in right before the call started.
-Any other prior status (NOT_READY, AUX_CB, AD_HOC, ON_HOLD, or no open
+Any other prior status (NOT_READY, AD_HOC, ON_HOLD, LUNCH_BREAK,
+BIO_BREAK, ADMIN, MEETING, TRAINING, or no open
 status row at all) is left as it was / restored as-is — this must
 never be the thing that silently pulls someone back into the queue.
 

@@ -8,25 +8,36 @@ import AggregateStatsPanel from "../components/AggregateStatsPanel";
 import { api } from "../api";
 import { useAuth } from "../context/AuthContext";
 import { useDialerSocket } from "../hooks/useDialerSocket";
-import { useJsSipPhone } from "../hooks/useJsSipPhone";
+import { MiniPhone } from "../components/MiniPhone";
 import { DISPOSITIONS, getInboundDispositionsForCampaign } from "../constants/dispositions";
 import { formatDuration, durationColorFor } from "../utils/format";
 
 
 // Agent-selectable statuses. IN_CALL and AFTER_CALL_WORK are set only
 // by the backend in response to real call events — never offered here.
+// AUX_CB removed — JsSIP's own call-gating on the agent's registered
+// extension now covers what it used to protect against; Callback
+// shares READY with Dial Next Number instead of its own status.
 const MANUAL_STATUSES = [
   { value: "READY", label: "Ready" },
   { value: "NOT_READY", label: "Not Ready" },
-  { value: "AUX_CB", label: "Aux CB" },
   { value: "AD_HOC", label: "Ad-Hoc" },
+  { value: "LUNCH_BREAK", label: "Lunch/Break" },
+  { value: "BIO_BREAK", label: "Bio-Break" },
+  { value: "ADMIN", label: "Admin" },
+  { value: "MEETING", label: "Meeting" },
+  { value: "TRAINING", label: "Training" },
 ];
 
 const STATUS_LABELS = {
   NOT_READY: "Not Ready",
   READY: "Ready",
-  AUX_CB: "Aux CB",
   AD_HOC: "Ad-Hoc",
+  LUNCH_BREAK: "Lunch/Break",
+  BIO_BREAK: "Bio-Break",
+  ADMIN: "Admin",
+  MEETING: "Meeting",
+  TRAINING: "Training",
   IN_CALL: "In Call",
   AFTER_CALL_WORK: "After Call Work",
   ON_HOLD: "On Hold",
@@ -47,14 +58,6 @@ const CALL_STATUS_LABELS = {
 export default function DialerPage() {
   const { agent } = useAuth();
   const navigate = useNavigate();
-
-  // PHASE B — JsSIP replaces MicroSIP as the browser's SIP endpoint.
-  // Registers as this agent's own extension; both inbound customer
-  // calls and outbound agent-leg calls already ring PJSIP/${extension}
-  // via Originate (dialerService.js / inboundCallService.js) regardless
-  // of what's registered there, so no change needed to either of those
-  // — this just becomes the thing that answers.
-  const phone = useJsSipPhone();
 
   const [campaign, setCampaign] = useState(null);
   const [agentStatus, setAgentStatus] = useState(null); // { status, elapsedSeconds }
@@ -293,8 +296,8 @@ export default function DialerPage() {
   // no real lead at all, so lead_id falls back to 0 (a harmless no-op
   // for that UPDATE).
   async function handleCallBack(row) {
-    if (agentStatus?.status !== "AUX_CB") {
-      setError("You must be in Aux CB status to place a callback.");
+    if (agentStatus?.status !== "READY") {
+      setError("You must be Ready to place a callback.");
       return;
     }
     if (call || inboundCall) {
@@ -545,38 +548,10 @@ export default function DialerPage() {
           </div>
         </div>
 
-        {/* PHASE B — softphone status. Not styled/polished yet; just
-            proving registration + answer works end-to-end before this
-            gets folded into Header or its own component. */}
-        <div style={{ marginBottom: 8, fontSize: 13 }}>
-          Softphone:{" "}
-          {phone.registrationError
-            ? `Error — ${phone.registrationError}`
-            : phone.registered
-              ? "Registered"
-              : "Connecting…"}
-        </div>
-
-        {phone.callState === phone.CALL_STATES.INCOMING && (
-          <div className="error" style={{ display: "flex", alignItems: "center", gap: 12 }}>
-            <span>Incoming call{phone.remoteIdentity ? ` — ${phone.remoteIdentity}` : ""}</span>
-            <button type="button" className="button-primary" onClick={phone.answer}>
-              Answer
-            </button>
-            <button type="button" className="button-secondary" onClick={phone.hangup}>
-              Decline
-            </button>
-          </div>
-        )}
-
-        {phone.callState === phone.CALL_STATES.ACTIVE && (
-          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }}>
-            <span>On call{phone.remoteIdentity ? ` with ${phone.remoteIdentity}` : ""}</span>
-            <button type="button" className="button-secondary" onClick={phone.hangup}>
-              Hang Up
-            </button>
-          </div>
-        )}
+        {/* All phone/JsSIP logic now lives in MiniPhone — DialerPage
+            only supplies the agent's current status, needed to gate
+            auto-answer (see MiniPhone.jsx for the rule). */}
+        <MiniPhone agentStatus={agentStatus?.status} />
 
         {error && <div className="error">{error}</div>}
 
@@ -916,7 +891,7 @@ export default function DialerPage() {
               refreshKey={callLogVersion}
               campaignId={campaign?.campaign_id}
               onCallBack={handleCallBack}
-              canCallBack={agentStatus?.status === "AUX_CB"}
+              canCallBack={agentStatus?.status === "READY"}
             />
           </div>
         </div>

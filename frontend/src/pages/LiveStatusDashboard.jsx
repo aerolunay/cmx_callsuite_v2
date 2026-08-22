@@ -17,7 +17,7 @@ this consolidated view entirely, matching the exact 6 states listed.
 exactly (not "Ready").
 ==================================================
 */
-const CONSOLIDATED_STATES = ["IN_CALL", "MICROSIP_OUTBOUND", "ON_HOLD", "AFTER_CALL_WORK", "READY", "AUX_CB", "NOT_READY"];
+const CONSOLIDATED_STATES = ["IN_CALL", "MICROSIP_OUTBOUND", "ON_HOLD", "AFTER_CALL_WORK", "READY", "NOT_READY"];
 
 const STATE_LABELS = {
   IN_CALL: "On a Call",
@@ -25,7 +25,6 @@ const STATE_LABELS = {
   ON_HOLD: "On Hold",
   AFTER_CALL_WORK: "ACW",
   READY: "Avail",
-  AUX_CB: "Aux CB",
   NOT_READY: "Not Ready",
 };
 
@@ -302,7 +301,6 @@ export default function LiveStatusDashboard() {
                 <dl className="kpi-list">
                   <div><dt>Active Inbound</dt><dd>{activeInboundCount}</dd></div>
                   <div><dt>Active Outbound</dt><dd>{activeOutboundCount}</dd></div>
-                  <div><dt>Aux CB</dt><dd>{stateCounts.AUX_CB}</dd></div>
                   <div><dt>Not Ready</dt><dd>{stateCounts.NOT_READY}</dd></div>
                 </dl>
               </div>
@@ -345,12 +343,13 @@ export default function LiveStatusDashboard() {
                               {a.elapsedSeconds !== null ? formatDurationHMS(a.elapsedSeconds) : "—"}
                             </td>
                             <td>
-                              {/* Only offered for NOT_READY/AUX_CB —
-                                  matches the backend's own restriction
-                                  exactly (POST /users/:id/kick rejects
-                                  any other status), so this never shows
-                                  an action that would just fail. */}
-                              {(a.status === "NOT_READY" || a.status === "AUX_CB") && (
+                              {/* Matches the backend's own restriction
+                                  exactly (POST /users/:id/kick's
+                                  KICKABLE_STATUSES) — never shows an
+                                  action that would just fail. */}
+                              {["NOT_READY", "LUNCH_BREAK", "BIO_BREAK", "ADMIN", "MEETING", "TRAINING"].includes(
+                                a.status
+                              ) && (
                                 <button
                                   type="button"
                                   className="link"

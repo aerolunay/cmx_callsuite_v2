@@ -126,6 +126,29 @@ router.post("/dialer/status", requireAuth, async (req, res) => {
       });
     }
 
+    /*
+    ==================================================
+    ACW DISPOSITION-PENDING BLOCK
+    ==================================================
+    REAL GAP: the frontend already disables the status dropdown while
+    AFTER_CALL_WORK is showing (see DialerPage.jsx's isSystemStatus),
+    but nothing backend-side stopped a direct POST here from switching
+    straight to READY/anything else without ever saving a disposition.
+    The ONLY legitimate way out of AFTER_CALL_WORK is
+    POST /dialer/disposition/:callId (saveDisposition), which calls
+    agentStatusService.setStatus directly — NOT through this route —
+    so blocking every manual switch attempt here while AFTER_CALL_WORK
+    is open can never interfere with that real exit path.
+    ==================================================
+    */
+    const currentStatus = await agentStatusService.getCurrentStatus(req.session.agent.appUserId);
+    if (currentStatus && currentStatus.status === "AFTER_CALL_WORK") {
+      return res.status(409).json({
+        success: false,
+        message: "You must save a disposition for your last call before changing your status.",
+      });
+    }
+
     const current = await agentStatusService.setStatus(req.session.agent.appUserId, status);
     return res.json({ success: true, status: current });
   } catch (error) {
@@ -259,22 +282,24 @@ router.post("/dialer/start-call", requireAuth, async (req, res) => {
     ==================================================
     REAL GAP FIXED HERE: this route previously trusted the frontend
     entirely — "Dial Next Number"/"Callback" only being SHOWN while
-    READY/AUX_CB was the sole protection. A direct POST here (or a
-    stale button click, or a race between a disposition save and a
-    dial click) could start a new call while a real outbound call's
+    READY was the sole protection. A direct POST here (or a stale
+    button click, or a race between a disposition save and a dial
+    click) could start a new call while a real outbound call's
     disposition was still genuinely pending (AFTER_CALL_WORK). Note:
     MicroSIP-direct calls (MICROSIP_OUTBOUND) do NOT require a
     disposition at all — explicit product decision — so they're not
     part of what this block guards against; MICROSIP_OUTBOUND already
-    isn't READY/AUX_CB anyway, so it's naturally excluded below too.
+    isn't READY anyway, so it's naturally excluded below too.
 
-    Only READY (Dial Next Number) and AUX_CB (Callback) are legitimate
-    states to start a new outbound call from — everything else is
-    rejected here regardless of what the frontend allowed through.
+    AUX_CB removed entirely (JsSIP's own call-gating on the agent's
+    registered extension covers what it used to protect against) —
+    Callback now shares the same single legitimate state as Dial Next
+    Number: READY. Everything else is rejected here regardless of what
+    the frontend allowed through.
     ==================================================
     */
     const currentStatus = await agentStatusService.getCurrentStatus(appUserId);
-    const allowedToDial = currentStatus && (currentStatus.status === "READY" || currentStatus.status === "AUX_CB");
+    const allowedToDial = currentStatus && currentStatus.status === "READY";
     if (!allowedToDial) {
       return res.status(409).json({
         success: false,

@@ -821,7 +821,8 @@ actually close the row — see authRoutes.js's fix).
 Campaign filtering is done via agent_campaign_assignments (who's
 ASSIGNED to a campaign), not via agent_status_log's
 related_campaign_id (which is only ever set for IN_CALL/
-AFTER_CALL_WORK/ON_HOLD — NOT_READY/READY/AUX_CB have no call to tag
+AFTER_CALL_WORK/ON_HOLD — NOT_READY/READY/AD_HOC/LUNCH_BREAK/
+BIO_BREAK/ADMIN/MEETING/TRAINING have no call to tag
 at all, so filtering by that column would hide those agents entirely
 under any specific campaign filter). "All Campaigns" (no campaignId)
 shows every active agent regardless of assignment.
@@ -1109,10 +1110,11 @@ router.post("/users/:appUserId/kick", requireAdmin, async (req, res) => {
     if (!currentStatus) {
       return res.status(400).json({ success: false, message: "This agent isn't currently logged in." });
     }
-    if (!["NOT_READY", "AUX_CB"].includes(currentStatus)) {
+    const KICKABLE_STATUSES = ["NOT_READY", "LUNCH_BREAK", "BIO_BREAK", "ADMIN", "MEETING", "TRAINING"];
+    if (!KICKABLE_STATUSES.includes(currentStatus)) {
       return res.status(400).json({
         success: false,
-        message: `Can't kick an agent who is currently ${currentStatus} — only Not Ready or Aux CB agents can be force-logged-out.`,
+        message: `Can't kick an agent who is currently ${currentStatus} — only agents in a non-call status can be force-logged-out.`,
       });
     }
 

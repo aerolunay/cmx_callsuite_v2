@@ -14,16 +14,28 @@ const statusEvents = new EventEmitter();
 ==================================================
 AGENT STATUS
 ==================================================
-Five statuses total. Three are agent-selectable (via the dropdown on
-DialerPage); two are system-controlled and should never be settable
-directly through the manual-switch endpoint — they're driven entirely
-by real call events (see dialerService.js).
+NOT_READY, READY, ON_HOLD, LUNCH_BREAK, BIO_BREAK, ADMIN, MEETING, and
+TRAINING are agent-selectable. IN_CALL and AFTER_CALL_WORK are
+system-controlled and should never be settable directly through the
+manual-switch endpoint — they're driven entirely by real call events
+(see dialerService.js).
 
   NOT_READY        — agent-selectable. Logged in, not taking calls.
-  READY             — agent-selectable. Available for next call.
+  READY             — agent-selectable. Available for next call. Also
+                       now the ONLY status Callback can be placed from
+                       (AUX_CB removed — JsSIP's own call-gating on the
+                       agent's registered extension covers what AUX_CB
+                       used to protect against).
   ON_HOLD           — agent-selectable. Agent-level break/hold state
                        (distinct from putting a customer on hold mid-call
                        — no such customer-hold feature exists yet).
+  LUNCH_BREAK        — agent-selectable. Not productive, not occupancy —
+                       same treatment as NOT_READY.
+  BIO_BREAK          — agent-selectable. Same as LUNCH_BREAK.
+  ADMIN              — agent-selectable. Productive (real work), but
+                       NOT occupancy — same treatment as AD_HOC.
+  MEETING            — agent-selectable. Same as ADMIN.
+  TRAINING           — agent-selectable. Same as ADMIN.
   IN_CALL           — system only. Set when a call starts.
   AFTER_CALL_WORK   — system only. Set automatically when a call ends,
                        cleared automatically back to READY once a
@@ -35,13 +47,27 @@ by real call events (see dialerService.js).
                        in before the call, e.g. NOT_READY).
 ==================================================
 */
-const MANUAL_STATUSES = new Set(["NOT_READY", "READY", "ON_HOLD", "AUX_CB", "AD_HOC"]);
+const MANUAL_STATUSES = new Set([
+  "NOT_READY",
+  "READY",
+  "ON_HOLD",
+  "AD_HOC",
+  "LUNCH_BREAK",
+  "BIO_BREAK",
+  "ADMIN",
+  "MEETING",
+  "TRAINING",
+]);
 const ALL_STATUSES = new Set([
   "NOT_READY",
   "READY",
   "ON_HOLD",
-  "AUX_CB",
   "AD_HOC",
+  "LUNCH_BREAK",
+  "BIO_BREAK",
+  "ADMIN",
+  "MEETING",
+  "TRAINING",
   "IN_CALL",
   "AFTER_CALL_WORK",
   "MICROSIP_OUTBOUND",
@@ -58,15 +84,18 @@ re-derived (and possibly gotten wrong) whenever that reporting is
 eventually built.
 
 PRODUCTIVE_STATUSES: counts as productive work time. Includes AD_HOC
-(admin tasks while logged in — real work, just not call-related).
+and the three new non-call work statuses (ADMIN, MEETING, TRAINING) —
+real work, just not call-related. LUNCH_BREAK/BIO_BREAK deliberately
+excluded — personal time, not work time.
 
 OCCUPANCY_STATUSES: counts as "available for calls" time. Deliberately
-EXCLUDES AD_HOC — an AD_HOC agent cannot receive a call, so counting
-that time as "available" would be wrong even though it's productive.
+EXCLUDES AD_HOC/ADMIN/MEETING/TRAINING/LUNCH_BREAK/BIO_BREAK — none of
+these agents can receive a call, so counting that time as "available"
+would be wrong even for the ones that ARE productive.
 ==================================================
 */
-const PRODUCTIVE_STATUSES = new Set(["READY", "AD_HOC", "IN_CALL", "AFTER_CALL_WORK", "ON_HOLD", "AUX_CB"]);
-const OCCUPANCY_STATUSES = new Set(["READY", "IN_CALL", "AFTER_CALL_WORK", "ON_HOLD", "AUX_CB"]);
+const PRODUCTIVE_STATUSES = new Set(["READY", "AD_HOC", "IN_CALL", "AFTER_CALL_WORK", "ON_HOLD", "ADMIN", "MEETING", "TRAINING"]);
+const OCCUPANCY_STATUSES = new Set(["READY", "IN_CALL", "AFTER_CALL_WORK", "ON_HOLD"]);
 
 function isManualStatus(status) {
   return MANUAL_STATUSES.has(status);
