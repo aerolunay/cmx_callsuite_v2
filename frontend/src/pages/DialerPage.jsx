@@ -338,6 +338,49 @@ export default function DialerPage() {
     }
   }
 
+  // Manual dial (from MiniPhone's number field): identical tracked-call
+  // path as Callback — same disposition enforcement, same Call Logs
+  // entry — just no source row, so lead_id is always 0 (matches
+  // inbound-sourced Callback rows, which have no real lead either).
+  async function handleManualDial(phoneNumber) {
+    if (agentStatus?.status !== "READY") {
+      setError("You must be Ready to place a call.");
+      return;
+    }
+    if (call || inboundCall) {
+      setError("You're already on a call.");
+      return;
+    }
+
+    setError("");
+    setBusy(true);
+    try {
+      const manualLead = { lead_id: 0, first_name: "", last_name: "", phone_number: phoneNumber };
+      setLead(manualLead);
+
+      const callData = await api.startCall(campaign.campaign_id, 0, phoneNumber, manualLead, "REGULAR");
+      setCall({ callId: callData.callId, room: callData.room, status: "ringing_agent", callType: "REGULAR" });
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Conference / Blind Transfer — both act on whichever call (outbound
+  // or inbound) is currently live; the backend figures out which one
+  // via resolveActiveRoom(), so nothing here needs to know or care
+  // which direction the active call is. Errors are intentionally NOT
+  // caught here — MiniPhone owns its own busy/error state for these
+  // two actions and needs the rejection to reach it.
+  function handleConferenceAdd(target, isExtension) {
+    return api.conferenceAdd(target, isExtension);
+  }
+
+  function handleTransferBlind(target, isExtension) {
+    return api.transferBlind(target, isExtension);
+  }
+
   async function handleEndCall() {
     if (!call) return;
     setError("");
@@ -549,9 +592,16 @@ export default function DialerPage() {
         </div>
 
         {/* All phone/JsSIP logic now lives in MiniPhone — DialerPage
-            only supplies the agent's current status, needed to gate
-            auto-answer (see MiniPhone.jsx for the rule). */}
-        <MiniPhone agentStatus={agentStatus?.status} />
+            supplies agent status (for auto-answer gating) and the
+            handlers for manual dial / conference / transfer, which all
+            need campaign/call context that lives here, not in MiniPhone. */}
+        <MiniPhone
+          agentStatus={agentStatus?.status}
+          hasActiveCall={Boolean(call || inboundCall)}
+          onManualDial={handleManualDial}
+          onConferenceAdd={handleConferenceAdd}
+          onTransferBlind={handleTransferBlind}
+        />
 
         {error && <div className="error">{error}</div>}
 

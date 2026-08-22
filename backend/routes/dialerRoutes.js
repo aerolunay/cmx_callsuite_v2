@@ -3,12 +3,14 @@
 const express = require("express");
 
 const db = require("../config/db");
+const ami = require("../config/ami");
 const dialerService = require("../services/dialerService");
 const agentStatusService = require("../services/agentStatusService");
 const statsService = require("../services/statsService");
 const inboundCallService = require("../services/inboundCallService");
 const crossAppHandoffService = require("../services/crossAppHandoffService");
 const recordingUploadService = require("../services/recordingUploadService");
+const conferenceService = require("../services/conferenceService");
 
 const router = express.Router();
 
@@ -76,6 +78,118 @@ router.get("/dialer/webrtc-credentials", requireAuth, async (req, res) => {
       wssUrl: ASTERISK_WSS_URL,
     },
   });
+});
+
+/*
+==================================================
+CONFERENCE / TRANSFER (Phase E)
+==================================================
+NOT YET CONFIRMED against a real test call — built on a new AMI
+primitive (conferenceService.addParticipant) that hasn't been
+live-tested. Works identically for outbound or inbound calls, since
+both already converge on the same room/ConfBridge model — this
+resolveActiveRoom() helper just figures out which one is actually
+live for this agent right now.
+
+Attended transfer (talk to the target privately before completing) is
+NOT implemented here — it needs either a ConfBridge DTMF-based consult
+menu (confbridge.conf) or explicit AMI Bridge-manipulation actions,
+meaningfully more complex than this blind-transfer/conference
+primitive, and was deliberately left for a separate, carefully-tested
+pass rather than guessed at.
+==================================================
+*/
+function resolveActiveRoom(appUserId) {
+  const outboundCall = dialerService.getRawActiveCallForAgent(appUserId);
+  if (outboundCall) {
+    return { room: outboundCall.room, agentChannel: outboundCall.agentChannel };
+  }
+  const inboundCall = inboundCallService.getInboundCallForAgent(appUserId);
+  if (inboundCall) {
+    return { room: inboundCall.room, agentChannel: inboundCall.agentChannel };
+  }
+  return null;
+}
+
+router.post("/dialer/conference-add", requireAuth, async (req, res) => {
+  try {
+    const { target, isExtension } = req.body;
+    if (!target) {
+      return res.status(400).json({ success: false, message: "target is required." });
+    }
+
+    const active = resolveActiveRoom(req.session.agent.appUserId);
+    if (!active) {
+      return res.status(409).json({ success: false, message: "You're not currently on a call." });
+    }
+
+    const result = await conferenceService.addParticipant(
+      active.room,
+      target,
+      Boolean(isExtension),
+      "Conference"
+    );
+
+    if (!result.success) {
+      return res.status(502).json({
+        success: false,
+        message: `${target} didn't answer or couldn't be reached.`,
+        reason: result.reason,
+      });
+    }
+
+    return res.json({ success: true });
+  } catch (error) {
+    console.error("POST /api/dialer/conference-add failed:", error);
+    return res.status(500).json({ success: false, message: "Failed to add participant." });
+  }
+});
+
+router.post("/dialer/transfer-blind", requireAuth, async (req, res) => {
+  try {
+    const { target, isExtension } = req.body;
+    if (!target) {
+      return res.status(400).json({ success: false, message: "target is required." });
+    }
+
+    const active = resolveActiveRoom(req.session.agent.appUserId);
+    if (!active) {
+      return res.status(409).json({ success: false, message: "You're not currently on a call." });
+    }
+
+    const result = await conferenceService.addParticipant(
+      active.room,
+      target,
+      Boolean(isExtension),
+      "Transfer"
+    );
+
+    if (!result.success) {
+      return res.status(502).json({
+        success: false,
+        message: `${target} didn't answer — transfer not completed, you're still on the call.`,
+        reason: result.reason,
+      });
+    }
+
+    // Target answered and joined the room — now drop the agent's OWN
+    // leg, completing the handoff. If this hangup itself fails, the
+    // target is still correctly in the room with the customer; the
+    // agent is just stuck there too rather than the transfer having
+    // silently not happened at all.
+    if (active.agentChannel) {
+      try {
+        await ami.hangupChannel(active.agentChannel);
+      } catch (hangupErr) {
+        console.error("[dialerRoutes] Transfer succeeded but failed to hang up agent leg:", hangupErr.message);
+      }
+    }
+
+    return res.json({ success: true });
+  } catch (error) {
+    console.error("POST /api/dialer/transfer-blind failed:", error);
+    return res.status(500).json({ success: false, message: "Failed to transfer call." });
+  }
 });
 
 /*

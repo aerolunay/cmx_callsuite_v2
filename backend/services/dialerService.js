@@ -466,6 +466,21 @@ function getActiveCallForAgent(appUserId) {
   return null;
 }
 
+// Internal-only — returns the RAW in-memory call object (including
+// agentChannel, an actual Asterisk channel name) for backend use only.
+// Never route this through an API response; getCallStatus() above is
+// the public-facing shape and deliberately omits agentChannel. Added
+// for Conference/Transfer (Phase E), which needs to hang up the
+// agent's own channel after a successful blind transfer.
+function getRawActiveCallForAgent(appUserId) {
+  for (const call of activeCalls.values()) {
+    if (call.appUserId === appUserId && call.status !== "ended") {
+      return call;
+    }
+  }
+  return null;
+}
+
 /*
 ==================================================
 Ongoing event tracking (customer connect / hangup / room close)
@@ -873,6 +888,7 @@ module.exports = {
   startCall,
   getCallStatus,
   getActiveCallForAgent,
+  getRawActiveCallForAgent,
   getActiveCallPhoneNumbers,
   endCall,
   holdCall,

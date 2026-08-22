@@ -36,6 +36,12 @@ let connected = false;
 
 // Real, confirmed event names this app cares about (PascalCase, exactly
 // as Asterisk emits them — verified against a live test call transcript).
+// OriginateResponse added for Conference/Transfer (Phase E) — needed to
+// know whether an Originate'd participant actually answered, matched
+// via a caller-supplied ActionID. NOT yet confirmed against a real
+// test call the way the others above were — same lowercased-field
+// caveat applies (evt.actionid, evt.response, evt.channel), but the
+// exact shape hasn't been verified live yet.
 const TRACKED_EVENTS = new Set([
   "Newchannel",
   "Newstate",
@@ -43,6 +49,7 @@ const TRACKED_EVENTS = new Set([
   "ConfbridgeLeave",
   "ConfbridgeEnd",
   "Hangup",
+  "OriginateResponse",
 ]);
 
 function connect() {

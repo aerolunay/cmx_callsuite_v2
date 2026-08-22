@@ -48,6 +48,10 @@ export const api = {
   // Agent status
   getStatus: () => request("/dialer/status"),
   getWebrtcCredentials: () => request("/dialer/webrtc-credentials"),
+  conferenceAdd: (target, isExtension) =>
+    request("/dialer/conference-add", { method: "POST", body: JSON.stringify({ target, isExtension }) }),
+  transferBlind: (target, isExtension) =>
+    request("/dialer/transfer-blind", { method: "POST", body: JSON.stringify({ target, isExtension }) }),
   setStatus: (status) =>
     request("/dialer/status", { method: "POST", body: JSON.stringify({ status }) }),
   hasLeads: (campaignId) => request(`/dialer/has-leads?campaignId=${encodeURIComponent(campaignId)}`),
