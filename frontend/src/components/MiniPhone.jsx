@@ -13,10 +13,23 @@ directly. DialerPage supplies:
   - hasActiveCall: whether the APP's own tracked call/inboundCall is
     live right now — the authoritative "on a call" signal, distinct
     from phone.callState (which only reflects the JsSIP audio session)
+  - onHold / onToggleHold: the app-level hold state and toggle — Hold
+    lives here now instead of in the separate call-status cards; it
+    operates on the CUSTOMER's channel (via AMI Redirect), a different
+    layer than JsSIP's own answer/hangup/mute, which only ever touch
+    the agent's own leg.
   - onManualDial(phoneNumber): places a tracked outbound call, same
     disposition-enforced path as Callback/Dial Next Number
   - onConferenceAdd(target, isExtension) / onTransferBlind(target,
     isExtension): add a participant to / hand off the live call
+
+END CALL WAS REMOVED (not just moved) — JsSIP's own Hang Up only hangs
+up the AGENT's own leg, which is a real behavioral difference from the
+old explicit End Call action (which specifically hung up the
+CUSTOMER's channel). This relies on Asterisk's ConfBridge ending the
+room once real participants drop to zero — architecturally consistent
+with how a physical phone hangup was always handled, but NOT yet
+confirmed live for this specific case. Worth testing carefully.
 
 ALL action buttons are always rendered (Answer, Decline, Call, Hang
 Up, Mute, Conference, Transfer) — none are conditionally hidden;
@@ -63,7 +76,15 @@ function statusLabel(phone) {
   return "Ready";
 }
 
-export function MiniPhone({ agentStatus, hasActiveCall, onManualDial, onConferenceAdd, onTransferBlind }) {
+export function MiniPhone({
+  agentStatus,
+  hasActiveCall,
+  onHold,
+  onToggleHold,
+  onManualDial,
+  onConferenceAdd,
+  onTransferBlind,
+}) {
   const phone = useJsSipPhone();
   const autoAnsweredCallRef = useRef(null); // guards against re-answering the same ring on every re-render
 
@@ -197,6 +218,15 @@ export function MiniPhone({ agentStatus, hasActiveCall, onManualDial, onConferen
           title={isMuted ? "Unmute" : "Mute"}
         >
           {isMuted ? "Unmute" : "Mute"}
+        </button>
+        <button
+          type="button"
+          className="phone-btn phone-btn-mute"
+          onClick={onToggleHold}
+          disabled={!hasActiveCall}
+          title={onHold ? "Unhold" : "Hold"}
+        >
+          {onHold ? "Unhold" : "Hold"}
         </button>
         <button
           type="button"

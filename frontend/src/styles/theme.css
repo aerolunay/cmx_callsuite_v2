@@ -946,12 +946,14 @@ other pages sharing the same base classes.
 
 .phone-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 10px;
   margin-bottom: 4px;
 }
 
 .phone-btn {
-  flex: 1;
+  flex: 1 1 calc(50% - 5px);
+  min-width: 70px;
   border: none;
   border-radius: 24px;
   padding: 12px 8px;

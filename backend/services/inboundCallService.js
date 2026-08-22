@@ -628,7 +628,10 @@ async function holdInboundCall(callId) {
   call.onHold = true;
 
   try {
-    await ami.redirectChannel(call.customerChannel, { context: "default", exten: "cmxhold" });
+    // Same class of bug as outbound's holdCall() and the earlier
+    // agent-leg Originate fix — [default] doesn't exist in
+    // extensions.conf, only [trunkinbound] does.
+    await ami.redirectChannel(call.customerChannel, { context: "trunkinbound", exten: "cmxhold" });
   } catch (err) {
     call.onHold = false;
     throw err;
@@ -660,7 +663,7 @@ async function unholdInboundCall(callId) {
     throw new Error("Call is not currently on hold.");
   }
 
-  await ami.redirectChannel(call.customerChannel, { context: "default", exten: call.room });
+  await ami.redirectChannel(call.customerChannel, { context: "trunkinbound", exten: call.room });
 
   call.onHold = false;
   broadcastInboundStatus(call);

@@ -381,19 +381,6 @@ export default function DialerPage() {
     return api.transferBlind(target, isExtension);
   }
 
-  async function handleEndCall() {
-    if (!call) return;
-    setError("");
-    setBusy(true);
-    try {
-      await api.endCall(call.callId);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
   async function handleToggleHold() {
     if (!call) return;
     setError("");
@@ -424,20 +411,12 @@ export default function DialerPage() {
     }
   }
 
-  async function handleEndInboundCall() {
-    if (!inboundCall) return;
-    setError("");
-    setBusy(true);
-    try {
-      await api.endInboundCall(inboundCall.callId);
-      // The 'ended' status arrives over the WS broadcast that
-      // endInboundCall() triggers server-side — nothing else to do
-      // here but wait for it.
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setBusy(false);
-    }
+  // Unified hold toggle for MiniPhone — picks whichever call (outbound
+  // or inbound) is actually active, same "MiniPhone doesn't need to
+  // know which direction" pattern already used for Conference/Transfer.
+  function handlePhoneToggleHold() {
+    if (call) return handleToggleHold();
+    if (inboundCall) return handleToggleInboundHold();
   }
 
   const commentsMissing = !comments.trim();
@@ -649,6 +628,8 @@ export default function DialerPage() {
             <MiniPhone
               agentStatus={agentStatus?.status}
               hasActiveCall={Boolean(call || inboundCall)}
+              onHold={Boolean(call?.onHold || inboundCall?.onHold)}
+              onToggleHold={handlePhoneToggleHold}
               onManualDial={handleManualDial}
               onConferenceAdd={handleConferenceAdd}
               onTransferBlind={handleTransferBlind}
@@ -666,28 +647,11 @@ export default function DialerPage() {
               </strong>
             </p>
 
-            {(inboundCall.status === "ringing_agent" || inboundCall.status === "agent_connected") && (
-              <>
-                {inboundCall.status === "agent_connected" && (
-                  <button
-                    className="button-secondary"
-                    onClick={handleToggleInboundHold}
-                    disabled={busy}
-                    style={{ marginBottom: 10, marginRight: 8 }}
-                  >
-                    {inboundCall.onHold ? "Unhold" : "Hold"}
-                  </button>
-                )}
-                <button
-                  className="button-secondary"
-                  onClick={handleEndInboundCall}
-                  disabled={busy || inboundCall.onHold}
-                  style={{ marginBottom: 10 }}
-                >
-                  End Call
-                </button>
-              </>
-            )}
+            {/* Hold moved into MiniPhone (see phone-widget) — End Call
+                removed entirely; JsSIP's own Hang Up already tears down
+                the agent's leg, which the backend's existing Hangup/
+                ConfbridgeLeave handlers already treat identically to
+                the old explicit End Call action. */}
 
             {/* Shown immediately, editable throughout the call so the
                 agent can take notes live — not gated behind the call
@@ -808,23 +772,13 @@ export default function DialerPage() {
                   <strong>{CALL_STATUS_LABELS[call.status] || call.status}</strong>
                   {call.onHold && <span className="badge" style={{ marginLeft: 10 }}>ON HOLD</span>}
                 </p>
-                {isCallActive && (
-                  <>
-                    {call.status === "customer_connected" && (
-                      <button
-                        className="button-secondary"
-                        onClick={handleToggleHold}
-                        disabled={busy}
-                        style={{ marginRight: 8 }}
-                      >
-                        {call.onHold ? "Unhold" : "Hold"}
-                      </button>
-                    )}
-                    <button className="button-secondary" onClick={handleEndCall} disabled={busy || call.onHold}>
-                      End Call
-                    </button>
-                  </>
-                )}
+                {/* Hold moved into MiniPhone (see phone-widget) — End
+                    Call removed entirely; JsSIP's own Hang Up already
+                    tears down the agent's leg, which the backend's
+                    existing Hangup/ConfbridgeLeave handlers already
+                    treat identically to the old explicit End Call
+                    action (same as how ending a call via any physical
+                    phone hangup has always worked). */}
 
                 {/* Callback-only, shown immediately (not gated on the
                     call ending) and pre-filled from the Call Logs row
