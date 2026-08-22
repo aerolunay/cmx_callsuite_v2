@@ -239,17 +239,26 @@ export default function DialerPage() {
   // IN_CALL and ON_HOLD always lock the switcher (a call is genuinely
   // active either way — ON_HOLD can now ONLY be reached via the Hold
   // button on a live call, since it's been removed from the manual
-  // dropdown options). AFTER_CALL_WORK only locks it when there's an
-  // outbound disposition actually pending (call + lead both set) —
-  // inbound calls have no disposition step at all, so an
-  // inbound-triggered AFTER_CALL_WORK must NOT lock the agent out of
-  // manually returning to READY, or there'd be no way out of it.
-  const outboundDispositionPending = agentStatus?.status === "AFTER_CALL_WORK" && call && lead;
+  // dropdown options).
+  //
+  // AFTER_CALL_WORK previously only locked the dropdown when call+lead
+  // were both set (outbound-only) — the reasoning at the time claimed
+  // "inbound calls have no disposition step at all," which is simply
+  // wrong: inbound has its own full disposition form (see
+  // getInboundDispositionsForCampaign/handleSaveInboundDisposition
+  // below), and inboundCallService.js genuinely does set
+  // AFTER_CALL_WORK too. The old narrow condition was a real bug,
+  // confirmed live: whenever call/lead happened to be null while
+  // status was still genuinely AFTER_CALL_WORK, the dropdown
+  // incorrectly unlocked, letting an agent switch status without ever
+  // saving a disposition — exactly what the backend's own POST
+  // /dialer/status guard (added the same session) was built to
+  // prevent, but the frontend wasn't matching that same simple rule.
   const isSystemStatus =
     agentStatus?.status === "IN_CALL" ||
     agentStatus?.status === "ON_HOLD" ||
     agentStatus?.status === "MICROSIP_OUTBOUND" ||
-    outboundDispositionPending;
+    agentStatus?.status === "AFTER_CALL_WORK";
   const isCallActive = call && call.status !== "ended";
 
   async function handleStatusSwitch() {
@@ -417,6 +426,29 @@ export default function DialerPage() {
   function handlePhoneToggleHold() {
     if (call) return handleToggleHold();
     if (inboundCall) return handleToggleInboundHold();
+  }
+
+  // Unified hang-up for MiniPhone — calling api.endCall/endInboundCall
+  // (not just JsSIP's own phone.hangup()) is REQUIRED, not optional:
+  // those backend functions hang up BOTH the customer's and the
+  // agent's channel via AMI AND explicitly trigger markCallEnded (the
+  // thing that actually sets AFTER_CALL_WORK). JsSIP's hangup() alone
+  // only ever touches the agent's own leg locally — it never reaches
+  // any of that. This was a real, confirmed regression from removing
+  // the old explicit End Call button: agent-initiated hangups stopped
+  // ending the call/triggering disposition at all, only the far end
+  // hanging up still worked (since THAT path is driven by AMI Hangup/
+  // ConfbridgeLeave events on the customer channel, untouched by this
+  // bug). MiniPhone's own phone.hangup() still runs too, right after —
+  // harmless once the channel's already being torn down by AMI, and
+  // keeps JsSIP's local session state consistent immediately rather
+  // than waiting on the round-trip.
+  function handlePhoneHangUp() {
+    if (call) {
+      api.endCall(call.callId).catch((err) => setError(err.message));
+    } else if (inboundCall) {
+      api.endInboundCall(inboundCall.callId).catch((err) => setError(err.message));
+    }
   }
 
   const commentsMissing = !comments.trim();
@@ -634,6 +666,7 @@ export default function DialerPage() {
               )}
               onHold={Boolean(call?.onHold || inboundCall?.onHold)}
               onToggleHold={handlePhoneToggleHold}
+              onHangUp={handlePhoneHangUp}
               onManualDial={handleManualDial}
               onConferenceAdd={handleConferenceAdd}
               onTransferBlind={handleTransferBlind}

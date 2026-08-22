@@ -23,13 +23,16 @@ directly. DialerPage supplies:
   - onConferenceAdd(target, isExtension) / onTransferBlind(target,
     isExtension): add a participant to / hand off the live call
 
-END CALL WAS REMOVED (not just moved) — JsSIP's own Hang Up only hangs
-up the AGENT's own leg, which is a real behavioral difference from the
-old explicit End Call action (which specifically hung up the
-CUSTOMER's channel). This relies on Asterisk's ConfBridge ending the
-room once real participants drop to zero — architecturally consistent
-with how a physical phone hangup was always handled, but NOT yet
-confirmed live for this specific case. Worth testing carefully.
+HANG UP correctness: initially, removing the separate End Call button
+and relying solely on JsSIP's phone.hangup() (agent-leg-only) was a
+REAL, CONFIRMED regression — agent-initiated hangups stopped ending
+the call or triggering AFTER_CALL_WORK at all; only the customer
+hanging up still worked, since that path is driven by AMI Hangup/
+ConfbridgeLeave events on the CUSTOMER's channel, untouched by an
+agent-only hangup. Fixed: the Hang Up button now calls
+onHangUp (DialerPage's api.endCall/endInboundCall — which hangs up
+BOTH channels via AMI and explicitly triggers markCallEnded) before
+also calling phone.hangup() for JsSIP's own local cleanup.
 
 ALL action buttons are always rendered (Answer, Decline, Call, Hang
 Up, Mute, Conference, Transfer) — none are conditionally hidden;
@@ -82,6 +85,7 @@ export function MiniPhone({
   canHold,
   onHold,
   onToggleHold,
+  onHangUp,
   onManualDial,
   onConferenceAdd,
   onTransferBlind,
@@ -135,6 +139,23 @@ export function MiniPhone({
 
   function handleToggleMute() {
     setIsMuted(phone.toggleMute());
+  }
+
+  function handleHangUpClick() {
+    if (isIncoming) {
+      // Declining an incoming ring doesn't end the call for the
+      // customer — they're still waiting in the room, and the backend
+      // will offer this call to the next ready agent. Only the agent's
+      // own not-yet-answered leg needs to go away.
+      phone.hangup();
+      return;
+    }
+    // Active call — the REAL hang-up has to go through the backend
+    // (see handlePhoneHangUp in DialerPage.jsx for why phone.hangup()
+    // alone isn't enough). phone.hangup() still runs too, right after,
+    // to keep JsSIP's own local session state consistent immediately.
+    onHangUp();
+    phone.hangup();
   }
 
   function handleDialNumberChange(e) {
@@ -232,7 +253,7 @@ export function MiniPhone({
         <button
           type="button"
           className="phone-btn phone-btn-end"
-          onClick={phone.hangup}
+          onClick={handleHangUpClick}
           disabled={!isIncoming && !isActive}
           title={isIncoming ? "Decline" : "Hang Up"}
         >
