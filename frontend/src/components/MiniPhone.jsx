@@ -20,7 +20,17 @@ turns out to be wanted too.
 ==================================================
 */
 
-const isAutoAnswerStatus = (status) => status === "READY";
+// Only a genuinely READY agent is ever claimed for a call in the first
+// place (see agentStatusService's ready-agent lookup) — but the
+// backend flips status to IN_CALL the moment it claims that agent,
+// BEFORE Originate ever rings the phone (see inboundCallService.js).
+// So by the time JsSIP's incoming RTCSession actually arrives here,
+// agentStatus is already IN_CALL, never still READY — checking for
+// READY alone meant auto-answer could never fire on a real call.
+// IN_CALL at this exact moment (an incoming ring with no active
+// session yet) is the normal, expected result of having just been
+// READY a moment ago, not a different manual status the agent chose.
+const isAutoAnswerStatus = (status) => status === "READY" || status === "IN_CALL";
 
 export function MiniPhone({ agentStatus }) {
   const phone = useJsSipPhone();
