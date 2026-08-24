@@ -3,6 +3,7 @@ import { Navigate } from "react-router-dom";
 import Header from "../components/Header";
 import { useAuth } from "../context/AuthContext";
 import { api } from "../api";
+import RecordingPlaybackModal from "../modals/RecordingPlaybackModal";
 
 /*
 ==================================================
@@ -43,6 +44,8 @@ export default function RecordingsPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [playingId, setPlayingId] = useState(null);
+  const [modalRecording, setModalRecording] = useState(null);
+  const [modalUrl, setModalUrl] = useState(null);
 
   function loadCampaigns() {
     api
@@ -96,12 +99,18 @@ export default function RecordingsPage() {
     setError("");
     try {
       const data = await api.getRecordingPlaybackUrl(recording.call_id);
-      window.open(data.url, "_blank", "noopener,noreferrer");
+      setModalRecording(recording);
+      setModalUrl(data.url);
     } catch (err) {
       setError(err.message);
     } finally {
       setPlayingId(null);
     }
+  }
+
+  function closeModal() {
+    setModalRecording(null);
+    setModalUrl(null);
   }
 
   function formatDateTime(value) {
@@ -200,6 +209,10 @@ export default function RecordingsPage() {
           )}
         </div>
       </div>
+
+      {modalRecording && modalUrl && (
+        <RecordingPlaybackModal recording={modalRecording} url={modalUrl} onClose={closeModal} />
+      )}
     </>
   );
 }

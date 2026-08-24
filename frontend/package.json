@@ -13,7 +13,8 @@
     "jssip": "^3.10.1",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
-    "react-router-dom": "^7.18.2"
+    "react-router-dom": "^7.18.2",
+    "wavesurfer.js": "^7.11.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

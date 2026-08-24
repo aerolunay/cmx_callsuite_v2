@@ -878,11 +878,13 @@ router.get("/recordings", requireAdminOrSupervisor, async (req, res) => {
       `
         SELECT combined.call_id, combined.campaign_id, combined.agent_user, combined.agent_name,
                combined.phone_number, combined.call_started_at, combined.call_ended_at,
-               combined.direction, combined.recording_key
+               combined.direction, combined.recording_key, combined.disposition, combined.comments,
+               combined.first_name, combined.last_name, combined.callback_at, combined.wait_seconds
         FROM (
           SELECT
             d.call_id, d.campaign_id, d.agent_user, au.full_name AS agent_name,
-            d.phone_number, d.call_started_at, d.call_ended_at, d.recording_key, 'outbound' AS direction
+            d.phone_number, d.call_started_at, d.call_ended_at, d.recording_key, 'outbound' AS direction,
+            d.disposition, d.comments, d.first_name, d.last_name, d.callback_at, NULL AS wait_seconds
           FROM cmx_dialer.dialer_call_log d
           LEFT JOIN cmx_dialer.app_users au ON au.vicidial_user = d.agent_user
           WHERE d.recording_key IS NOT NULL
@@ -891,7 +893,8 @@ router.get("/recordings", requireAdminOrSupervisor, async (req, res) => {
 
           SELECT
             i.call_id, i.campaign_id, i.agent_user, au.full_name AS agent_name,
-            i.caller_id_number AS phone_number, i.call_started_at, i.call_ended_at, i.recording_key, 'inbound' AS direction
+            i.caller_id_number AS phone_number, i.call_started_at, i.call_ended_at, i.recording_key, 'inbound' AS direction,
+            i.disposition, i.comments, i.first_name, i.last_name, i.callback_at, i.wait_seconds
           FROM cmx_dialer.inbound_call_log i
           LEFT JOIN cmx_dialer.app_users au ON au.vicidial_user = i.agent_user
           WHERE i.recording_key IS NOT NULL
