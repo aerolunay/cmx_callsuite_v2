@@ -509,13 +509,28 @@ router.put(
         );
       }
 
+      // UPSERT, not a plain UPDATE — REAL BUG FIX: any campaign that
+      // existed BEFORE this feature was built (CMXBSMSC, CMXBLND,
+      // CMXBSM, CMXOUTB — everything predating campaignRoutes.js) has
+      // NO row at all in cmx_dialer.campaign_settings yet, since it
+      // was never created through POST /api/admin/campaigns. A plain
+      // UPDATE against a nonexistent row silently affects 0 rows —
+      // no error, no warning — so campaign_type/business-hours edits
+      // on any legacy campaign appeared to save successfully but
+      // never actually took effect. Confirmed via a real edit attempt
+      // on CMXBSMSC (set to BLENDED, table kept showing OUTBOUND).
       await connection.execute(
         `
-          UPDATE cmx_dialer.campaign_settings
-          SET campaign_type = ?, business_hours_start = ?, business_hours_end = ?, business_days = ?
-          WHERE campaign_id = ?
+          INSERT INTO cmx_dialer.campaign_settings
+            (campaign_id, campaign_type, business_hours_start, business_hours_end, business_days)
+          VALUES (?, ?, ?, ?, ?)
+          ON DUPLICATE KEY UPDATE
+            campaign_type = VALUES(campaign_type),
+            business_hours_start = VALUES(business_hours_start),
+            business_hours_end = VALUES(business_hours_end),
+            business_days = VALUES(business_days)
         `,
-        [campaignType, businessHoursStart || "09:00", businessHoursEnd || "18:00", businessDays || "mon-fri", campaignId]
+        [campaignId, campaignType, businessHoursStart || "09:00", businessHoursEnd || "18:00", businessDays || "mon-fri"]
       );
 
       await connection.commit();
