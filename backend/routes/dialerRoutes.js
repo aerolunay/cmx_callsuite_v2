@@ -717,6 +717,20 @@ router.post("/dialer/inbound-disposition", requireAuth, async (req, res) => {
       });
     }
 
+    // Server-side enforcement — the frontend already restricts this
+    // field to digits-only/10-max as the person types, but that's a
+    // UX nicety, not a guarantee; this is the actual enforcement point
+    // for anything hitting this endpoint directly. Requires a plain
+    // 10-digit US number, no country code, no formatting characters —
+    // matches what the dialplan/Originate flow elsewhere in this app
+    // already expects a callback number to look like.
+    if (callbackNumber && !/^\d{10}$/.test(callbackNumber)) {
+      return res.status(400).json({
+        success: false,
+        message: "callbackNumber must be exactly 10 digits (US number, no country code).",
+      });
+    }
+
     const { appUserId, username: agentUser } = req.session.agent;
 
     // Read BEFORE finalizeInboundCall() below, which deletes this call

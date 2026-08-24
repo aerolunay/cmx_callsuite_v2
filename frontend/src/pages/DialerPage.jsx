@@ -708,10 +708,12 @@ export default function DialerPage() {
 
               <label className="comments-label">Callback Number</label>
               <input
-                type="text"
+                type="tel"
                 value={inboundCallbackNumber}
-                onChange={(e) => setInboundCallbackNumber(e.target.value)}
-                placeholder="If different from Caller ID above (e.g. trunk line calls)"
+                onChange={(e) => setInboundCallbackNumber(e.target.value.replace(/\D/g, "").slice(0, 10))}
+                placeholder="10-digit US number, no country code (e.g. 6468016974)"
+                maxLength={10}
+                inputMode="numeric"
               />
 
               <label className="comments-label">First Name</label>
