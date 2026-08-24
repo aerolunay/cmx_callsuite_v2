@@ -15,45 +15,37 @@ const connections = new Map();
 
 /*
 ==================================================
-RECONNECT-RESTORE (sid -> last status)
+RECONNECT WINDOW — real fix for the "Ready resets on refresh" bug
 ==================================================
-When an agent's last socket closes and they're not mid-call, their
-status gets closed IMMEDIATELY (see registerConnection's "close"
-handler below) — no waiting to guess whether this is a real close or
-just a page reload, since the browser gives no reliable way to tell
-those apart at the JS level (beforeunload/pagehide fire for both).
+UPDATED — this used to close the agent's status row IMMEDIATELY on
+every socket close (see the old comment this replaced, further down
+in git history), remembering what status it was in a
+`pendingRestoreBySid` map, then reopening a BRAND NEW row with that
+same status the instant the same session reconnected. That was
+believed to be purely cosmetic ("Doesn't affect current status or
+inbound routing... just cosmetic history/reporting granularity") — but
+that assumption was WRONG: getAnyReadyAgentWithExtension() orders
+candidates by status_log_id ASC (oldest-ready-first), and a fresh row
+gets a fresh, LATER status_log_id. So every disconnect/reconnect cycle
+(including a plain page refresh, not just the transport-idle-timeout
+case the ping/pong loop above already fixed) pushed that agent to the
+back of the ready-agent queue — confirmed via real testing where an
+agent noticed their own Ready duration visibly resetting on refresh,
+which is exactly this. That's a genuine queue-dodging exploit: an
+agent could repeatedly refresh to avoid ever surfacing as the
+longest-waiting ready agent.
 
-Instead, correctness comes from session identity, not timing: a page
-reload reconnects using the SAME session id (the cookie survives a
-reload). A fresh login, by contrast, ALWAYS gets a brand-new session
-id — authRoutes.js calls req.session.regenerate() on every login, so
-there's no risk of this mechanism ever firing for a genuine fresh
-login and stepping on its own NOT_READY-on-login behavior.
-
-So: on close, remember what status this exact sid was in. If that
-exact sid reconnects within RECONNECT_WINDOW_MS, restore that status
-as a fresh row AND the session survives. If it doesn't come back in
-time, the session gets destroyed — reopening the app after that goes
-through a real login (new sid via req.session.regenerate(), which
-can never collide with this map — see below), landing in NOT_READY
-like any fresh login. If a different sid shows up instead of the one
-we were waiting for, this map simply has nothing for it — the login
-flow's own NOT_READY stands untouched.
-
-Known, accepted trade-off: this closes and reopens a status row on
-EVERY reload, fragmenting what was really one continuous period into
-several shorter rows in agent_status_log (started_at resets each
-time). Doesn't affect current status or inbound routing (isConnected()
-below is what actually gates that) — just cosmetic history/reporting
-granularity. Not solved here; flagging it rather than hiding it.
-
-Bounded but not actively cleaned up: an entry only lingers if a sid is
-abandoned WITHOUT ever reconnecting (real app-close) — harmless at
-realistic agent-count scale, and naturally moot once that session
-expires anyway.
+FIX: don't touch the status row on disconnect at all. Just start the
+reconnect-window timer (below). If the same session reconnects within
+RECONNECT_WINDOW_MS (the overwhelmingly common case — a refresh, a
+brief network blip, the idle-timeout case), the ORIGINAL row is still
+open with its ORIGINAL started_at and ORIGINAL status_log_id,
+completely untouched — there is nothing left to "restore". Only if the
+window genuinely elapses without reconnecting do we close the row at
+that point (see the timer callback in the close handler below) — at
+that point they're actually gone, not just mid-refresh.
 ==================================================
 */
-const pendingRestoreBySid = new Map();
 
 // Sids currently being force-logged-out (admin kick, or the 12-hour
 // auto-logout below) — the normal close handler checks this and skips
@@ -65,18 +57,15 @@ const pendingRestoreBySid = new Map();
 // destroyed.
 const forcedLogoutSids = new Set();
 
-// How long a session survives after its last socket closes (and status
-// got closed/non-call-tied) before it's destroyed server-side, forcing
-// a real login next time. Cancelled if that same sid reconnects first —
-// see registerConnection below. Deliberately separate from
-// pendingRestoreBySid's restore logic: restoring the STATUS on
-// reconnect has no time limit (works whenever they come back, as long
-// as the session itself is still alive) — this timer only controls
-// whether the SESSION itself is still alive to come back to.
+// How long a session survives after its last socket closes before its
+// status row is actually closed and the session destroyed, forcing a
+// real login next time. Cancelled if that same sid reconnects first —
+// see registerConnection below.
 const RECONNECT_WINDOW_MS = 15000;
 
 // sid -> pending session-destroy timer. Cancelled on reconnect with the
-// same sid; fires (destroying the session) if that never happens.
+// same sid; fires (closing status + destroying the session) if that
+// never happens.
 const sessionDestroyTimers = new Map();
 
 /*
@@ -187,25 +176,12 @@ function registerConnection(appUserId, ws, sid) {
   }
   connections.get(appUserId).add(ws);
 
-  // Lazy-required (not at the top of this file) because
-  // agentStatusService.js already requires THIS file — a top-level
-  // require here would be circular. Safe inside function bodies since
-  // by call time both modules are fully loaded regardless of order.
-  const agentStatusService = require("../services/agentStatusService");
-
-  // This exact session just reconnected — if we closed a status for
-  // it on a previous disconnect, restore it now as a fresh row.
-  if (pendingRestoreBySid.has(sid)) {
-    const statusToRestore = pendingRestoreBySid.get(sid);
-    pendingRestoreBySid.delete(sid);
-
-    agentStatusService.setStatus(appUserId, statusToRestore).catch((err) => {
-      console.error(`[ws] Failed to restore status "${statusToRestore}" for appUserId ${appUserId} on reconnect:`, err.message);
-    });
-  }
-
   // They're back within the window — the session survives, cancel its
-  // pending destruction.
+  // pending destruction. Nothing to "restore" here — since the close
+  // handler below no longer closes the status row immediately on
+  // disconnect, the original row (original started_at, original
+  // status_log_id) has simply been sitting open the whole time,
+  // completely untouched by any of this.
   const pendingDestroy = sessionDestroyTimers.get(sid);
   if (pendingDestroy) {
     clearTimeout(pendingDestroy);
@@ -229,26 +205,35 @@ function registerConnection(appUserId, ws, sid) {
       return;
     }
 
+    // Lazy-required (not at the top of this file) because
+    // agentStatusService.js already requires THIS file — a top-level
+    // require here would be circular. Safe inside function bodies
+    // since by call time both modules are fully loaded regardless of
+    // order.
+    const agentStatusService = require("../services/agentStatusService");
+
     try {
-      // Mid-call is the one exception named explicitly: don't touch
-      // status OR start the session-destroy timer at all if they're
-      // IN_CALL / AFTER_CALL_WORK / ON_HOLD — the call's own
-      // hangup/hold handling owns ending that period, and forcing a
-      // relogin mid-call would break reconnecting to resume it.
+      // Mid-call is the one exception named explicitly: don't start
+      // the session-destroy timer at all if they're IN_CALL /
+      // AFTER_CALL_WORK / ON_HOLD — the call's own hangup/hold
+      // handling owns ending that period, and forcing a relogin
+      // mid-call would break reconnecting to resume it.
       if (await agentStatusService.isCallTied(appUserId)) return;
 
-      const current = await agentStatusService.getCurrentStatus(appUserId);
-      if (!current) return; // nothing open to close
-
-      await agentStatusService.closeCurrentStatus(appUserId);
-      pendingRestoreBySid.set(sid, current.status);
-
-      // If they don't come back with this SAME session within
-      // RECONNECT_WINDOW_MS, destroy it — reopening the app after that
-      // requires a real login again, which sets NOT_READY on its own.
-      const timer = setTimeout(() => {
+      // REAL FIX — see the big comment block above this function for
+      // the full "why": do NOT close the status row here. Only start
+      // a timer that closes it (and destroys the session) if the
+      // window genuinely elapses without a reconnect. A same-session
+      // reconnect within the window (registerConnection, above)
+      // simply cancels this timer and touches nothing else.
+      const timer = setTimeout(async () => {
         sessionDestroyTimers.delete(sid);
-        pendingRestoreBySid.delete(sid); // nothing left to restore into
+
+        try {
+          await agentStatusService.closeCurrentStatus(appUserId);
+        } catch (err) {
+          console.error(`[ws] Failed to close status for appUserId ${appUserId} after reconnect window expired:`, err.message);
+        }
 
         if (sessionStore) {
           sessionStore.destroy(sid, (err) => {
@@ -261,7 +246,7 @@ function registerConnection(appUserId, ws, sid) {
 
       sessionDestroyTimers.set(sid, timer);
     } catch (err) {
-      console.error(`[ws] Failed to close status for appUserId ${appUserId} on disconnect:`, err.message);
+      console.error(`[ws] Failed to handle disconnect for appUserId ${appUserId}:`, err.message);
     }
   });
 }
@@ -343,7 +328,6 @@ async function forceLogout(appUserId, reason) {
         clearTimeout(pendingDestroy);
         sessionDestroyTimers.delete(sid);
       }
-      pendingRestoreBySid.delete(sid);
 
       if (sessionStore) {
         sessionStore.destroy(sid, (err) => {
