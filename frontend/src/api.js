@@ -48,6 +48,10 @@ export const api = {
 
   // Campaigns
   getCampaigns: () => request("/campaigns"),
+  // Scoped to the logged-in agent's own campaign assignments — see
+  // dialerRoutes.js's GET /campaigns/mine for why this is a genuinely
+  // separate endpoint from getCampaigns() above, not a variant of it.
+  getMyCampaigns: () => request("/campaigns/mine"),
 
   // Call history / stats
   getCallLog: (campaignId) => request(`/dialer/call-log?campaignId=${encodeURIComponent(campaignId)}`),
@@ -161,6 +165,8 @@ export const api = {
   createCampaign: (formData) => request("/admin/campaigns", { method: "POST", body: formData }),
   updateCampaign: (campaignId, formData) =>
     request(`/admin/campaigns/${encodeURIComponent(campaignId)}`, { method: "PUT", body: formData }),
+  deactivateCampaign: (campaignId) =>
+    request(`/admin/campaigns/${encodeURIComponent(campaignId)}/deactivate`, { method: "POST" }),
   deleteCampaign: (campaignId) =>
     request(`/admin/campaigns/${encodeURIComponent(campaignId)}`, { method: "DELETE" }),
 };

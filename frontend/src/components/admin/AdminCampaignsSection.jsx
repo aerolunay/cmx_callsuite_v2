@@ -144,10 +144,31 @@ export default function AdminCampaignsSection() {
     setSuccess("");
   }
 
+  async function handleDeactivate(c) {
+    if (
+      !window.confirm(
+        `Deactivate campaign ${c.campaign_id}? Its DID (${c.did || "none"}) will stop routing calls immediately, and its dialplan block will be removed. The campaign ID stays reserved and its historical call/lead data remains intact — this does NOT permanently erase it.`
+      )
+    ) {
+      return;
+    }
+    setError("");
+    setBusy(true);
+    try {
+      await api.deactivateCampaign(c.campaign_id);
+      if (editingCampaignId === c.campaign_id) resetForm();
+      loadAll();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function handleDelete(c) {
     if (
       !window.confirm(
-        `Delete campaign ${c.campaign_id}? Its DID (${c.did || "none"}) will stop routing calls immediately, and its dialplan block will be removed. The campaign itself is deactivated, not permanently erased, to protect historical call/lead data.`
+        `PERMANENTLY delete campaign ${c.campaign_id}? This cannot be undone. Its DID and dialplan block are removed immediately, the campaign ID itself is freed for reuse, and any historical call/lead reports referencing this campaign will no longer show its name (the underlying call records aren't deleted, just the name lookup). Use Deactivate instead if you're not sure.`
       )
     ) {
       return;
@@ -371,6 +392,10 @@ export default function AdminCampaignsSection() {
                         <td style={{ whiteSpace: "nowrap" }}>
                           <button type="button" className="link" onClick={() => handleStartEdit(c)} disabled={busy}>
                             Edit
+                          </button>
+                          {" · "}
+                          <button type="button" className="link" onClick={() => handleDeactivate(c)} disabled={busy}>
+                            Deactivate
                           </button>
                           {" · "}
                           <button type="button" className="link" onClick={() => handleDelete(c)} disabled={busy}>

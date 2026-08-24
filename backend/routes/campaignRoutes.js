@@ -266,11 +266,26 @@ async function regenerateCampaignDialplanFile() {
 
 /*
 ==================================================
-GET /api/admin/campaigns
+GET /api/admin/campaigns?includeInactive=true (optional)
+==================================================
+REAL BUG FIX: this previously returned every campaign regardless of
+`active`, so a deleted campaign (DELETE sets active='N', it does not
+hard-delete the row — see that route's own comment) never actually
+disappeared from the admin table, just showed "Active: No" forever.
+Confirmed via a real delete attempt where the row stayed listed and it
+looked like the delete had silently failed, even though the DID/
+settings rows WERE correctly removed underneath.
+
+Defaults to active-only now, matching what an admin actually expects
+from "the list of campaigns." Pass ?includeInactive=true to see
+deactivated ones too (e.g. to confirm a delete actually took effect,
+or to review history) — not exposed in the UI yet, but available if
+needed later.
 ==================================================
 */
 router.get("/", requireAdmin, async (req, res) => {
   try {
+    const { includeInactive } = req.query;
     const [rows] = await db.execute(
       `
         SELECT
@@ -281,6 +296,7 @@ router.get("/", requireAdmin, async (req, res) => {
         FROM asterisk.vicidial_campaigns c
         LEFT JOIN asterisk.vicidial_inbound_dids d ON d.campaign_id = c.campaign_id
         LEFT JOIN cmx_dialer.campaign_settings s ON s.campaign_id = c.campaign_id
+        ${includeInactive === "true" ? "" : "WHERE c.active = 'Y'"}
         ORDER BY c.campaign_id ASC
       `
     );
@@ -580,18 +596,24 @@ router.put(
 
 /*
 ==================================================
-DELETE /api/admin/campaigns/:campaignId
+POST /api/admin/campaigns/:campaignId/deactivate
 ==================================================
-Deletes the campaign_settings row and the vicidial_inbound_dids row
-(freeing that DID), deactivates (does NOT hard-delete) the
-vicidial_campaigns row itself — ViciDial's own campaign_id is
-referenced from lead/call-log history all over its schema, so a hard
-delete risks orphaning historical data. "active = N" matches how this
-app already treats similar cases (e.g. app_users soft-delete via
-`active`) more safely than a real DELETE.
+Frees the campaign's DID (removes its vicidial_inbound_dids row) and
+its cmx_dialer.campaign_settings row, and sets
+vicidial_campaigns.active = 'N' — but does NOT remove the
+vicidial_campaigns row itself. campaign_id stays reserved (a future
+attempt to CREATE a new campaign reusing this exact ID will still fail
+with a duplicate-entry error) and historical call/lead data referencing
+this campaign_id remains intact and correctly named in reports.
+
+This is what the old, single DELETE route used to do BEFORE it was
+split into this + a true hard-delete below, per explicit request —
+"Delete" and "Deactivate" are genuinely different operations with very
+different consequences, and conflating them under one button/label was
+misleading.
 ==================================================
 */
-router.delete("/:campaignId", requireAdmin, async (req, res) => {
+router.post("/:campaignId/deactivate", requireAdmin, async (req, res) => {
   const { campaignId } = req.params;
 
   const connection = await db.getConnection();
@@ -601,6 +623,63 @@ router.delete("/:campaignId", requireAdmin, async (req, res) => {
     await connection.execute(`UPDATE asterisk.vicidial_campaigns SET active = 'N' WHERE campaign_id = ?`, [campaignId]);
     await connection.execute(`DELETE FROM asterisk.vicidial_inbound_dids WHERE campaign_id = ?`, [campaignId]);
     await connection.execute(`DELETE FROM cmx_dialer.campaign_settings WHERE campaign_id = ?`, [campaignId]);
+
+    await connection.commit();
+  } catch (error) {
+    await connection.rollback();
+    console.error(`POST /api/admin/campaigns/${campaignId}/deactivate failed:`, error);
+    return res.status(500).json({ success: false, message: "Failed to deactivate campaign." });
+  } finally {
+    connection.release();
+  }
+
+  let reloadWarning;
+  try {
+    await regenerateCampaignDialplanFile();
+  } catch (error) {
+    console.error(`[campaignRoutes] Failed to regenerate dialplan after deactivating ${campaignId}:`, error.message);
+    reloadWarning = "Campaign was deactivated, but Asterisk wasn't reloaded. Check server logs.";
+  }
+
+  return res.json({ success: true, reloadWarning });
+});
+
+/*
+==================================================
+DELETE /api/admin/campaigns/:campaignId
+==================================================
+TRUE, PERMANENT hard delete — removes the vicidial_campaigns row
+itself, in addition to its DID and settings rows. campaign_id is freed
+for reuse immediately after this.
+
+REAL CONSEQUENCE, worth stating plainly: ViciDial's own schema does not
+enforce a real foreign key from cmx_dialer.dialer_call_log/
+inbound_call_log/agent_status_log's campaign_id columns back to
+vicidial_campaigns — so this delete will NOT throw an error or get
+blocked by historical call data referencing this campaign_id. It will,
+however, leave that historical data "orphaned" in the sense that any
+report/lookup joining back to vicidial_campaigns for this campaign_id's
+name (see statsService.js's own campaign-name lookups) will find
+nothing and show a blank/missing campaign name for those old calls
+going forward. Deactivate (above) does not have this consequence —
+use this only when truly permanent removal is intended.
+==================================================
+*/
+router.delete("/:campaignId", requireAdmin, async (req, res) => {
+  const { campaignId } = req.params;
+
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+
+    await connection.execute(`DELETE FROM asterisk.vicidial_inbound_dids WHERE campaign_id = ?`, [campaignId]);
+    await connection.execute(`DELETE FROM cmx_dialer.campaign_settings WHERE campaign_id = ?`, [campaignId]);
+    const [result] = await connection.execute(`DELETE FROM asterisk.vicidial_campaigns WHERE campaign_id = ?`, [campaignId]);
+
+    if (result.affectedRows === 0) {
+      await connection.rollback();
+      return res.status(404).json({ success: false, message: "Campaign not found." });
+    }
 
     await connection.commit();
   } catch (error) {

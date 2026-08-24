@@ -96,6 +96,15 @@ export default function DialerPage() {
   const [busy, setBusy] = useState(false);
   const [hasLeads, setHasLeads] = useState(true); // optimistic default — avoids a flash of "no leads" before the check resolves
   const [allCampaigns, setAllCampaigns] = useState([]); // full campaign list, only needed for AggregateStatsPanel's filter (admin/supervisor)
+  // How many campaigns THIS agent is actually assigned to — distinct
+  // from allCampaigns above (which is the full system-wide list, only
+  // fetched for admin/supervisor). Used purely to decide whether
+  // "Change campaign" should even be shown — an agent with only one
+  // assignment has nothing to change TO, so the control is just noise.
+  // Defaults to 2 (not 0/1) so the button doesn't flash-hide before
+  // this resolves — fails open toward showing it, never toward hiding
+  // a control someone might actually need.
+  const [myCampaignCount, setMyCampaignCount] = useState(2);
 
   const elapsedTimerRef = useRef(null);
 
@@ -107,6 +116,13 @@ export default function DialerPage() {
     }
     setCampaign(JSON.parse(stored));
   }, [navigate]);
+
+  useEffect(() => {
+    api
+      .getMyCampaigns()
+      .then((data) => setMyCampaignCount((data.campaigns || []).length))
+      .catch(() => {}); // fail open — keeps the default of 2, so "Change campaign" stays visible rather than silently vanishing on an error
+  }, []);
 
   // Hide "Dial Next Number" entirely for campaigns with no leads at
   // all (e.g. CMXBSMSC, which is inbound-only and relies on the
@@ -574,15 +590,17 @@ export default function DialerPage() {
         <div className="dialer-topbar">
           <div>
             <h2 style={{ marginBottom: 4 }}>{campaign ? campaign.campaign_name : "…"}</h2>
-            <button
-              type="button"
-              className="link"
-              style={{ padding: 0 }}
-              onClick={handleChangeCampaign}
-              disabled={isCallActive}
-            >
-              Change campaign
-            </button>
+            {myCampaignCount >= 2 && (
+              <button
+                type="button"
+                className="link"
+                style={{ padding: 0 }}
+                onClick={handleChangeCampaign}
+                disabled={isCallActive}
+              >
+                Change campaign
+              </button>
+            )}
             {/* TEMPORARILY DISABLED — cmx_scn_suite's cross-app auth
                 config isn't correct yet on their end (ORIGIN_APP_VERIFY_URL
                 pointing at the wrong server/path, secret needs

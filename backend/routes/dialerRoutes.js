@@ -216,6 +216,48 @@ router.get("/campaigns", requireAuth, async (req, res) => {
 
 /*
 ==================================================
+CAMPAIGN LIST — scoped to the logged-in agent's own assignments
+==================================================
+GET /api/campaigns/mine
+
+NEW — deliberately a SEPARATE endpoint from GET /campaigns above, not a
+change to it. GET /campaigns returns every active campaign system-wide
+and is relied on by several admin/supervisor-only screens
+(AdminUsersSection's assignment checkboxes, LiveStatusDashboard's
+filter, ReportsPage's filter, DialerPage's own AggregateStatsPanel
+filter) that all genuinely need the FULL list, not just what the
+logged-in user happens to be assigned to. Scoping the existing route
+would have silently broken all of those.
+
+This one powers the "does this agent have 1 or 2+ campaigns" decision
+in CampaignSelectPage.jsx/DialerPage.jsx (auto-skip the picker, hide
+"Change campaign" when there's only one) — genuinely needs to be
+scoped to just this agent's own active
+cmx_dialer.agent_campaign_assignments rows.
+==================================================
+*/
+router.get("/campaigns/mine", requireAuth, async (req, res) => {
+  try {
+    const { appUserId } = req.session.agent;
+    const [rows] = await db.execute(
+      `
+        SELECT c.campaign_id, c.campaign_name, c.campaign_cid
+        FROM asterisk.vicidial_campaigns c
+        JOIN cmx_dialer.agent_campaign_assignments aca ON aca.campaign_id = c.campaign_id
+        WHERE aca.app_user_id = ? AND aca.active = 1 AND c.active = 'Y'
+        ORDER BY c.campaign_name ASC
+      `,
+      [appUserId]
+    );
+    return res.json({ success: true, campaigns: rows });
+  } catch (error) {
+    console.error("GET /api/campaigns/mine failed:", error);
+    return res.status(500).json({ success: false, message: "We could not load your campaigns. Please try again." });
+  }
+});
+
+/*
+==================================================
 AGENT STATUS
 ==================================================
 */

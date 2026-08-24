@@ -3,6 +3,23 @@ import { useNavigate } from "react-router-dom";
 import Header from "../components/Header";
 import { api } from "../api";
 
+/*
+==================================================
+CAMPAIGN SELECT PAGE
+==================================================
+UPDATED — uses getMyCampaigns() (scoped to the logged-in agent's own
+assignments via cmx_dialer.agent_campaign_assignments), not the
+unscoped getCampaigns() this used to call. Also auto-skips the picker
+entirely when the agent has EXACTLY ONE assigned campaign — no reason
+to make someone choose when there's only one real choice. That single
+campaign is auto-stored and the agent is sent straight to /dialer,
+same as if they'd manually selected it and clicked Continue.
+
+Genuinely 0 campaigns (not yet assigned to any) still shows the
+existing "No active campaigns found" message — nothing to auto-select
+in that case.
+==================================================
+*/
 export default function CampaignSelectPage() {
   const [campaigns, setCampaigns] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
@@ -12,11 +29,19 @@ export default function CampaignSelectPage() {
 
   useEffect(() => {
     api
-      .getCampaigns()
-      .then((data) => setCampaigns(data.campaigns))
+      .getMyCampaigns()
+      .then((data) => {
+        const list = data.campaigns || [];
+        if (list.length === 1) {
+          localStorage.setItem("cmx_dialer_campaign", JSON.stringify(list[0]));
+          navigate("/dialer", { replace: true });
+          return;
+        }
+        setCampaigns(list);
+      })
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
-  }, []);
+  }, [navigate]);
 
   function handleContinue() {
     const campaign = campaigns.find((c) => c.campaign_id === selectedId);
