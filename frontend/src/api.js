@@ -174,4 +174,11 @@ export const api = {
     request(`/admin/campaigns/${encodeURIComponent(campaignId)}/deactivate`, { method: "POST" }),
   deleteCampaign: (campaignId) =>
     request(`/admin/campaigns/${encodeURIComponent(campaignId)}`, { method: "DELETE" }),
+
+  // Recordings — filters sent as a pre-built query string (see
+  // AdminRecordingsSection.jsx) since the filter set is optional/
+  // combinable rather than a fixed positional list of args.
+  getRecordings: (queryString) => request(`/admin/recordings${queryString ? `?${queryString}` : ""}`),
+  getRecordingPlaybackUrl: (callId) =>
+    request(`/admin/recordings/${encodeURIComponent(callId)}/playback-url`),
 };
