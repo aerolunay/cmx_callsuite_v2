@@ -93,6 +93,24 @@ function isConnected() {
 }
 
 // Promise-based wrapper around AMI actions (Originate, Hangup, etc.)
+//
+// REAL BUG FIX: the asterisk-manager callback's `err` param only ever
+// fires on a connection/protocol-level failure — Asterisk reporting
+// that the ACTION ITSELF failed (a completely normal, valid AMI
+// response with response: "Error", e.g. "No such conference", "Channel
+// not found") comes back through this exact same success-callback path
+// with `err` null. Every sendAction() call in this file was silently
+// treating "AMI accepted the request over the wire" as "the action
+// actually succeeded" — confirmed as the root cause of recordings
+// never starting on this server (ConfbridgeStartRecord silently
+// failing every single time, 0 of 45 real calls ever producing a
+// recording, with zero visibility into why — the only symptom was a
+// "recording file not found" error much later, at upload time,
+// nowhere near the actual point of failure). Now checks the real
+// response content and rejects with Asterisk's own message when it
+// reports Error, so every .catch() already written throughout this
+// app (dialerService.js, inboundCallService.js, etc.) finally
+// surfaces the REAL reason instead of nothing at all.
 function sendAction(action) {
   return new Promise((resolve, reject) => {
     if (!connected) {
@@ -101,6 +119,9 @@ function sendAction(action) {
 
     ami.action(action, (err, res) => {
       if (err) return reject(err);
+      if (res && res.response === "Error") {
+        return reject(new Error(res.message || `AMI action "${action.action}" failed.`));
+      }
       resolve(res);
     });
   });
