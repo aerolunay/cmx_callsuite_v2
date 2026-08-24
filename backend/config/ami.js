@@ -183,6 +183,25 @@ function reloadPjsip() {
   return sendAction({ action: "Command", command: "pjsip reload" });
 }
 
+/*
+==================================================
+reloadDialplan — NEW, for Campaigns
+==================================================
+Same reasoning/pattern as reloadPjsip() above — after our own backend
+regenerates the campaign-DID dialplan file (see campaignRoutes.js),
+this applies it. "dialplan reload" ONLY reloads extensions.conf (and
+anything it #includes) — it does NOT touch pjsip.conf/endpoints/
+transports at all, which is exactly why campaign create/update/delete
+is safe to do live: it can never disrupt an in-progress call on a
+DIFFERENT campaign, or on the shared trunk, the way a pjsip reload
+theoretically could if trunk config itself were ever being changed
+(which campaign management never does).
+==================================================
+*/
+function reloadDialplan() {
+  return sendAction({ action: "Command", command: "dialplan reload" });
+}
+
 connect();
 
 module.exports = {
@@ -194,4 +213,5 @@ module.exports = {
   startRecording,
   stopRecording,
   reloadPjsip,
+  reloadDialplan,
 };

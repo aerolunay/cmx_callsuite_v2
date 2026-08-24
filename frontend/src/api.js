@@ -3,12 +3,20 @@ Thin fetch wrapper. All requests go through Vite's dev proxy (see
 vite.config.js) so relative /api/* paths reach the Express backend on
 port 5060 without CORS headaches. credentials: "include" is required on
 every call so the session cookie actually gets sent/received.
+
+UPDATED — when options.body is a FormData instance (used for Campaign
+audio-upload requests), Content-Type is deliberately NOT set here.
+The browser must set its own multipart/form-data header WITH the
+correct boundary string itself; forcing "application/json" (or any
+manual multipart header) here would break the upload silently.
 */
 async function request(path, options = {}) {
+  const isFormData = options.body instanceof FormData;
+
   const res = await fetch(`/api${path}`, {
     credentials: "include",
     headers: {
-      "Content-Type": "application/json",
+      ...(isFormData ? {} : { "Content-Type": "application/json" }),
       ...(options.headers || {}),
     },
     ...options,
@@ -142,4 +150,17 @@ export const api = {
     if (campaignId) params.set("campaignId", campaignId);
     return request(`/admin/reports/campaign-agent-breakdown?${params.toString()}`);
   },
+
+  // Campaign management — create/edit auto-creates the DID routing,
+  // dialplan, and audio prompts server-side (see campaignRoutes.js).
+  // create/update use FormData (not JSON.stringify) since both may
+  // include the two audio file uploads — request() in this file
+  // already knows to skip forcing a JSON Content-Type when the body
+  // is a FormData instance.
+  getAdminCampaigns: () => request("/admin/campaigns"),
+  createCampaign: (formData) => request("/admin/campaigns", { method: "POST", body: formData }),
+  updateCampaign: (campaignId, formData) =>
+    request(`/admin/campaigns/${encodeURIComponent(campaignId)}`, { method: "PUT", body: formData }),
+  deleteCampaign: (campaignId) =>
+    request(`/admin/campaigns/${encodeURIComponent(campaignId)}`, { method: "DELETE" }),
 };

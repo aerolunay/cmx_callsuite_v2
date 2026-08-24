@@ -512,7 +512,7 @@ Confirmed from the real test call transcript:
 ==================================================
 */
 function registerCallEventTracking() {
-  ami.events.on("ConfbridgeJoin", (evt) => {
+  ami.events.on("ConfbridgeJoin", async (evt) => {
     for (const call of activeCalls.values()) {
       if (evt.conference !== call.room) continue;
       // Second join into an already-agent_connected room is the customer.
@@ -521,14 +521,26 @@ function registerCallEventTracking() {
         call.status = "customer_connected";
         broadcastCallStatus(call);
 
-        // BSMSC-only, automatic, no agent control — per explicit scope
-        // decision. Starts HERE (not at agent_connected) so the
-        // recording captures the actual conversation, not just the
+        // UPDATED — was hardcoded to `call.campaignId === "CMXBSMSC"`
+        // only. Now checks the real campaign_recording column on
+        // asterisk.vicidial_campaigns (set at campaign creation via
+        // campaignRoutes.js) so every campaign's own recording toggle
+        // is actually honored. Starts HERE (not at agent_connected) so
+        // the recording captures the actual conversation, not just the
         // agent sitting alone waiting for the customer to pick up.
-        if (call.campaignId === "CMXBSMSC") {
-          ami.startRecording(call.room, recordingPathForCall(call.callId)).catch((err) => {
-            console.error(`[dialerService] Failed to start recording for call ${call.callId}:`, err.message);
-          });
+        try {
+          const [recRows] = await db.execute(
+            `SELECT campaign_recording FROM asterisk.vicidial_campaigns WHERE campaign_id = ?`,
+            [call.campaignId]
+          );
+          const recordingSetting = recRows[0]?.campaign_recording;
+          if (recordingSetting && recordingSetting !== "NEVER") {
+            ami.startRecording(call.room, recordingPathForCall(call.callId)).catch((err) => {
+              console.error(`[dialerService] Failed to start recording for call ${call.callId}:`, err.message);
+            });
+          }
+        } catch (err) {
+          console.error(`[dialerService] Failed to check campaign_recording for ${call.campaignId}:`, err.message);
         }
       }
     }

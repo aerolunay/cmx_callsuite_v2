@@ -22,15 +22,25 @@ call system-wide). This version allocates a fresh room per call from a
 for outbound), so multiple callers can wait/connect at once without
 ever sharing a ConfBridge with a stranger.
 
-DID_TO_CAMPAIGN is the ONLY thing that ties an inbound call to a
-campaign on our side — this bypass never reads ViciDial's own
-DID/Ingroup/closer_campaigns linkage at all. Add an entry here the
-moment a new DID/campaign goes live; nothing else needs to change.
+UPDATED — DID-to-campaign lookup is now DB-backed, not hardcoded.
+Previously this was a hardcoded DID_TO_CAMPAIGN object literal, which
+meant a brand-new campaign's DID would silently fail
+(allocateInboundRoom would throw "No campaign configured for DID") until
+someone edited this file and redeployed the backend. Now reads
+asterisk.vicidial_inbound_dids directly (did_pattern -> campaign_id) —
+the same real, native ViciDial table campaignRoutes.js writes a row
+into when a campaign is created. Still bypasses ViciDial's own
+AGI/Ingroup routing entirely — this only reads did_pattern/campaign_id/
+did_active from that table, nothing else.
 ==================================================
 */
-const DID_TO_CAMPAIGN = {
-  "6468016974": "CMXBSMSC",
-};
+async function lookupCampaignForDid(did) {
+  const [rows] = await db.execute(
+    `SELECT campaign_id FROM asterisk.vicidial_inbound_dids WHERE did_pattern = ? AND did_active = 'Y' LIMIT 1`,
+    [did]
+  );
+  return rows.length > 0 ? rows[0].campaign_id : null;
+}
 
 /*
 ==================================================
@@ -146,15 +156,21 @@ Map entry in "awaiting_customer" status so the eventual ConfbridgeJoin
 event (which only carries room/channel, no campaign info) has
 something to attach to.
 
-Throws if the DID isn't in DID_TO_CAMPAIGN — internalRoutes.js turns
-that into a 4xx, and the dialplan should treat an empty CURL() result
-as "no room allocated" (see the dialplan snippet in the handoff notes).
+NOW ASYNC — the DID-to-campaign lookup is a real DB query (see
+lookupCampaignForDid above), not an in-memory object read anymore.
+internalRoutes.js already awaits this correctly since its own route
+handler is async.
+
+Throws if the DID isn't found (or isn't active) in
+asterisk.vicidial_inbound_dids — internalRoutes.js turns that into a
+5xx, and the dialplan should treat an empty CURL() result as "no room
+allocated" (see the dialplan snippet in the handoff notes).
 ==================================================
 */
-function allocateInboundRoom(did) {
-  const campaignId = DID_TO_CAMPAIGN[did];
+async function allocateInboundRoom(did) {
+  const campaignId = await lookupCampaignForDid(did);
   if (!campaignId) {
-    throw new Error(`No campaign configured for DID "${did}" — add it to DID_TO_CAMPAIGN.`);
+    throw new Error(`No active campaign found for DID "${did}" in asterisk.vicidial_inbound_dids.`);
   }
 
   const suffix = allocateRoomSuffix();
@@ -481,7 +497,7 @@ function findByChannel(channel) {
 }
 
 function registerInboundEventTracking() {
-  ami.events.on("ConfbridgeJoin", (evt) => {
+  ami.events.on("ConfbridgeJoin", async (evt) => {
     const call = inboundCalls.get(evt.conference);
     if (!call) return; // not one of our rooms, or a room nobody pre-registered
 
@@ -513,16 +529,31 @@ function registerInboundEventTracking() {
       call.waitSeconds = Math.floor((new Date() - call.startedAt) / 1000);
       broadcastInboundStatus(call);
 
-      // BSMSC-only, automatic, no agent control — per explicit scope
-      // decision. Starts HERE — the moment the AGENT joins (the
-      // customer already joined earlier, in the awaiting_customer
-      // branch above) — matching the same "start once both parties
-      // are actually in the room together" principle used for
-      // outbound in dialerService.js.
-      if (call.campaignId === "CMXBSMSC") {
-        ami.startRecording(call.room, recordingPathForCall(call.callId)).catch((err) => {
-          console.error(`[inboundCallService] Failed to start recording for call ${call.callId}:`, err.message);
-        });
+      // UPDATED — was hardcoded to `call.campaignId === "CMXBSMSC"` only
+      // (per an earlier explicit scope decision, never generalized).
+      // Now checks the real, native campaign_recording column on
+      // asterisk.vicidial_campaigns instead, so every campaign's own
+      // recording toggle (set at creation via campaignRoutes.js) is
+      // actually honored, not just the one campaign this was first
+      // built for. NEVER = off, everything else (ONDEMAND/ALLCALLS/
+      // ALLFORCE) = on for this always-record-the-whole-room
+      // mechanism — ONDEMAND doesn't have a separate "on demand"
+      // trigger built anywhere in this app, so it's treated as "on"
+      // here rather than silently never recording; revisit if a real
+      // on-demand toggle is ever built.
+      try {
+        const [recRows] = await db.execute(
+          `SELECT campaign_recording FROM asterisk.vicidial_campaigns WHERE campaign_id = ?`,
+          [call.campaignId]
+        );
+        const recordingSetting = recRows[0]?.campaign_recording;
+        if (recordingSetting && recordingSetting !== "NEVER") {
+          ami.startRecording(call.room, recordingPathForCall(call.callId)).catch((err) => {
+            console.error(`[inboundCallService] Failed to start recording for call ${call.callId}:`, err.message);
+          });
+        }
+      } catch (err) {
+        console.error(`[inboundCallService] Failed to check campaign_recording for ${call.campaignId}:`, err.message);
       }
     }
   });

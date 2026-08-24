@@ -56,7 +56,7 @@ right now" (see the GotoIf($["${ROOM}" = ""]?no_room) line in the
 snippet) rather than trying to ConfBridge into an empty string.
 ==================================================
 */
-router.get("/allocate-inbound-room", (req, res) => {
+router.get("/allocate-inbound-room", async (req, res) => {
   const { secret, did } = req.query;
 
   if (!isValidSecret(secret)) {
@@ -70,7 +70,7 @@ router.get("/allocate-inbound-room", (req, res) => {
   }
 
   try {
-    const room = inboundCallService.allocateInboundRoom(did);
+    const room = await inboundCallService.allocateInboundRoom(did);
     return res.type("text/plain").send(room);
   } catch (err) {
     console.error(`[internalRoutes] Failed to allocate an inbound room for DID ${did}:`, err.message);

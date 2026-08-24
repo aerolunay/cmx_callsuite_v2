@@ -18,6 +18,7 @@ require("./services/microsipOutboundService").start(); // Phase 8 — direct Mic
 const authRoutes = require("./routes/authRoutes");
 const dialerRoutes = require("./routes/dialerRoutes");
 const adminRoutes = require("./routes/adminRoutes");
+const campaignRoutes = require("./routes/campaignRoutes");
 const internalRoutes = require("./routes/internalRoutes");
 
 const app = express();
@@ -127,6 +128,7 @@ API ROUTES
 app.use("/api/auth", authRoutes);
 app.use("/api", dialerRoutes);
 app.use("/api/admin", adminRoutes);
+app.use("/api/admin/campaigns", campaignRoutes);
 
 // Not session-authenticated — called by Asterisk's dialplan via
 // CURL(), protected by INTERNAL_API_SECRET instead. See

@@ -4,6 +4,7 @@ import Header from "../components/Header";
 import { useAuth } from "../context/AuthContext";
 import AdminUsersSection from "../components/admin/AdminUsersSection";
 import AdminVicidialUsersSection from "../components/admin/AdminVicidialUsersSection";
+import AdminCampaignsSection from "../components/admin/AdminCampaignsSection";
 
 /*
 ==================================================
@@ -26,8 +27,13 @@ GET/PUT/DELETE /phones routes still exist for any legacy/orphaned
 phone cleanup, but there is deliberately no UI surface for them anymore
 here — go through the database directly if that's ever needed.
 
-Campaigns and DID/Trunk Setup remain honest "not yet built"
-placeholders — their backend endpoints don't exist yet.
+Campaigns is now live — creating one auto-creates its DID routing,
+audio prompts, and dialplan (see campaignRoutes.js/
+AdminCampaignsSection.jsx). DID/Trunk Setup remains an honest
+"not yet built" placeholder — the shared outbound trunk (CMXSandbox)
+is a one-time, already-existing piece of infrastructure that campaign
+creation deliberately never touches, so there's nothing per-campaign
+for this screen to manage yet.
 ==================================================
 */
 const SECTIONS = [
@@ -68,16 +74,7 @@ export default function AdminPage() {
           <div className="admin-content">
             {activeSection === "users" && <AdminUsersSection />}
             {activeSection === "vicidial-users" && <AdminVicidialUsersSection />}
-
-            {activeSection === "campaigns" && (
-              <div className="card">
-                <h3>Campaigns</h3>
-                <p>
-                  Campaign management isn't built yet — next in the ViciDial admin migration
-                  sequence.
-                </p>
-              </div>
-            )}
+            {activeSection === "campaigns" && <AdminCampaignsSection />}
 
             {activeSection === "trunks" && (
               <div className="card">
