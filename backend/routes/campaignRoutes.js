@@ -672,6 +672,17 @@ router.delete("/:campaignId", requireAdmin, async (req, res) => {
   try {
     await connection.beginTransaction();
 
+    // REAL BUG FIX: agent_campaign_assignments rows referencing this
+    // campaign_id were never cleaned up here — confirmed via a real
+    // delete where an agent's Users-table row kept showing the
+    // deleted campaign's ID forever afterward, since nothing removed
+    // the assignment row itself. Only done here (hard delete), NOT in
+    // /deactivate above — a deactivated campaign might come back, and
+    // agents should regain access automatically if it does; a
+    // permanently deleted one never will, so its assignments are
+    // genuinely orphaned data at that point, not just temporarily
+    // inactive.
+    await connection.execute(`DELETE FROM cmx_dialer.agent_campaign_assignments WHERE campaign_id = ?`, [campaignId]);
     await connection.execute(`DELETE FROM asterisk.vicidial_inbound_dids WHERE campaign_id = ?`, [campaignId]);
     await connection.execute(`DELETE FROM cmx_dialer.campaign_settings WHERE campaign_id = ?`, [campaignId]);
     const [result] = await connection.execute(`DELETE FROM asterisk.vicidial_campaigns WHERE campaign_id = ?`, [campaignId]);
