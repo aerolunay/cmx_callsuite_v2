@@ -6,6 +6,7 @@ import DialerPage from "./pages/DialerPage";
 import AdminPage from "./pages/AdminPage";
 import LiveStatusDashboard from "./pages/LiveStatusDashboard";
 import ReportsPage from "./pages/ReportsPage";
+import RecordingsPage from "./pages/RecordingsPage";
 import ProtectedRoute from "./components/ProtectedRoute";
 
 export default function App() {
@@ -57,6 +58,14 @@ export default function App() {
         element={
           <ProtectedRoute>
             <ReportsPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/recordings"
+        element={
+          <ProtectedRoute>
+            <RecordingsPage />
           </ProtectedRoute>
         }
       />

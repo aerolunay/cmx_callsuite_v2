@@ -49,6 +49,16 @@ export default function Header({ agentStatus }) {
               </Link>
             </>
           )}
+          {/* Recordings — deliberately its own condition, not folded
+              into the admin-only block above, since Supervisors need
+              this without the rest of what admin-only unlocks. Will
+              need widening once Training & Quality/Account Manager
+              roles exist. */}
+          {(agent.accessLevel === "admin" || agent.accessLevel === "supervisor") && (
+            <Link to="/recordings" className="header-admin-link">
+              Recordings
+            </Link>
+          )}
           <div className="header-user">
             <div className="name">{agent.fullName}</div>
             <div className="meta">

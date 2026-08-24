@@ -175,10 +175,11 @@ export const api = {
   deleteCampaign: (campaignId) =>
     request(`/admin/campaigns/${encodeURIComponent(campaignId)}`, { method: "DELETE" }),
 
-  // Recordings — filters sent as a pre-built query string (see
-  // AdminRecordingsSection.jsx) since the filter set is optional/
-  // combinable rather than a fixed positional list of args.
-  getRecordings: (queryString) => request(`/admin/recordings${queryString ? `?${queryString}` : ""}`),
+  // Recordings — deliberately at /recordings, not /admin/recordings,
+  // since this is now its own standalone page (RecordingsPage.jsx),
+  // not part of Admin — gated server-side by requireAdminOrSupervisor
+  // in dialerRoutes.js, not requireAdmin.
+  getRecordings: (queryString) => request(`/recordings${queryString ? `?${queryString}` : ""}`),
   getRecordingPlaybackUrl: (callId) =>
-    request(`/admin/recordings/${encodeURIComponent(callId)}/playback-url`),
+    request(`/recordings/${encodeURIComponent(callId)}/playback-url`),
 };

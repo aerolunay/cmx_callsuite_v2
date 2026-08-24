@@ -25,6 +25,29 @@ function requireAuth(req, res, next) {
   return next();
 }
 
+/*
+==================================================
+requireAdminOrSupervisor
+==================================================
+Gates the Recordings routes below — Recordings is deliberately its own
+top-level page (see RecordingsPage.jsx), NOT part of Admin, per
+explicit request: Supervisors need this without being granted the full
+Admin page and everything else it exposes. Will need widening once
+Training & Quality/Account Manager roles exist (they need this too,
+per the access-level spec) — not built yet, so only admin/supervisor
+for now.
+==================================================
+*/
+function requireAdminOrSupervisor(req, res, next) {
+  if (!req.session || !req.session.authenticated || !req.session.agent) {
+    return res.status(401).json({ success: false, message: "Authentication required." });
+  }
+  if (req.session.agent.accessLevel !== "admin" && req.session.agent.accessLevel !== "supervisor") {
+    return res.status(403).json({ success: false, message: "Admin or Supervisor access required." });
+  }
+  return next();
+}
+
 // Shared registration password for every PJSIP phone endpoint — same
 // value adminRoutes.js writes into every wizard-generated endpoint's
 // auth block (see PHONE_REGISTRATION_PASSWORD there). Not per-agent
@@ -802,6 +825,124 @@ router.post("/dialer/screening-handoff-code", requireAuth, (req, res) => {
   } catch (error) {
     console.error("POST /api/dialer/screening-handoff-code failed:", error);
     return res.status(500).json({ success: false, message: "Failed to generate handoff code." });
+  }
+});
+
+/*
+==================================================
+RECORDINGS — list (filtered) + on-demand playback URL
+==================================================
+
+Same "UNION dialer_call_log + inbound_call_log, wrap in a subquery,
+filter the outer query" pattern already used by GET /total-calls above
+— only rows with a real recording_key are included at all (a call that
+was never recorded has nothing to list here). agentName filters on
+app_users.full_name via LIKE, not an exact match — lets an admin type
+a partial name rather than needing the exact ViciDial username.
+
+Does NOT return a playback URL directly — S3 URLs are time-limited
+presigned links (1 hour expiry, see recordingUploadService.js), so
+generating one for every row on every list load would be wasteful and
+mostly expire unused. The frontend calls the second route below,
+on-demand, only when an admin actually clicks Play on a specific row.
+==================================================
+*/
+router.get("/recordings", requireAdminOrSupervisor, async (req, res) => {
+  try {
+    const { startDate, endDate, campaignId, agentName } = req.query;
+
+    const params = [];
+    let dateFilter = "";
+    if (startDate) {
+      dateFilter += " AND combined.call_started_at >= ?";
+      params.push(`${startDate} 00:00:00`);
+    }
+    if (endDate) {
+      dateFilter += " AND combined.call_started_at <= ?";
+      params.push(`${endDate} 23:59:59`);
+    }
+
+    let campaignFilter = "";
+    if (campaignId) {
+      campaignFilter = " AND combined.campaign_id = ?";
+      params.push(campaignId);
+    }
+
+    let agentFilter = "";
+    if (agentName) {
+      agentFilter = " AND combined.agent_name LIKE ?";
+      params.push(`%${agentName}%`);
+    }
+
+    const [rows] = await db.execute(
+      `
+        SELECT combined.call_id, combined.campaign_id, combined.agent_user, combined.agent_name,
+               combined.phone_number, combined.call_started_at, combined.call_ended_at,
+               combined.direction, combined.recording_key
+        FROM (
+          SELECT
+            d.call_id, d.campaign_id, d.agent_user, au.full_name AS agent_name,
+            d.phone_number, d.call_started_at, d.call_ended_at, d.recording_key, 'outbound' AS direction
+          FROM cmx_dialer.dialer_call_log d
+          LEFT JOIN cmx_dialer.app_users au ON au.vicidial_user = d.agent_user
+          WHERE d.recording_key IS NOT NULL
+
+          UNION ALL
+
+          SELECT
+            i.call_id, i.campaign_id, i.agent_user, au.full_name AS agent_name,
+            i.caller_id_number AS phone_number, i.call_started_at, i.call_ended_at, i.recording_key, 'inbound' AS direction
+          FROM cmx_dialer.inbound_call_log i
+          LEFT JOIN cmx_dialer.app_users au ON au.vicidial_user = i.agent_user
+          WHERE i.recording_key IS NOT NULL
+        ) combined
+        WHERE 1=1 ${dateFilter} ${campaignFilter} ${agentFilter}
+        ORDER BY combined.call_started_at DESC
+        LIMIT 200
+      `,
+      params
+    );
+
+    return res.json({ success: true, recordings: rows });
+  } catch (error) {
+    console.error("GET /api/recordings failed:", error);
+    return res.status(500).json({ success: false, message: "Failed to load recordings." });
+  }
+});
+
+/*
+==================================================
+GET /api/recordings/:callId/playback-url
+==================================================
+Generates a fresh, 1-hour presigned URL on demand — the callId is
+looked up against BOTH tables (a callId is a UUID, unique regardless
+of which table it came from) since the caller doesn't know/care which
+direction it was.
+==================================================
+*/
+router.get("/recordings/:callId/playback-url", requireAdminOrSupervisor, async (req, res) => {
+  try {
+    const { callId } = req.params;
+
+    const [rows] = await db.execute(
+      `
+        SELECT recording_key FROM cmx_dialer.dialer_call_log WHERE call_id = ? AND recording_key IS NOT NULL
+        UNION ALL
+        SELECT recording_key FROM cmx_dialer.inbound_call_log WHERE call_id = ? AND recording_key IS NOT NULL
+        LIMIT 1
+      `,
+      [callId, callId]
+    );
+
+    if (!rows.length) {
+      return res.status(404).json({ success: false, message: "No recording found for this call." });
+    }
+
+    const url = await recordingUploadService.getPlaybackUrl(rows[0].recording_key);
+    return res.json({ success: true, url });
+  } catch (error) {
+    console.error(`GET /api/recordings/${req.params.callId}/playback-url failed:`, error);
+    return res.status(500).json({ success: false, message: "Failed to generate playback URL." });
   }
 });
 

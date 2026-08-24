@@ -12,7 +12,6 @@ const ws = require("../config/ws");
 const ami = require("../config/ami");
 const { transporter } = require("../config/mailer");
 const { buildWelcomeEmail } = require("../services/emailTemplates");
-const recordingUploadService = require("../services/recordingUploadService");
 
 const router = express.Router();
 
@@ -1430,124 +1429,6 @@ router.get("/reports/campaign-agent-breakdown", requireAdmin, async (req, res) =
   } catch (error) {
     console.error("GET /api/admin/reports/campaign-agent-breakdown failed:", error);
     return res.status(500).json({ success: false, message: error.message || "Failed to load report." });
-  }
-});
-
-/*
-==================================================
-RECORDINGS — list (filtered) + on-demand playback URL
-==================================================
-
-Same "UNION dialer_call_log + inbound_call_log, wrap in a subquery,
-filter the outer query" pattern already used by GET /total-calls above
-— only rows with a real recording_key are included at all (a call that
-was never recorded has nothing to list here). agentName filters on
-app_users.full_name via LIKE, not an exact match — lets an admin type
-a partial name rather than needing the exact ViciDial username.
-
-Does NOT return a playback URL directly — S3 URLs are time-limited
-presigned links (1 hour expiry, see recordingUploadService.js), so
-generating one for every row on every list load would be wasteful and
-mostly expire unused. The frontend calls the second route below,
-on-demand, only when an admin actually clicks Play on a specific row.
-==================================================
-*/
-router.get("/recordings", requireAdmin, async (req, res) => {
-  try {
-    const { startDate, endDate, campaignId, agentName } = req.query;
-
-    const params = [];
-    let dateFilter = "";
-    if (startDate) {
-      dateFilter += " AND combined.call_started_at >= ?";
-      params.push(`${startDate} 00:00:00`);
-    }
-    if (endDate) {
-      dateFilter += " AND combined.call_started_at <= ?";
-      params.push(`${endDate} 23:59:59`);
-    }
-
-    let campaignFilter = "";
-    if (campaignId) {
-      campaignFilter = " AND combined.campaign_id = ?";
-      params.push(campaignId);
-    }
-
-    let agentFilter = "";
-    if (agentName) {
-      agentFilter = " AND combined.agent_name LIKE ?";
-      params.push(`%${agentName}%`);
-    }
-
-    const [rows] = await db.execute(
-      `
-        SELECT combined.call_id, combined.campaign_id, combined.agent_user, combined.agent_name,
-               combined.phone_number, combined.call_started_at, combined.call_ended_at,
-               combined.direction, combined.recording_key
-        FROM (
-          SELECT
-            d.call_id, d.campaign_id, d.agent_user, au.full_name AS agent_name,
-            d.phone_number, d.call_started_at, d.call_ended_at, d.recording_key, 'outbound' AS direction
-          FROM cmx_dialer.dialer_call_log d
-          LEFT JOIN cmx_dialer.app_users au ON au.vicidial_user = d.agent_user
-          WHERE d.recording_key IS NOT NULL
-
-          UNION ALL
-
-          SELECT
-            i.call_id, i.campaign_id, i.agent_user, au.full_name AS agent_name,
-            i.caller_id_number AS phone_number, i.call_started_at, i.call_ended_at, i.recording_key, 'inbound' AS direction
-          FROM cmx_dialer.inbound_call_log i
-          LEFT JOIN cmx_dialer.app_users au ON au.vicidial_user = i.agent_user
-          WHERE i.recording_key IS NOT NULL
-        ) combined
-        WHERE 1=1 ${dateFilter} ${campaignFilter} ${agentFilter}
-        ORDER BY combined.call_started_at DESC
-        LIMIT 200
-      `,
-      params
-    );
-
-    return res.json({ success: true, recordings: rows });
-  } catch (error) {
-    console.error("GET /api/admin/recordings failed:", error);
-    return res.status(500).json({ success: false, message: "Failed to load recordings." });
-  }
-});
-
-/*
-==================================================
-GET /api/admin/recordings/:callId/playback-url
-==================================================
-Generates a fresh, 1-hour presigned URL on demand — the callId is
-looked up against BOTH tables (a callId is a UUID, unique regardless
-of which table it came from) since the caller doesn't know/care which
-direction it was.
-==================================================
-*/
-router.get("/recordings/:callId/playback-url", requireAdmin, async (req, res) => {
-  try {
-    const { callId } = req.params;
-
-    const [rows] = await db.execute(
-      `
-        SELECT recording_key FROM cmx_dialer.dialer_call_log WHERE call_id = ? AND recording_key IS NOT NULL
-        UNION ALL
-        SELECT recording_key FROM cmx_dialer.inbound_call_log WHERE call_id = ? AND recording_key IS NOT NULL
-        LIMIT 1
-      `,
-      [callId, callId]
-    );
-
-    if (!rows.length) {
-      return res.status(404).json({ success: false, message: "No recording found for this call." });
-    }
-
-    const url = await recordingUploadService.getPlaybackUrl(rows[0].recording_key);
-    return res.json({ success: true, url });
-  } catch (error) {
-    console.error(`GET /api/admin/recordings/${req.params.callId}/playback-url failed:`, error);
-    return res.status(500).json({ success: false, message: "Failed to generate playback URL." });
   }
 });
 
