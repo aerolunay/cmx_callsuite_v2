@@ -4,19 +4,27 @@ import Header from "../components/Header";
 import { useAuth } from "../context/AuthContext";
 import AdminUsersSection from "../components/admin/AdminUsersSection";
 import AdminVicidialUsersSection from "../components/admin/AdminVicidialUsersSection";
-import AdminPhonesSection from "../components/admin/AdminPhonesSection";
 
 /*
 ==================================================
 ADMIN PAGE — shell + section navigation
 ==================================================
 Nav shell with distinct sections — matches the real sequence agreed
-for the ViciDial-admin-migration project. ViciDial Users is now its
-own standalone section (separated out from being bundled inside user
-creation, per explicit request) — sits right after Users, before
-Phones, since a ViciDial user is the thing that connects an app user to
-a phone at all (see AdminVicidialUsersSection's own comment for the
-full reasoning on why that chain can't be skipped).
+for the ViciDial-admin-migration project. Phone Login is its own
+standalone section (separated out from being bundled inside user
+creation, per explicit request) — sits right after Users, since a
+Phone Login is the thing that connects an app user to a phone at all
+(see AdminVicidialUsersSection's own comment for the full reasoning on
+why that chain can't be skipped).
+
+Phone Extensions (AdminPhonesSection) has been REMOVED entirely, per
+explicit request — standalone phone-extension creation/management is
+no longer part of this admin UI at all. Every phone now only ever
+exists as a side effect of creating (or deleting) a Phone Login; there
+is nothing left for a separate Phones screen to manage. The backend's
+GET/PUT/DELETE /phones routes still exist for any legacy/orphaned
+phone cleanup, but there is deliberately no UI surface for them anymore
+here — go through the database directly if that's ever needed.
 
 Campaigns and DID/Trunk Setup remain honest "not yet built"
 placeholders — their backend endpoints don't exist yet.
@@ -25,7 +33,6 @@ placeholders — their backend endpoints don't exist yet.
 const SECTIONS = [
   { key: "users", label: "Users" },
   { key: "vicidial-users", label: "Phone Login" },
-  { key: "phones", label: "Phone Extensions" },
   { key: "campaigns", label: "Campaigns" },
   { key: "trunks", label: "DID / Trunk Setup" },
 ];
@@ -61,7 +68,6 @@ export default function AdminPage() {
           <div className="admin-content">
             {activeSection === "users" && <AdminUsersSection />}
             {activeSection === "vicidial-users" && <AdminVicidialUsersSection />}
-            {activeSection === "phones" && <AdminPhonesSection />}
 
             {activeSection === "campaigns" && (
               <div className="card">
