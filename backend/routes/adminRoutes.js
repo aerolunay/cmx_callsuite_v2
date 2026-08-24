@@ -500,58 +500,19 @@ router.get("/phones", requireAdmin, async (req, res) => {
   }
 });
 
+// DISABLED, per explicit request: standalone phone extension creation
+// is removed. Every phone extension is now created ONLY as a side
+// effect of POST /vicidial-users (see that route for the real logic) —
+// extension/login/fullname all come from that flow's username, and
+// pass/conf_secret always come from .env there too. Kept as a route
+// (rather than deleted outright) so any existing client/integration
+// gets a clear, actionable error instead of a silent 404.
 router.post("/phones", requireAdmin, async (req, res) => {
-  const { extension, login, fullname, active } = req.body;
-
-  if (!SERVER_IP) {
-    return res.status(500).json({ success: false, message: "SERVER_IP is not configured on this server." });
-  }
-  if (!PHONE_LOGIN_PASSWORD || !PHONE_REGISTRATION_PASSWORD) {
-    return res
-      .status(500)
-      .json({ success: false, message: "PHONE_LOGIN_PASSWORD/PHONE_REGISTRATION_PASSWORD are not configured on this server." });
-  }
-  if (!extension || !login) {
-    return res.status(400).json({ success: false, message: "extension and login are required." });
-  }
-
-  try {
-    await db.execute(
-      `
-        INSERT INTO asterisk.phones
-          (extension, server_ip, login, pass, conf_secret, fullname, active, protocol)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 'PJSIP')
-      `,
-      [
-        extension,
-        SERVER_IP,
-        login,
-        PHONE_LOGIN_PASSWORD,
-        PHONE_REGISTRATION_PASSWORD,
-        fullname || null,
-        active === false ? "N" : "Y",
-      ]
-    );
-
-    let reloadWarning;
-    try {
-      await regeneratePhoneWizardFile();
-    } catch (reloadError) {
-      console.error(`[adminRoutes] Failed to regenerate PJSIP wizard file after creating ${extension}:`, reloadError.message);
-      reloadWarning =
-        "Phone was saved, but applying it to Asterisk failed — it may not be callable yet. Check server logs.";
-    }
-
-    return res.json({ success: true, reloadWarning });
-  } catch (error) {
-    console.error("POST /api/admin/phones failed:", error);
-    if (error.code === "ER_DUP_ENTRY") {
-      return res
-        .status(409)
-        .json({ success: false, message: `Extension ${extension} already exists on this server.` });
-    }
-    return res.status(500).json({ success: false, message: "Failed to create phone." });
-  }
+  return res.status(410).json({
+    success: false,
+    message:
+      "Standalone phone extension creation has been removed. Create a Phone Login instead (Admin → Phone Login) — its phone extension is created automatically.",
+  });
 });
 
 // extension is treated as immutable once created — matching how the
@@ -682,15 +643,68 @@ router.get("/vicidial-users", requireAdmin, async (req, res) => {
   }
 });
 
+/*
+==================================================
+CREATE VICIDIAL USER — now also creates the Phone Extension
+==================================================
+POST /api/admin/vicidial-users
+Body: { username, fullName, userLevel, userGroup, active, createPhoneExtension }
+
+UPDATED BEHAVIOR (per explicit request):
+- `username` is now the ONE value that drives vicidial_users.user,
+  phone_login, AND email (all three set to the same value) — no more
+  separate phoneLogin/email inputs. Confirmed safe against real column
+  widths: user/phone_login are varchar(20), email is varchar(100), and
+  the placeholder ("e.g. 90099") confirms this field is meant to stay
+  short/extension-style, not a full email address — so no truncation
+  risk across any of these columns.
+- phone_pass is now ALWAYS PHONE_LOGIN_PASSWORD from .env — no longer
+  accepted from the request body, matching the same fixed-shared-
+  password pattern already used for asterisk.phones.pass elsewhere in
+  this file.
+- ViciDial User creation now ALSO creates the phone extension
+  (asterisk.phones row + regenerated PJSIP wizard file) in the SAME
+  transaction — the username becomes the phone's extension, login,
+  AND fullname/callerid too (matches buildPhoneWizardBlock's
+  `callerName` usage), per explicit request.
+- createPhoneExtension GATING: defaults to true for every user. Only
+  userLevel 7, 8, or 9 may set this to false and skip phone creation —
+  enforced server-side here (not just the frontend checkbox), since a
+  request body can't be trusted on its own. Any other userLevel
+  sending createPhoneExtension=false is silently forced back to true.
+==================================================
+*/
 router.post("/vicidial-users", requireAdmin, async (req, res) => {
-  const { username, fullName, phoneLogin, phonePass, userLevel, userGroup, email, active } = req.body;
+  const { username, fullName, userLevel, userGroup, active, createPhoneExtension } = req.body;
 
   if (!username) {
     return res.status(400).json({ success: false, message: "username is required." });
   }
 
+  const resolvedUserLevel = userLevel ? Number(userLevel) : 1;
+
+  const HIGH_LEVELS_ALLOWED_TO_SKIP_PHONE = [7, 8, 9];
+  const wantsToSkipPhone = createPhoneExtension === false;
+  const allowedToSkipPhone = HIGH_LEVELS_ALLOWED_TO_SKIP_PHONE.includes(resolvedUserLevel);
+  const shouldCreatePhone = !(wantsToSkipPhone && allowedToSkipPhone);
+
+  if (shouldCreatePhone) {
+    if (!SERVER_IP) {
+      return res.status(500).json({ success: false, message: "SERVER_IP is not configured on this server." });
+    }
+    if (!PHONE_LOGIN_PASSWORD || !PHONE_REGISTRATION_PASSWORD) {
+      return res.status(500).json({
+        success: false,
+        message: "PHONE_LOGIN_PASSWORD/PHONE_REGISTRATION_PASSWORD are not configured on this server.",
+      });
+    }
+  }
+
+  const connection = await db.getConnection();
   try {
-    await db.execute(
+    await connection.beginTransaction();
+
+    await connection.execute(
       `
         INSERT INTO asterisk.vicidial_users
           (user, pass, full_name, user_level, user_group, phone_login, phone_pass, email, active)
@@ -700,52 +714,87 @@ router.post("/vicidial-users", requireAdmin, async (req, res) => {
         username,
         "CXXXXXXXXXXC",
         fullName || null,
-        userLevel || 1,
+        resolvedUserLevel,
         userGroup || null,
-        phoneLogin || null,
-        phonePass || null,
-        email || null,
+        username, // phone_login = username
+        PHONE_LOGIN_PASSWORD, // now always from .env, not request body
+        username, // email = username, per explicit request
         active === false ? "N" : "Y",
       ]
     );
-    return res.json({ success: true, username });
+
+    let phoneCreated = false;
+    if (shouldCreatePhone) {
+      // extension = login = fullname (callerid) = username, per
+      // explicit request — the phone entry does NOT use the person's
+      // real fullName for its callerid, it uses the username.
+      await connection.execute(
+        `
+          INSERT INTO asterisk.phones
+            (extension, server_ip, login, pass, conf_secret, fullname, active, protocol)
+          VALUES (?, ?, ?, ?, ?, ?, 'Y', 'PJSIP')
+        `,
+        [username, SERVER_IP, username, PHONE_LOGIN_PASSWORD, PHONE_REGISTRATION_PASSWORD, username]
+      );
+      phoneCreated = true;
+    }
+
+    await connection.commit();
+
+    // Regenerate the PJSIP wizard file AFTER commit — a slow/failed
+    // Asterisk reload should never make the already-committed DB
+    // rows look like they failed to save.
+    let reloadWarning;
+    if (phoneCreated) {
+      try {
+        await regeneratePhoneWizardFile();
+      } catch (reloadError) {
+        console.error(`[adminRoutes] Failed to regenerate PJSIP wizard file after creating ${username}:`, reloadError.message);
+        reloadWarning =
+          "ViciDial user and phone extension were saved, but applying the phone to Asterisk failed — it may not be callable yet. Check server logs.";
+      }
+    }
+
+    return res.json({ success: true, username, phoneCreated, reloadWarning });
   } catch (error) {
+    await connection.rollback();
     console.error("POST /api/admin/vicidial-users failed:", error);
     if (error.code === "ER_DUP_ENTRY") {
-      return res.status(409).json({ success: false, message: `ViciDial username ${username} already exists.` });
+      return res
+        .status(409)
+        .json({ success: false, message: `ViciDial username ${username} already exists (or its phone extension does).` });
     }
     return res.status(500).json({ success: false, message: "Failed to create ViciDial user." });
+  } finally {
+    connection.release();
   }
 });
 
+// UPDATED: phone_login and email are no longer independently editable
+// here — both are derived from the (immutable) username at creation
+// time and stay in sync with it automatically, so there's nothing to
+// re-enter on edit. phone_pass is now ALWAYS reset to the current
+// PHONE_LOGIN_PASSWORD from .env on every save (same "always resync
+// to current standard" pattern already used for phones.pass/
+// conf_secret in PUT /phones/:extension), rather than an optional
+// admin-entered value.
 router.put("/vicidial-users/:username", requireAdmin, async (req, res) => {
   const { username } = req.params;
-  const { fullName, phoneLogin, phonePass, userLevel, userGroup, email, active } = req.body;
+  const { fullName, userLevel, userGroup, active } = req.body;
 
   try {
-    const params = [
-      fullName || null,
-      userLevel || 1,
-      userGroup || null,
-      phoneLogin || null,
-      email || null,
-      active === false ? "N" : "Y",
-    ];
-    let setClause = "full_name = ?, user_level = ?, user_group = ?, phone_login = ?, email = ?, active = ?";
-
-    // phonePass optional on update, same reasoning as the phones
-    // section — an admin editing other fields shouldn't be forced to
-    // re-type/reset the SIP password every time.
-    if (phonePass) {
-      setClause += ", phone_pass = ?";
-      params.push(phonePass);
-    }
-
-    params.push(username);
-
     const [result] = await db.execute(
-      `UPDATE asterisk.vicidial_users SET ${setClause} WHERE user = ?`,
-      params
+      `UPDATE asterisk.vicidial_users
+       SET full_name = ?, user_level = ?, user_group = ?, active = ?, phone_pass = ?
+       WHERE user = ?`,
+      [
+        fullName || null,
+        userLevel ? Number(userLevel) : 1,
+        userGroup || null,
+        active === false ? "N" : "Y",
+        PHONE_LOGIN_PASSWORD,
+        username,
+      ]
     );
 
     if (result.affectedRows === 0) {
@@ -759,16 +808,24 @@ router.put("/vicidial-users/:username", requireAdmin, async (req, res) => {
   }
 });
 
+// UPDATED: deleting a ViciDial user (now labeled "Phone Login" in the
+// UI) now ALSO deletes its matching asterisk.phones row, since phone
+// extensions are no longer created standalone — every phone that
+// exists was created alongside a ViciDial user with the same
+// extension/login value. Runs in a transaction so the two deletes
+// either both succeed or neither does, and the wizard file only
+// regenerates after a successful commit.
 router.delete("/vicidial-users/:username", requireAdmin, async (req, res) => {
   const { username } = req.params;
 
+  const connection = await db.getConnection();
   try {
     // Guard: refuse to delete a ViciDial user still bound to an app
     // user — that would leave app_users.vicidial_user pointing at a
     // row that no longer exists. The admin needs to release the
-    // binding first (edit that app user, set ViciDial User to
-    // None/Release) before deleting the ViciDial account itself.
-    const [boundCheck] = await db.execute(
+    // binding first (edit that app user, set Phone Login to
+    // None/Release) before deleting the account itself.
+    const [boundCheck] = await connection.execute(
       `SELECT app_user_id FROM cmx_dialer.app_users WHERE vicidial_user = ?`,
       [username]
     );
@@ -776,20 +833,47 @@ router.delete("/vicidial-users/:username", requireAdmin, async (req, res) => {
       return res.status(409).json({
         success: false,
         message:
-          "This ViciDial user is still bound to an app account. Unbind it first (edit that app user, set ViciDial User to None/Release).",
+          "This Phone Login is still bound to an app account. Unbind it first (edit that app user, set Phone Login to None/Release).",
       });
     }
 
-    const [result] = await db.execute(`DELETE FROM asterisk.vicidial_users WHERE user = ?`, [username]);
+    await connection.beginTransaction();
+
+    const [result] = await connection.execute(`DELETE FROM asterisk.vicidial_users WHERE user = ?`, [username]);
 
     if (result.affectedRows === 0) {
-      return res.status(404).json({ success: false, message: "ViciDial user not found." });
+      await connection.rollback();
+      return res.status(404).json({ success: false, message: "Phone Login not found." });
     }
 
-    return res.json({ success: true });
+    // Matches on extension alone here (not extension+server_ip) is
+    // intentional — username is globally unique in vicidial_users
+    // (UNI key on `user`), so there's exactly one phone row to clean
+    // up regardless of server. If this app is ever run against
+    // multiple servers sharing one asterisk DB, revisit this to also
+    // scope by SERVER_IP.
+    const [phoneResult] = await connection.execute(`DELETE FROM asterisk.phones WHERE extension = ?`, [username]);
+
+    await connection.commit();
+
+    let reloadWarning;
+    if (phoneResult.affectedRows > 0) {
+      try {
+        await regeneratePhoneWizardFile();
+      } catch (reloadError) {
+        console.error(`[adminRoutes] Failed to regenerate PJSIP wizard file after deleting ${username}:`, reloadError.message);
+        reloadWarning =
+          "Phone Login and its phone extension were deleted, but Asterisk wasn't reloaded. Check server logs.";
+      }
+    }
+
+    return res.json({ success: true, phoneDeleted: phoneResult.affectedRows > 0, reloadWarning });
   } catch (error) {
+    await connection.rollback();
     console.error("DELETE /api/admin/vicidial-users/:username failed:", error);
-    return res.status(500).json({ success: false, message: "Failed to delete ViciDial user." });
+    return res.status(500).json({ success: false, message: "Failed to delete Phone Login." });
+  } finally {
+    connection.release();
   }
 });
 

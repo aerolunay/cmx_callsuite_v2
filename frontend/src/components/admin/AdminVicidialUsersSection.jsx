@@ -3,16 +3,24 @@ import { api } from "../../api";
 
 /*
 ==================================================
-ADMIN VICIDIAL USERS SECTION — standalone
+ADMIN PHONE LOGIN SECTION — standalone
 ==================================================
-Creates/manages asterisk.vicidial_users rows independently of app_users
-entirely — matching admin.php's own separation, per explicit request.
-A user created here is immediately available in AdminUsersSection's
-"bind to an existing ViciDial user" dropdown, exactly like any
-pre-existing account.
+Creates/manages asterisk.vicidial_users rows (labeled "Phone Login" in
+this UI, since that's what the value actually functions as — a login
+that doubles as the phone extension/login/callerid) independently of
+app_users entirely — matching admin.php's own separation, per explicit
+request. A Phone Login created here is immediately available in
+AdminUsersSection's "bind to an existing Phone Login" dropdown, exactly
+like any pre-existing account.
+
+Creating a Phone Login here also creates its matching phone extension
+(asterisk.phones row) by default — see the checkbox below. Standalone
+phone-extension creation has been removed entirely (see
+AdminPhonesSection.jsx) — a phone now only ever comes from this flow.
+Deleting a Phone Login here also deletes its phone extension.
 
 username is treated as immutable once created (same reasoning as
-Phones' extension field) — renaming a live ViciDial username mid-use
+Phones' extension field used to have) — renaming a live login mid-use
 risks orphaning whatever it's bound to elsewhere.
 ==================================================
 */
@@ -22,12 +30,16 @@ export default function AdminVicidialUsersSection() {
 
   const [username, setUsername] = useState("");
   const [fullName, setFullName] = useState("");
-  const [phoneLogin, setPhoneLogin] = useState("");
-  const [phonePass, setPhonePass] = useState("");
   const [userLevel, setUserLevel] = useState("1");
   const [userGroup, setUserGroup] = useState("");
-  const [email, setEmail] = useState("");
   const [active, setActive] = useState(true);
+
+  // Phone extension is created alongside the ViciDial user by default.
+  // Checked + disabled unless userLevel is 7, 8, or 9 — those levels
+  // are the only ones allowed to opt a user out of getting a phone.
+  const [createPhoneExtension, setCreatePhoneExtension] = useState(true);
+  const numericUserLevel = Number(userLevel) || 1;
+  const canTogglePhoneExtension = [7, 8, 9].includes(numericUserLevel);
 
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
@@ -47,29 +59,28 @@ export default function AdminVicidialUsersSection() {
     loadAll();
   }, []);
 
+  useEffect(() => {
+    if (!canTogglePhoneExtension) {
+      setCreatePhoneExtension(true);
+    }
+  }, [canTogglePhoneExtension]);
+
   function resetForm() {
     setEditingUsername(null);
     setUsername("");
     setFullName("");
-    setPhoneLogin("");
-    setPhonePass("");
     setUserLevel("1");
     setUserGroup("");
-    setEmail("");
     setActive(true);
+    setCreatePhoneExtension(true);
   }
 
   function handleStartEdit(vu) {
     setEditingUsername(vu.user);
     setUsername(vu.user);
     setFullName(vu.full_name || "");
-    setPhoneLogin(vu.phone_login || "");
-    // Password deliberately left blank on edit — same reasoning as
-    // Phones: blank means "keep current," never pre-fill a real value.
-    setPhonePass("");
     setUserLevel(String(vu.user_level ?? "1"));
     setUserGroup(vu.user_group || "");
-    setEmail(vu.email || "");
     setActive(vu.active === "Y");
     setError("");
     setSuccess("");
@@ -78,7 +89,7 @@ export default function AdminVicidialUsersSection() {
   async function handleDelete(vu) {
     if (
       !window.confirm(
-        `Permanently delete ViciDial user ${vu.user}? This can't be undone. If it's still bound to an app user, this will be blocked until you unbind it first.`
+        `Permanently delete Phone Login ${vu.user}? This also deletes its matching phone extension, if one exists. This can't be undone. If it's still bound to an app user, this will be blocked until you unbind it first.`
       )
     ) {
       return;
@@ -103,29 +114,27 @@ export default function AdminVicidialUsersSection() {
     setBusy(true);
     try {
       if (editingUsername) {
-        const payload = {
+        await api.updateVicidialUser(editingUsername, {
           fullName,
-          phoneLogin: phoneLogin || null,
           userLevel: userLevel ? Number(userLevel) : 1,
           userGroup: userGroup || null,
-          email: email || null,
-          active,
-        };
-        if (phonePass.trim()) payload.phonePass = phonePass.trim();
-        await api.updateVicidialUser(editingUsername, payload);
-        setSuccess(`ViciDial user ${editingUsername} updated.`);
-      } else {
-        await api.createVicidialUser({
-          username,
-          fullName,
-          phoneLogin: phoneLogin || null,
-          phonePass: phonePass || null,
-          userLevel: userLevel ? Number(userLevel) : 1,
-          userGroup: userGroup || null,
-          email: email || null,
           active,
         });
-        setSuccess(`ViciDial user ${username} created.`);
+        setSuccess(`Phone Login ${editingUsername} updated.`);
+      } else {
+        const result = await api.createVicidialUser({
+          username,
+          fullName,
+          userLevel: userLevel ? Number(userLevel) : 1,
+          userGroup: userGroup || null,
+          active,
+          createPhoneExtension,
+        });
+        setSuccess(
+          result?.phoneCreated
+            ? `Phone Login ${username} created, with a matching phone extension.`
+            : `Phone Login ${username} created (no phone extension, per selection).`
+        );
       }
 
       resetForm();
@@ -139,7 +148,7 @@ export default function AdminVicidialUsersSection() {
 
   return (
     <>
-      <h3>{editingUsername ? `Edit ViciDial User ${editingUsername}` : "Create ViciDial User"}</h3>
+      <h3>{editingUsername ? `Edit Phone Login ${editingUsername}` : "Create Phone Login"}</h3>
 
       {error && <div className="error">{error}</div>}
       {success && <div className="success">{success}</div>}
@@ -151,7 +160,7 @@ export default function AdminVicidialUsersSection() {
           <div className="dialer-main">
             <div className="card">
               <form onSubmit={handleSubmit}>
-                <label className="comments-label">Username</label>
+                <label className="comments-label">Phone Login</label>
                 <input
                   type="text"
                   value={username}
@@ -162,28 +171,17 @@ export default function AdminVicidialUsersSection() {
                 />
                 {editingUsername && (
                   <p style={{ fontSize: 13, color: "#888", marginTop: 4 }}>
-                    Username can't be changed once created — delete and recreate instead.
+                    Phone Login can't be changed once created — delete and recreate instead.
                   </p>
                 )}
 
                 <label className="comments-label">Full Name</label>
                 <input type="text" value={fullName} onChange={(e) => setFullName(e.target.value)} />
 
-                <label className="comments-label">Email</label>
-                <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
-
-                <label className="comments-label">Phone Login (extension binding)</label>
-                <input
-                  type="text"
-                  value={phoneLogin}
-                  onChange={(e) => setPhoneLogin(e.target.value)}
-                  placeholder="Matches an extension under Phone Extensions"
-                />
-
-                <label className="comments-label">
-                  Phone Password {editingUsername && "(leave blank to keep current)"}
-                </label>
-                <input type="text" value={phonePass} onChange={(e) => setPhonePass(e.target.value)} />
+                <p style={{ fontSize: 13, color: "#888", margin: "4px 0 10px" }}>
+                  This Phone Login value also becomes the phone's extension, login, and caller
+                  name (if a phone extension is created below) — no separate entry needed.
+                </p>
 
                 <label className="comments-label">User Level</label>
                 <input
@@ -202,9 +200,26 @@ export default function AdminVicidialUsersSection() {
                   Active
                 </label>
 
+                {!editingUsername && (
+                  <label className="disposition-row" style={{ marginTop: 10 }}>
+                    <input
+                      type="checkbox"
+                      checked={createPhoneExtension}
+                      disabled={!canTogglePhoneExtension}
+                      onChange={(e) => setCreatePhoneExtension(e.target.checked)}
+                    />
+                    Create Phone Extension for this account
+                    {!canTogglePhoneExtension && (
+                      <span style={{ fontSize: 12, color: "#888", marginLeft: 6 }}>
+                        (only optional for User Level 7, 8, or 9)
+                      </span>
+                    )}
+                  </label>
+                )}
+
                 <div style={{ marginTop: 14, display: "flex", gap: 8 }}>
                   <button className="button-secondary" type="submit" disabled={busy}>
-                    {busy ? "Saving…" : editingUsername ? "Save Changes" : "Create ViciDial User"}
+                    {busy ? "Saving…" : editingUsername ? "Save Changes" : "Create Phone Login"}
                   </button>
                   {editingUsername && (
                     <button type="button" className="link" onClick={resetForm} disabled={busy}>
@@ -218,13 +233,13 @@ export default function AdminVicidialUsersSection() {
 
           <div className="dialer-side">
             <div className="card call-log-card">
-              <h3>Existing ViciDial Users</h3>
-              {vicidialUsers.length === 0 && <p>No ViciDial users yet.</p>}
+              <h3>Existing Phone Logins</h3>
+              {vicidialUsers.length === 0 && <p>No Phone Logins yet.</p>}
               {vicidialUsers.length > 0 && (
                 <table className="call-log-table">
                   <thead>
                     <tr>
-                      <th>Username</th>
+                      <th>Phone Login</th>
                       <th>Full Name</th>
                       <th>Phone</th>
                       <th>Active</th>

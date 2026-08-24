@@ -107,12 +107,11 @@ export const api = {
     }),
   deleteVicidialUser: (username) =>
     request(`/admin/vicidial-users/${encodeURIComponent(username)}`, { method: "DELETE" }),
-  // Phones — second piece of the ViciDial-admin-migration project.
-  // extension is treated as immutable — no rename endpoint exists,
-  // matching adminRoutes.js's own design (delete + recreate instead).
+  // Phones — view/edit/delete only now. Standalone creation removed:
+  // every phone is created as a side effect of createVicidialUser()
+  // above. extension is treated as immutable — no rename endpoint
+  // exists, matching adminRoutes.js's own design (delete + recreate).
   getPhones: () => request("/admin/phones"),
-  createPhone: (payload) =>
-    request("/admin/phones", { method: "POST", body: JSON.stringify(payload) }),
   updatePhone: (extension, payload) =>
     request(`/admin/phones/${encodeURIComponent(extension)}`, { method: "PUT", body: JSON.stringify(payload) }),
   deletePhone: (extension) =>

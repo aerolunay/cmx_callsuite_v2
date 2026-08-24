@@ -24,7 +24,7 @@ placeholders — their backend endpoints don't exist yet.
 */
 const SECTIONS = [
   { key: "users", label: "Users" },
-  { key: "vicidial-users", label: "ViciDial Users" },
+  { key: "vicidial-users", label: "Phone Login" },
   { key: "phones", label: "Phone Extensions" },
   { key: "campaigns", label: "Campaigns" },
   { key: "trunks", label: "DID / Trunk Setup" },

@@ -5,13 +5,12 @@ import { api } from "../../api";
 ==================================================
 ADMIN USERS SECTION
 ==================================================
-Simplified back to "bind to an existing ViciDial user only" — the
-inline "create a brand new ViciDial user" toggle that used to live here
-has been REMOVED, per explicit request to separate ViciDial user
-creation out into its own standalone section (see
-AdminVicidialUsersSection.jsx). Create a ViciDial user there first,
-then it shows up in the dropdown below exactly like any other
-unclaimed account.
+Simplified back to "bind to an existing Phone Login only" — the inline
+"create a brand new Phone Login" toggle that used to live here has
+been REMOVED, per explicit request to separate that creation out into
+its own standalone section (see AdminVicidialUsersSection.jsx). Create
+a Phone Login there first, then it shows up in the dropdown below
+exactly like any other unclaimed account.
 ==================================================
 */
 export default function AdminUsersSection() {
@@ -77,7 +76,7 @@ export default function AdminUsersSection() {
   }
 
   async function handleDelete(u) {
-    if (!window.confirm(`Permanently delete ${u.email}? This cannot be undone. Their ViciDial user/phone will become available for a new account immediately.`)) {
+    if (!window.confirm(`Permanently delete ${u.email}? This cannot be undone. Their Phone Login/phone will become available for a new account immediately.`)) {
       return;
     }
     setError("");
@@ -160,7 +159,7 @@ export default function AdminUsersSection() {
                   <option value="admin">Admin</option>
                 </select>
 
-                <label className="comments-label">ViciDial User (phone binding)</label>
+                <label className="comments-label">Phone Login (phone binding)</label>
                 <select value={vicidialUser} onChange={(e) => setVicidialUser(e.target.value)}>
                   <option value="">— None / Release —</option>
                   {vicidialOptions.map((vu) => (
@@ -171,7 +170,7 @@ export default function AdminUsersSection() {
                 </select>
                 {vicidialOptions.length === 0 && (
                   <p style={{ fontSize: 13, color: "#888" }}>
-                    No unclaimed ViciDial users available — create one under "ViciDial Users"
+                    No unclaimed Phone Logins available — create one under "Phone Login"
                     first, or every active one already has an app account.
                   </p>
                 )}
@@ -219,7 +218,7 @@ export default function AdminUsersSection() {
                       <th>Name</th>
                       <th>Access</th>
                       <th>Active</th>
-                      <th>ViciDial User</th>
+                      <th>Phone Login</th>
                       <th>Phone</th>
                       <th>Campaigns</th>
                       <th>Actions</th>
