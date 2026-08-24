@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useJsSipPhone } from "../hooks/useJsSipPhone";
+import { formatDuration, durationColorFor } from "../utils/format";
 
 /*
 ==================================================
@@ -65,6 +66,21 @@ deliberately left for a separate pass rather than guessed at here.
 // IN_CALL at this exact moment (an incoming ring with no active
 // session yet) is the normal, expected result of having just been
 // READY a moment ago, not a different manual status the agent chose.
+// Moved here from DialerPage.jsx, per explicit request to consolidate
+// the status dropdown/duration display into MiniPhone itself, since
+// they're both "the phone widget's" concern now rather than living in
+// an adjacent, separate card saying overlapping things.
+const MANUAL_STATUSES = [
+  { value: "READY", label: "Ready" },
+  { value: "NOT_READY", label: "Not Ready" },
+  { value: "AD_HOC", label: "Ad-Hoc" },
+  { value: "LUNCH_BREAK", label: "Lunch/Break" },
+  { value: "BIO_BREAK", label: "Bio-Break" },
+  { value: "ADMIN", label: "Admin" },
+  { value: "MEETING", label: "Meeting" },
+  { value: "TRAINING", label: "Training" },
+];
+
 const isAutoAnswerStatus = (status) => status === "READY" || status === "IN_CALL";
 
 // Same small label set as LiveStatusDashboard.jsx's STATE_LABELS —
@@ -127,6 +143,12 @@ function statusDotClass(phone, agentStatus) {
 
 export function MiniPhone({
   agentStatus,
+  elapsedSeconds,
+  statusDraft,
+  onStatusDraftChange,
+  onStatusSwitch,
+  isSystemStatus,
+  busy,
   hasActiveCall,
   canHold,
   onHold,
@@ -257,7 +279,52 @@ export function MiniPhone({
       <div className="phone-widget-status">
         <span className={`phone-status-dot ${statusDotClass(phone, agentStatus)}`} />
         {statusLabel(phone, agentStatus)}
+        {elapsedSeconds !== undefined && (
+          <span
+            className="status-elapsed"
+            style={{
+              color: durationColorFor(agentStatus, elapsedSeconds),
+              fontWeight: durationColorFor(agentStatus, elapsedSeconds) ? 700 : undefined,
+            }}
+          >
+            {formatDuration(elapsedSeconds)}
+          </span>
+        )}
       </div>
+
+      {/* Status dropdown/switch — MOVED here from DialerPage's own
+          separate "status-bar" card, per explicit request, so
+          everything phone/status-related consolidates into this one
+          widget. onStatusDraftChange/onStatusSwitch are just callbacks
+          up to DialerPage, which still owns the actual state/API call
+          (see DialerPage.jsx's own comment on the MiniPhone call site
+          for why that state stays there). Only rendered when the
+          caller actually supplies these props, so MiniPhone still
+          works standalone/without them if ever reused elsewhere
+          without a status-switcher use case. */}
+      {onStatusSwitch && (
+        <div className="status-switcher" style={{ marginBottom: 10 }}>
+          <select
+            value={statusDraft}
+            onChange={(e) => onStatusDraftChange(e.target.value)}
+            disabled={isSystemStatus || busy}
+          >
+            {MANUAL_STATUSES.map((s) => (
+              <option key={s.value} value={s.value}>
+                {s.label}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            className="button-secondary"
+            onClick={onStatusSwitch}
+            disabled={isSystemStatus || busy || statusDraft === agentStatus}
+          >
+            →
+          </button>
+        </div>
+      )}
 
       <input
         type="tel"

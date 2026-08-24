@@ -10,7 +10,6 @@ import { useAuth } from "../context/AuthContext";
 import { useDialerSocket } from "../hooks/useDialerSocket";
 import { MiniPhone } from "../components/MiniPhone";
 import { DISPOSITIONS, getInboundDispositionsForCampaign } from "../constants/dispositions";
-import { formatDuration, durationColorFor } from "../utils/format";
 
 
 // Agent-selectable statuses. IN_CALL and AFTER_CALL_WORK are set only
@@ -18,32 +17,6 @@ import { formatDuration, durationColorFor } from "../utils/format";
 // AUX_CB removed — JsSIP's own call-gating on the agent's registered
 // extension now covers what it used to protect against; Callback
 // shares READY with Dial Next Number instead of its own status.
-const MANUAL_STATUSES = [
-  { value: "READY", label: "Ready" },
-  { value: "NOT_READY", label: "Not Ready" },
-  { value: "AD_HOC", label: "Ad-Hoc" },
-  { value: "LUNCH_BREAK", label: "Lunch/Break" },
-  { value: "BIO_BREAK", label: "Bio-Break" },
-  { value: "ADMIN", label: "Admin" },
-  { value: "MEETING", label: "Meeting" },
-  { value: "TRAINING", label: "Training" },
-];
-
-const STATUS_LABELS = {
-  NOT_READY: "Not Ready",
-  READY: "Ready",
-  AD_HOC: "Ad-Hoc",
-  LUNCH_BREAK: "Lunch/Break",
-  BIO_BREAK: "Bio-Break",
-  ADMIN: "Admin",
-  MEETING: "Meeting",
-  TRAINING: "Training",
-  IN_CALL: "In Call",
-  AFTER_CALL_WORK: "After Call Work",
-  ON_HOLD: "On Hold",
-  MICROSIP_OUTBOUND: "On a MicroSIP Call",
-};
-
 // Internal call-progress states from dialerService.js, mapped to
 // agent-facing text. Distinct from the 5 agent statuses above — this
 // tracks the two-leg Originate flow itself while a call is in progress.
@@ -568,8 +541,6 @@ export default function DialerPage() {
     }
   }
 
-  const statusLabel = agentStatus ? STATUS_LABELS[agentStatus.status] : "—";
-
   if (!agent.extension) {
     return (
       <>
@@ -624,50 +595,33 @@ export default function DialerPage() {
 
         <div className="dialer-layout">
           <div className="dialer-main">
-            <div className="card status-bar">
-              <div>
-                <span className="badge">{statusLabel}</span>
-                <span
-                  className="status-elapsed"
-                  style={{
-                    color: durationColorFor(agentStatus?.status, elapsedSeconds),
-                    fontWeight: durationColorFor(agentStatus?.status, elapsedSeconds) ? 700 : undefined,
-                  }}
-                >
-                  {formatDuration(elapsedSeconds)}
-                </span>
-              </div>
-
-              <div className="status-switcher">
-                <select
-                  value={statusDraft}
-                  onChange={(e) => setStatusDraft(e.target.value)}
-                  disabled={isSystemStatus || busy}
-                >
-                  {MANUAL_STATUSES.map((s) => (
-                    <option key={s.value} value={s.value}>
-                      {s.label}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  className="button-secondary"
-                  onClick={handleStatusSwitch}
-                  disabled={isSystemStatus || busy || statusDraft === agentStatus?.status}
-                >
-                  →
-                </button>
-              </div>
-            </div>
-
             {/* All phone/JsSIP logic now lives in MiniPhone — DialerPage
                 supplies agent status (for auto-answer gating) and the
                 handlers for manual dial / conference / transfer, which
                 all need campaign/call context that lives here, not in
                 MiniPhone. Moved here from the top of the page, where
-                Stats used to be — swapped per redesign request. */}
+                Stats used to be — swapped per redesign request.
+
+                UPDATED — the standalone "status-bar" card (Ready badge +
+                duration + status dropdown/switch button) that used to
+                live here as its own separate card has been MOVED into
+                MiniPhone itself, per explicit request, so everything
+                phone/status-related lives in one consolidated widget
+                instead of two adjacent cards saying overlapping things.
+                elapsedSeconds/statusDraft/isSystemStatus/busy are all
+                still owned and computed HERE (DialerPage) since they
+                depend on state/refs that live here (baseElapsedRef,
+                baseAtRef, the WS status-change handler, etc.) — MiniPhone
+                just renders them and reports draft changes/submits back
+                up via the new callback props. */}
             <MiniPhone
               agentStatus={agentStatus?.status}
+              elapsedSeconds={elapsedSeconds}
+              statusDraft={statusDraft}
+              onStatusDraftChange={setStatusDraft}
+              onStatusSwitch={handleStatusSwitch}
+              isSystemStatus={isSystemStatus}
+              busy={busy}
               hasActiveCall={Boolean(call || inboundCall)}
               canHold={Boolean(
                 (call && call.status === "customer_connected") ||
