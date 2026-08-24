@@ -67,7 +67,45 @@ deliberately left for a separate pass rather than guessed at here.
 // READY a moment ago, not a different manual status the agent chose.
 const isAutoAnswerStatus = (status) => status === "READY" || status === "IN_CALL";
 
-function statusLabel(phone) {
+// Same small label set as LiveStatusDashboard.jsx's STATE_LABELS —
+// kept as its own local copy rather than a shared import, matching
+// this app's existing pattern of small, genuinely duplicated helpers
+// (e.g. recordingPathForCall) rather than coupling two otherwise
+// unrelated components/pages together for one lookup table.
+const AGENT_STATUS_LABELS = {
+  READY: "Ready",
+  NOT_READY: "Not Ready",
+  IN_CALL: "On a Call",
+  ON_HOLD: "On Hold",
+  AFTER_CALL_WORK: "ACW",
+  AD_HOC: "Ad-Hoc",
+  LUNCH_BREAK: "Lunch/Break",
+  BIO_BREAK: "Bio-Break",
+  ADMIN: "Admin",
+  MEETING: "Meeting",
+  TRAINING: "Training",
+  MICROSIP_OUTBOUND: "MicroSIP Call",
+};
+
+/*
+==================================================
+statusLabel / statusDotClass — REAL BUG FIX
+==================================================
+Previously this always showed "Ready" (green dot) whenever the phone
+was registered and not actively ringing/on a call — completely
+ignoring the agent's actual selected status. An agent set to
+NOT_READY, LUNCH_BREAK, etc. still saw a green "Ready" indicator on
+the phone widget itself the moment they weren't literally mid-call,
+which is exactly backwards from what the dropdown elsewhere on the
+page said — a real source of confusion/arguable ambiguity for agents
+("the phone says I'm Ready"). Now reads the real `agentStatus` prop
+(already passed down from DialerPage, previously unused here) whenever
+the phone itself is idle, and only shows a green dot / "Ready" text
+when the agent is ACTUALLY in READY status — any other status shows
+its own real label with a distinct (non-green) dot color.
+==================================================
+*/
+function statusLabel(phone, agentStatus) {
   if (phone.registrationError) return `Error — ${phone.registrationError}`;
   if (!phone.registered) return "Connecting…";
   if (phone.callState === phone.CALL_STATES.INCOMING) {
@@ -76,7 +114,15 @@ function statusLabel(phone) {
   if (phone.callState === phone.CALL_STATES.ACTIVE) {
     return `On call — ${phone.remoteIdentity || "Unknown"}`;
   }
-  return "Ready";
+  return AGENT_STATUS_LABELS[agentStatus] || "Not Ready";
+}
+
+function statusDotClass(phone, agentStatus) {
+  if (!phone.registered) return "";
+  if (phone.callState === phone.CALL_STATES.INCOMING || phone.callState === phone.CALL_STATES.ACTIVE) {
+    return "phone-status-dot-on"; // mid-call is always the "good/active" green state regardless of dropdown status
+  }
+  return agentStatus === "READY" ? "phone-status-dot-on" : "phone-status-dot-away";
 }
 
 export function MiniPhone({
@@ -209,8 +255,8 @@ export function MiniPhone({
   return (
     <div className="phone-widget">
       <div className="phone-widget-status">
-        <span className={`phone-status-dot${phone.registered ? " phone-status-dot-on" : ""}`} />
-        {statusLabel(phone)}
+        <span className={`phone-status-dot ${statusDotClass(phone, agentStatus)}`} />
+        {statusLabel(phone, agentStatus)}
       </div>
 
       <input

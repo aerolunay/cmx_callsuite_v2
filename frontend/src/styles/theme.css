@@ -873,6 +873,10 @@ other pages sharing the same base classes.
   background: var(--cmx-success);
 }
 
+.phone-status-dot-away {
+  background: var(--cmx-warning);
+}
+
 .phone-display-input {
   width: 100%;
   box-sizing: border-box;

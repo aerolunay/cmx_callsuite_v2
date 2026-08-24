@@ -197,9 +197,9 @@ export default function AdminUsersSection() {
 
                 <label className="comments-label">Priority</label>
                 <select value={priority} onChange={(e) => setPriority(e.target.value)}>
-                  <option value="1">1 (Default — strict FIFO)</option>
-                  <option value="2">2 (Skip up to 3x, unless no one else available)</option>
-                  <option value="3">3 (Skip up to 5x, unless no one else available)</option>
+                  <option value="1">1</option>
+                  <option value="2">2</option>
+                  <option value="3">3</option>
                 </select>
 
                 <label className="disposition-row" style={{ marginTop: 10 }}>
