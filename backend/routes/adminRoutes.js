@@ -7,6 +7,7 @@ const db = require("../config/db");
 const dialerService = require("../services/dialerService");
 const inboundCallService = require("../services/inboundCallService");
 const statsService = require("../services/statsService");
+const agentStatusService = require("../services/agentStatusService");
 const ws = require("../config/ws");
 const ami = require("../config/ami");
 const { transporter } = require("../config/mailer");
@@ -74,6 +75,7 @@ router.get("/users", requireAdmin, async (req, res) => {
           au.access_level,
           au.vicidial_user,
           au.active,
+          au.priority,
           vu.phone_login,
           GROUP_CONCAT(aca.campaign_id ORDER BY aca.campaign_id SEPARATOR ', ') AS campaigns
         FROM cmx_dialer.app_users au
@@ -112,7 +114,7 @@ shouldn't be disturbed.
 ==================================================
 */
 router.post("/users", requireAdmin, async (req, res) => {
-  const { email, fullName, accessLevel, vicidialUser, campaignIds, active } = req.body;
+  const { email, fullName, accessLevel, vicidialUser, campaignIds, active, priority } = req.body;
 
   if (!email || !fullName || !accessLevel) {
     return res.status(400).json({ success: false, message: "email, fullName, and accessLevel are required." });
@@ -122,14 +124,22 @@ router.post("/users", requireAdmin, async (req, res) => {
     return res.status(400).json({ success: false, message: "accessLevel must be agent, supervisor, or admin." });
   }
 
+  // Priority: 1 (default), 2, or 3 — see agentStatusService.js's
+  // getAnyReadyAgentWithExtension for what these actually do to
+  // inbound queue matching. Defaults to 1 (strict FIFO) if omitted.
+  const resolvedPriority = priority ? Number(priority) : 1;
+  if (![1, 2, 3].includes(resolvedPriority)) {
+    return res.status(400).json({ success: false, message: "priority must be 1, 2, or 3." });
+  }
+
   const connection = await db.getConnection();
   try {
     await connection.beginTransaction();
 
     const [result] = await connection.execute(
-      `INSERT INTO cmx_dialer.app_users (email, full_name, access_level, vicidial_user, active)
-       VALUES (?, ?, ?, ?, ?)`,
-      [email, fullName, accessLevel, vicidialUser || null, active === false ? 0 : 1]
+      `INSERT INTO cmx_dialer.app_users (email, full_name, access_level, vicidial_user, active, priority)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [email, fullName, accessLevel, vicidialUser || null, active === false ? 0 : 1, resolvedPriority]
     );
 
     const appUserId = result.insertId;
@@ -911,6 +921,7 @@ router.get("/live-status", requireAdmin, async (req, res) => {
           au.email,
           au.vicidial_user,
           au.last_login_at,
+          au.priority,
           open_row.status AS open_status,
           open_row.elapsed_seconds AS open_elapsed_seconds,
           open_row.related_call_id AS open_related_call_id,
@@ -1001,6 +1012,7 @@ router.get("/live-status", requireAdmin, async (req, res) => {
           callerId: isCallRelated ? callerIdsByCallId[r.open_related_call_id] || null : null,
           elapsedSeconds: totalHandlingSeconds !== undefined ? totalHandlingSeconds : r.open_elapsed_seconds,
           lastLoginAt: r.last_login_at,
+          priority: r.priority,
         };
       }
       return {
@@ -1013,6 +1025,7 @@ router.get("/live-status", requireAdmin, async (req, res) => {
         direction: null,
         elapsedSeconds: r.logged_out_elapsed_seconds,
         lastLoginAt: r.last_login_at,
+        priority: r.priority,
       };
     });
 
@@ -1033,7 +1046,7 @@ Body: { email, fullName, accessLevel, vicidialUser (nullable), campaignIds: [] }
 */
 router.put("/users/:appUserId", requireAdmin, async (req, res) => {
   const { appUserId } = req.params;
-  const { email, fullName, accessLevel, vicidialUser, campaignIds, active } = req.body;
+  const { email, fullName, accessLevel, vicidialUser, campaignIds, active, priority } = req.body;
 
   if (!email || !fullName || !accessLevel) {
     return res.status(400).json({ success: false, message: "email, fullName, and accessLevel are required." });
@@ -1043,15 +1056,24 @@ router.put("/users/:appUserId", requireAdmin, async (req, res) => {
     return res.status(400).json({ success: false, message: "accessLevel must be agent, supervisor, or admin." });
   }
 
+  const resolvedPriority = priority ? Number(priority) : 1;
+  if (![1, 2, 3].includes(resolvedPriority)) {
+    return res.status(400).json({ success: false, message: "priority must be 1, 2, or 3." });
+  }
+
   const connection = await db.getConnection();
   try {
     await connection.beginTransaction();
 
+    // priority_skip_count reset to 0 alongside every full-form save —
+    // same reasoning as setPriority() below: a saved priority value
+    // (whether it actually changed or not) starts its skip cycle
+    // clean rather than carrying over a stale count.
     const [result] = await connection.execute(
       `UPDATE cmx_dialer.app_users
-       SET email = ?, full_name = ?, access_level = ?, vicidial_user = ?, active = ?
+       SET email = ?, full_name = ?, access_level = ?, vicidial_user = ?, active = ?, priority = ?, priority_skip_count = 0
        WHERE app_user_id = ?`,
-      [email, fullName, accessLevel, vicidialUser || null, active ? 1 : 0, appUserId]
+      [email, fullName, accessLevel, vicidialUser || null, active ? 1 : 0, resolvedPriority, appUserId]
     );
 
     if (result.affectedRows === 0) {
@@ -1195,6 +1217,41 @@ router.post("/users/:appUserId/kick", requireAdmin, async (req, res) => {
   } catch (error) {
     console.error("POST /api/admin/users/:appUserId/kick failed:", error);
     return res.status(500).json({ success: false, message: "Failed to kick this agent." });
+  }
+});
+
+/*
+==================================================
+PATCH /api/admin/users/:appUserId/priority
+==================================================
+Lightweight, standalone endpoint — deliberately separate from the full
+PUT /users/:appUserId form save above. Powers the Live Status
+Dashboard's real-time "Set Prio" control: an admin/WFM changes an
+agent's priority tier on the fly, with no need to open/submit the full
+user-edit form for it. Takes effect immediately on the very next
+inbound-call matching pass — agentStatusService.getAnyReadyAgentWithExtension
+reads priority/priority_skip_count live from the DB on every call, no
+caching anywhere in that path.
+
+Uses agentStatusService.setPriority() directly, same helper the full
+PUT route's own priority handling is conceptually equivalent to — both
+reset priority_skip_count to 0 alongside the change, so a newly-set
+tier always starts its skip cycle clean.
+==================================================
+*/
+router.patch("/users/:appUserId/priority", requireAdmin, async (req, res) => {
+  const { appUserId } = req.params;
+  const { priority } = req.body;
+
+  try {
+    await agentStatusService.setPriority(appUserId, priority);
+    return res.json({ success: true, priority: Number(priority) });
+  } catch (error) {
+    console.error(`PATCH /api/admin/users/${appUserId}/priority failed:`, error);
+    if (error.message === "priority must be 1, 2, or 3.") {
+      return res.status(400).json({ success: false, message: error.message });
+    }
+    return res.status(500).json({ success: false, message: "Failed to update priority." });
   }
 });
 

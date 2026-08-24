@@ -25,6 +25,11 @@ export default function AdminUsersSection() {
   const [vicidialUser, setVicidialUser] = useState("");
   const [selectedCampaigns, setSelectedCampaigns] = useState([]);
   const [active, setActive] = useState(true);
+  // Priority: default 1 (strict FIFO). 2 = skipped up to 3x in a row
+  // (unless no other agent is available), 3 = skipped up to 5x. See
+  // agentStatusService.js's getAnyReadyAgentWithExtension for the full
+  // logic — this just sets the tier, the matching engine does the rest.
+  const [priority, setPriority] = useState("1");
 
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
@@ -61,6 +66,7 @@ export default function AdminUsersSection() {
     setVicidialUser("");
     setSelectedCampaigns([]);
     setActive(true);
+    setPriority("1");
   }
 
   function handleStartEdit(u) {
@@ -71,6 +77,7 @@ export default function AdminUsersSection() {
     setVicidialUser(u.vicidial_user || "");
     setSelectedCampaigns(u.campaigns ? u.campaigns.split(", ") : []);
     setActive(Boolean(u.active));
+    setPriority(String(u.priority ?? "1"));
     setError("");
     setSuccess("");
   }
@@ -105,6 +112,7 @@ export default function AdminUsersSection() {
         vicidialUser: vicidialUser || null,
         campaignIds: selectedCampaigns,
         active,
+        priority: Number(priority),
       };
 
       if (editingUserId) {
@@ -187,6 +195,13 @@ export default function AdminUsersSection() {
                   </label>
                 ))}
 
+                <label className="comments-label">Priority</label>
+                <select value={priority} onChange={(e) => setPriority(e.target.value)}>
+                  <option value="1">1 (Default — strict FIFO)</option>
+                  <option value="2">2 (Skip up to 3x, unless no one else available)</option>
+                  <option value="3">3 (Skip up to 5x, unless no one else available)</option>
+                </select>
+
                 <label className="disposition-row" style={{ marginTop: 10 }}>
                   <input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} />
                   Active (unchecked = blocked from logging into the app entirely)
@@ -218,6 +233,7 @@ export default function AdminUsersSection() {
                       <th>Name</th>
                       <th>Access</th>
                       <th>Active</th>
+                      <th>Priority</th>
                       <th>Phone Login</th>
                       <th>Phone</th>
                       <th>Campaigns</th>
@@ -235,6 +251,7 @@ export default function AdminUsersSection() {
                         <td className="admin-name-cell">{u.full_name}</td>
                         <td>{u.access_level}</td>
                         <td>{u.active ? "Yes" : "No"}</td>
+                        <td>{u.priority ?? 1}</td>
                         <td>{u.vicidial_user || "—"}</td>
                         <td>{u.phone_login || "—"}</td>
                         <td>{u.campaigns || "—"}</td>

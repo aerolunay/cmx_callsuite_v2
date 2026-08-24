@@ -134,6 +134,11 @@ export const api = {
     request(`/admin/users/${appUserId}`, { method: "DELETE" }),
   kickAgent: (appUserId) =>
     request(`/admin/users/${appUserId}/kick`, { method: "POST" }),
+  // Real-time priority control — used by the Live Status Dashboard's
+  // "Set Prio" per-row action. Deliberately lightweight/standalone,
+  // not routed through updateAdminUser's full-form PUT.
+  updateAgentPriority: (appUserId, priority) =>
+    request(`/admin/users/${appUserId}/priority`, { method: "PATCH", body: JSON.stringify({ priority }) }),
   getLiveStatus: (campaignId) =>
     request(`/admin/live-status${campaignId ? `?campaignId=${encodeURIComponent(campaignId)}` : ""}`),
   getQueueStatus: (campaignId) =>

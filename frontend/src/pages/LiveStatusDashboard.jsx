@@ -78,6 +78,7 @@ export default function LiveStatusDashboard() {
   const [summary, setSummary] = useState(null);
   const [error, setError] = useState("");
   const [kickingId, setKickingId] = useState(null);
+  const [priorityUpdatingId, setPriorityUpdatingId] = useState(null);
   const [loading, setLoading] = useState(true);
 
   /*
@@ -152,6 +153,25 @@ export default function LiveStatusDashboard() {
       setError(err.message);
     } finally {
       setKickingId(null);
+    }
+  }
+
+  // "Set Prio" — real-time control, per explicit request. Takes effect
+  // on the very next inbound-call matching pass (no caching anywhere
+  // in that path — see agentStatusService.js's
+  // getAnyReadyAgentWithExtension, which reads priority live from the
+  // DB every time). Fires immediately on dropdown change, no separate
+  // save step, matching the "must reflect immediately" requirement.
+  async function handleSetPriority(agentRow, newPriority) {
+    setPriorityUpdatingId(agentRow.appUserId);
+    setError("");
+    try {
+      await api.updateAgentPriority(agentRow.appUserId, Number(newPriority));
+      load();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setPriorityUpdatingId(null);
     }
   }
 
@@ -338,13 +358,14 @@ export default function LiveStatusDashboard() {
                         <th>State</th>
                         <th>Direction</th>
                         <th>Duration</th>
+                        <th>Priority</th>
                         <th>Action</th>
                       </tr>
                     </thead>
                     <tbody>
                       {consolidatedRows.length === 0 ? (
                         <tr>
-                          <td colSpan={6} style={{ color: "#888" }}>
+                          <td colSpan={7} style={{ color: "#888" }}>
                             No agents currently in a tracked state.
                           </td>
                         </tr>
@@ -362,6 +383,25 @@ export default function LiveStatusDashboard() {
                               }}
                             >
                               {a.elapsedSeconds !== null ? formatDurationHMS(a.elapsedSeconds) : "—"}
+                            </td>
+                            <td>
+                              {/* "Set Prio" — real-time, per explicit
+                                  request. TODO: gate this to
+                                  admin/WFM once the WFM role exists —
+                                  currently this whole page is
+                                  admin-only already (see the
+                                  accessLevel Navigate guard above), so
+                                  no separate check is needed yet. */}
+                              <select
+                                value={a.priority ?? 1}
+                                disabled={priorityUpdatingId === a.appUserId}
+                                onChange={(e) => handleSetPriority(a, e.target.value)}
+                                style={{ fontSize: 13 }}
+                              >
+                                <option value={1}>1</option>
+                                <option value={2}>2</option>
+                                <option value={3}>3</option>
+                              </select>
                             </td>
                             <td>
                               {/* Matches the backend's own restriction

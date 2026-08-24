@@ -182,61 +182,67 @@ async function setStatus(appUserId, status, options = {}) {
 
 /*
 ==================================================
-getAnyReadyAgentWithExtension
+getAnyReadyAgentWithExtension — now PRIORITY-AWARE
 ==================================================
 Used by inboundCallService.js to find someone to ring when a customer
 is waiting. Resolves candidates' PJSIP extension the same way
 authRoutes.js does at login.
 
-REAL BUG FIXED HERE (confirmed via code inspection, not guessed): a
-DB status row of READY is NOT proof anyone is actually present in the
-app. agent_status_log rows are only ever closed by the explicit
-/logout route (see authRoutes.js) — a browser close, crash, laptop
-sleep, or session expiry leaves the row open indefinitely. Meanwhile
-MicroSIP's PJSIP registration is completely independent of the app
-session — it stays registered to Asterisk regardless of whether the
-web app is even open. Without this check, inbound routing could (and
-did) ring a softphone that's registered but has nobody behind the
-DialerPage at all — no incoming-call UI, no caller ID, no way to
-answer or disposition it.
+Scoped to cmx_dialer.agent_campaign_assignments for the call's own
+campaign (see the campaign-scoping fix above this in git history —
+this function used to have no campaign filter at all).
 
-Fix: require ws.isConnected(appUserId) — an actual live socket — as
-well as the DB status. Loops over ALL READY candidates (not just the
-first row) since the first candidate by DB order might be exactly the
-stale/disconnected one, or one already excluded; falls through to the
-next real candidate instead of returning null outright.
+Requires ws.isConnected(appUserId) — an actual live socket — as well
+as the DB status, since a READY row alone isn't proof anyone is
+actually present in the app (browser close/crash/sleep leaves rows
+open indefinitely; see the comment on this originally).
 
-excludeAppUserIds (NEW): lets a caller — specifically
-inboundCallService.js's multi-call FIFO matcher — rule out agents
-already claimed by A DIFFERENT waiting call in the same matching pass.
-Without this, two simultaneously-waiting callers could both get
-matched to the SAME ready agent before either Originate finished.
+PRIORITY LOGIC (new): priority 1 (default) is strict FIFO — always
+selected immediately when it's their turn. Priority 2 is skipped up to
+3 times in a row when it would otherwise be their turn; priority 3 up
+to 5 times — in both cases, ONLY when a lower-skip-tier candidate is
+actually available to take the call instead. If a priority 2/3 agent
+is the ONLY eligible candidate at all, or every eligible candidate is
+currently under its own skip threshold, the "unless no other agents
+are available" carve-out always wins — someone gets selected rather
+than letting the call wait indefinitely for a priority tier that never
+comes due.
+
+priority_skip_count lives on cmx_dialer.app_users (not
+agent_status_log) — it's a running counter tied to the agent, meant to
+persist across status changes within a shift, not reset every time
+they cycle READY/NOT_READY. Incremented here for each real skip
+(happens once per genuinely-waiting call this function is asked to
+match, not a background poll), reset to 0 the moment that agent is
+actually selected for a call OR their priority is changed via
+setPriority() below.
+
+excludeAppUserIds — lets a caller (inboundCallService.js's multi-call
+FIFO matcher) rule out agents already claimed by A DIFFERENT waiting
+call in the same matching pass, so two simultaneously-waiting callers
+can never be matched to the same agent before either Originate
+finishes.
 ==================================================
 */
-/*
-==================================================
-getAnyReadyAgentWithExtension — REAL BUG FIX
-==================================================
-Now REQUIRES a campaignId and scopes the ready-agent search to
-cmx_dialer.agent_campaign_assignments for that campaign specifically.
+const SKIP_THRESHOLDS = { 1: 0, 2: 3, 3: 5 };
 
-Previously this had NO campaign filter at all, despite its
-name/purpose being "find an agent for THIS waiting inbound call" —
-confirmed via a real test call: dialing CMXBSMSC's DID connected to an
-agent who was only assigned to a completely different campaign
-(CMXRNYBL), simply because they happened to be READY and CMXBSMSC's
-own agents weren't. This was invisible as long as only one campaign
-existed with a real DID+queue; it became a real, visible bug the
-moment a second campaign went live. Every inbound call must only ever
-be offered to agents actually assigned to ITS campaign.
-==================================================
-*/
+async function incrementSkipCount(appUserId) {
+  await db.execute(
+    `UPDATE cmx_dialer.app_users SET priority_skip_count = priority_skip_count + 1 WHERE app_user_id = ?`,
+    [appUserId]
+  );
+}
+
+async function resetSkipCount(appUserId) {
+  await db.execute(`UPDATE cmx_dialer.app_users SET priority_skip_count = 0 WHERE app_user_id = ?`, [appUserId]);
+}
+
 async function getAnyReadyAgentWithExtension(campaignId, excludeAppUserIds = []) {
   const excludeSet = new Set(excludeAppUserIds);
 
   const [rows] = await db.execute(
     `
-      SELECT asl.app_user_id, au.vicidial_user
+      SELECT asl.app_user_id, au.vicidial_user, au.priority, au.priority_skip_count
       FROM cmx_dialer.agent_status_log asl
       JOIN cmx_dialer.app_users au ON au.app_user_id = asl.app_user_id
       JOIN cmx_dialer.agent_campaign_assignments aca
@@ -247,20 +253,18 @@ async function getAnyReadyAgentWithExtension(campaignId, excludeAppUserIds = [])
     [campaignId]
   );
 
+  // Build the full FIFO-ordered pool of genuinely eligible candidates
+  // (connected + has a real extension) BEFORE applying any priority
+  // logic — priority selection needs to see the whole eligible pool
+  // at once to know whether "no other agents are available" actually
+  // applies, not just stop at the first candidate the way a plain
+  // FIFO pick would.
+  const eligible = [];
   for (const row of rows) {
-    const { app_user_id: appUserId, vicidial_user: agentUser } = row;
+    const { app_user_id: appUserId, vicidial_user: agentUser, priority, priority_skip_count: skipCount } = row;
     if (!agentUser) continue;
     if (excludeSet.has(appUserId)) continue;
-
-    if (!ws.isConnected(appUserId)) {
-      // Stale/disconnected READY row — not a real candidate. Leaving
-      // the DB row alone here deliberately: closing it automatically
-      // is a separate decision (would need to distinguish "gone for
-      // good" from "brief network blip / page reload"), out of scope
-      // for this fix. This just stops it from being treated as an
-      // eligible agent for routing purposes.
-      continue;
-    }
+    if (!ws.isConnected(appUserId)) continue;
 
     const [extRows] = await db.execute(
       `
@@ -271,13 +275,70 @@ async function getAnyReadyAgentWithExtension(campaignId, excludeAppUserIds = [])
       `,
       [agentUser]
     );
-
     if (!extRows.length || !extRows[0].extension) continue;
 
-    return { appUserId, agentUser, extension: extRows[0].extension };
+    eligible.push({ appUserId, agentUser, extension: extRows[0].extension, priority, skipCount });
   }
 
-  return null;
+  if (eligible.length === 0) return null;
+
+  // Only one real candidate — the "unless no other agents are
+  // available" carve-out always wins regardless of priority/skip
+  // state. Select outright and reset their skip counter.
+  if (eligible.length === 1) {
+    const only = eligible[0];
+    await resetSkipCount(only.appUserId);
+    return { appUserId: only.appUserId, agentUser: only.agentUser, extension: only.extension };
+  }
+
+  for (const candidate of eligible) {
+    const threshold = SKIP_THRESHOLDS[candidate.priority] ?? 0;
+
+    if (candidate.skipCount < threshold) {
+      // Skip this candidate for now — someone else (further down the
+      // FIFO order, or a lower skip-tier) gets this call instead. Bump
+      // their counter so they're one step closer to their next
+      // guaranteed turn.
+      await incrementSkipCount(candidate.appUserId);
+      continue;
+    }
+
+    // Either priority 1 (threshold 0, always eligible immediately) or
+    // a priority 2/3 agent who has already been skipped enough times —
+    // select them now and reset their counter.
+    await resetSkipCount(candidate.appUserId);
+    return { appUserId: candidate.appUserId, agentUser: candidate.agentUser, extension: candidate.extension };
+  }
+
+  // Everyone eligible was priority 2/3 and still under their own skip
+  // threshold — "no other agents are available" applies to the whole
+  // pool at this point, so pick the oldest-ready candidate outright
+  // rather than let the call wait indefinitely for a priority tier
+  // that never comes due.
+  const fallback = eligible[0];
+  await resetSkipCount(fallback.appUserId);
+  return { appUserId: fallback.appUserId, agentUser: fallback.agentUser, extension: fallback.extension };
+}
+
+/*
+==================================================
+setPriority — admin/WFM control, also used at user create/update
+==================================================
+Always resets priority_skip_count to 0 alongside the change — a fresh
+priority tier should start its own skip cycle clean, not inherit
+however many skips accumulated under whatever priority the agent had
+before.
+==================================================
+*/
+async function setPriority(appUserId, priority) {
+  const numericPriority = Number(priority);
+  if (![1, 2, 3].includes(numericPriority)) {
+    throw new Error("priority must be 1, 2, or 3.");
+  }
+  await db.execute(
+    `UPDATE cmx_dialer.app_users SET priority = ?, priority_skip_count = 0 WHERE app_user_id = ?`,
+    [numericPriority, appUserId]
+  );
 }
 
 /*
@@ -368,6 +429,7 @@ module.exports = {
   setStatus,
   closeCurrentStatus,
   getAnyReadyAgentWithExtension,
+  setPriority,
   isCallTied,
   statusEvents,
   PRODUCTIVE_STATUSES,
