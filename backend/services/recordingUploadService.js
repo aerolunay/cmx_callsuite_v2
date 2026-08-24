@@ -31,11 +31,46 @@ Same convention, kept as its own small copy here rather than importing
 from either service file — same reasoning as inboundCallService.js's
 own local copy: genuinely a one-line function, and this file shouldn't
 need to import from either call-handling service just for this.
+
+Still used as the BASE filename requested when telling Asterisk where
+to record (see ami.js's startRecording call sites) — Asterisk itself
+decides the FINAL actual filename, see findLocalRecordingFile below.
 ==================================================
 */
 const RECORDING_DIR = "/var/spool/asterisk/monitor";
 function recordingPathForCall(callId) {
   return `${RECORDING_DIR}/${callId}.wav`;
+}
+
+/*
+==================================================
+findLocalRecordingFile — REAL BUG FIX
+==================================================
+Asterisk's ConfbridgeStartRecord/MixMonitor does NOT use the exact
+filename it's given — it appends "-<unix-timestamp>" before the
+extension regardless (confirmed directly: every real recording on this
+server landed as "<callId>-<timestamp>.wav", never the plain
+"<callId>.wav" this code was checking for). This is a genuine,
+documented Asterisk behavior (uniqueness protection against re-
+recording the same conference name), not a bug in how we call
+ConfbridgeStartRecord — but this code was checking for an EXACT
+filename match that could never exist, so every single upload attempt
+failed with "recording may never have started," even though recording
+was working correctly and every file was sitting right there the
+whole time (confirmed: real recordings going back days, all under the
+"-<timestamp>.wav" naming, never uploaded to S3 because of this exact
+mismatch).
+
+Since we don't know the exact timestamp Asterisk will pick in advance,
+this globs the directory for any file starting with "<callId>-" and
+ending in ".wav" instead of checking one fixed path.
+==================================================
+*/
+function findLocalRecordingFile(callId) {
+  const prefix = `${callId}-`;
+  const files = fs.readdirSync(RECORDING_DIR);
+  const match = files.find((f) => f.startsWith(prefix) && f.endsWith(".wav"));
+  return match ? `${RECORDING_DIR}/${match}` : null;
 }
 
 // S3 key format — organized by campaign folder within the bucket for
@@ -70,17 +105,18 @@ Deliberately does NOT delete the local file after a successful upload
 either the local recording or the S3 copy at all. A separate, external
 process owns cleanup entirely.
 
-Throws a clear, specific error if the local file doesn't exist (e.g.
-recording never actually started — AMI action failed, or this was
-called for a non-BSMSC call that was never recording in the first
-place) rather than letting a raw ENOENT bubble up from the AWS SDK.
+Throws a clear, specific error if no matching local file is found
+(genuinely never started recording — e.g. a campaign with recording
+disabled) rather than letting a raw ENOENT bubble up from the AWS SDK.
 ==================================================
 */
 async function uploadRecording(callId, campaignId) {
-  const localPath = recordingPathForCall(callId);
+  const localPath = findLocalRecordingFile(callId);
 
-  if (!fs.existsSync(localPath)) {
-    throw new Error(`No local recording file found at ${localPath} for call ${callId} — recording may never have started.`);
+  if (!localPath) {
+    throw new Error(
+      `No local recording file found for call ${callId} in ${RECORDING_DIR} (looked for ${callId}-*.wav) — recording may never have started.`
+    );
   }
 
   const key = recordingKeyForCall(campaignId, callId);
