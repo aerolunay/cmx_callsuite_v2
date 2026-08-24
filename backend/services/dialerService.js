@@ -123,18 +123,29 @@ async function markCallEnded(call) {
   if (call.afterCallWorkTriggered) return;
   call.afterCallWorkTriggered = true;
 
-  // Stop recording BEFORE marking the call ended/broadcasting —
-  // guarantees the file is fully flushed and closed before any later
-  // step (the S3 upload, built separately) tries to read it. Gated the
-  // same way recording was started (BSMSC only) — a call that was
-  // never recording has nothing to stop, and calling this on a
-  // non-recording room is a harmless no-op we'd rather just skip.
-  if (call.campaignId === "CMXBSMSC") {
-    try {
-      await ami.stopRecording(call.room);
-    } catch (err) {
-      console.error(`[dialerService] Failed to stop recording for call ${call.callId}:`, err.message);
+  // UPDATED — was hardcoded to `call.campaignId === "CMXBSMSC"` only,
+  // same class of bug found and fixed across inboundCallService.js
+  // this session. Now checks the real campaign_recording column so
+  // recording is correctly stopped/flushed for ANY campaign that has
+  // it enabled, not just one hardcoded campaign. Stopped BEFORE
+  // marking the call ended/broadcasting — guarantees the file is
+  // fully flushed and closed before any later step (the S3 upload)
+  // tries to read it.
+  try {
+    const [recRows] = await db.execute(
+      `SELECT campaign_recording FROM asterisk.vicidial_campaigns WHERE campaign_id = ?`,
+      [call.campaignId]
+    );
+    const recordingSetting = recRows[0]?.campaign_recording;
+    if (recordingSetting && recordingSetting !== "NEVER") {
+      try {
+        await ami.stopRecording(call.room);
+      } catch (err) {
+        console.error(`[dialerService] Failed to stop recording for call ${call.callId}:`, err.message);
+      }
     }
+  } catch (err) {
+    console.error(`[dialerService] Failed to check campaign_recording for ${call.campaignId}:`, err.message);
   }
 
   call.status = "ended";

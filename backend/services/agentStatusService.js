@@ -213,7 +213,25 @@ Without this, two simultaneously-waiting callers could both get
 matched to the SAME ready agent before either Originate finished.
 ==================================================
 */
-async function getAnyReadyAgentWithExtension(excludeAppUserIds = []) {
+/*
+==================================================
+getAnyReadyAgentWithExtension — REAL BUG FIX
+==================================================
+Now REQUIRES a campaignId and scopes the ready-agent search to
+cmx_dialer.agent_campaign_assignments for that campaign specifically.
+
+Previously this had NO campaign filter at all, despite its
+name/purpose being "find an agent for THIS waiting inbound call" —
+confirmed via a real test call: dialing CMXBSMSC's DID connected to an
+agent who was only assigned to a completely different campaign
+(CMXRNYBL), simply because they happened to be READY and CMXBSMSC's
+own agents weren't. This was invisible as long as only one campaign
+existed with a real DID+queue; it became a real, visible bug the
+moment a second campaign went live. Every inbound call must only ever
+be offered to agents actually assigned to ITS campaign.
+==================================================
+*/
+async function getAnyReadyAgentWithExtension(campaignId, excludeAppUserIds = []) {
   const excludeSet = new Set(excludeAppUserIds);
 
   const [rows] = await db.execute(
@@ -221,9 +239,12 @@ async function getAnyReadyAgentWithExtension(excludeAppUserIds = []) {
       SELECT asl.app_user_id, au.vicidial_user
       FROM cmx_dialer.agent_status_log asl
       JOIN cmx_dialer.app_users au ON au.app_user_id = asl.app_user_id
+      JOIN cmx_dialer.agent_campaign_assignments aca
+        ON aca.app_user_id = asl.app_user_id AND aca.active = 1 AND aca.campaign_id = ?
       WHERE asl.status = 'READY' AND asl.ended_at IS NULL
       ORDER BY asl.status_log_id ASC
-    `
+    `,
+    [campaignId]
   );
 
   for (const row of rows) {

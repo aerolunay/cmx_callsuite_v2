@@ -287,7 +287,7 @@ async function tryConnectReadyAgentsInner() {
 
     let agent;
     try {
-      agent = await agentStatusService.getAnyReadyAgentWithExtension(Array.from(claimedThisPass));
+      agent = await agentStatusService.getAnyReadyAgentWithExtension(call.campaignId, Array.from(claimedThisPass));
     } catch (err) {
       console.error("[inboundCallService] Failed to look up a ready agent:", err.message);
       continue;
@@ -455,19 +455,26 @@ async function endInboundCall(room) {
     return;
   }
 
-  // BSMSC-only, automatic, no agent control — per explicit scope
-  // decision. Only reached here (never in the abandoned branch above),
-  // since an abandoned call never had an agent join and therefore
-  // never started recording. Stopped BEFORE the AFTER_CALL_WORK
-  // transition below, same reasoning as dialerService.js's outbound
-  // side — guarantees the file is fully flushed/closed before anything
-  // downstream tries to read it.
-  if (call.campaignId === "CMXBSMSC") {
-    try {
-      await ami.stopRecording(call.room);
-    } catch (err) {
-      console.error(`[inboundCallService] Failed to stop recording for call ${call.callId}:`, err.message);
+  // UPDATED — was hardcoded to `call.campaignId === "CMXBSMSC"` only,
+  // same class of bug as the recording-START gate fixed earlier this
+  // session. Now checks the real campaign_recording column, so a
+  // campaign with recording enabled has its recording correctly
+  // stopped/flushed here regardless of which campaign it is.
+  try {
+    const [recRows] = await db.execute(
+      `SELECT campaign_recording FROM asterisk.vicidial_campaigns WHERE campaign_id = ?`,
+      [call.campaignId]
+    );
+    const recordingSetting = recRows[0]?.campaign_recording;
+    if (recordingSetting && recordingSetting !== "NEVER") {
+      try {
+        await ami.stopRecording(call.room);
+      } catch (err) {
+        console.error(`[inboundCallService] Failed to stop recording for call ${call.callId}:`, err.message);
+      }
     }
+  } catch (err) {
+    console.error(`[inboundCallService] Failed to check campaign_recording for ${call.campaignId}:`, err.message);
   }
 
   if (appUserId) {
