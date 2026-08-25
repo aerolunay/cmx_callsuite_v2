@@ -7,18 +7,25 @@ const ami = require("../config/ami");
 ==================================================
 conferenceService — Phase E (Conference / Transfer)
 ==================================================
-NOT YET CONFIRMED against a real test call. Built by mirroring the
-existing, proven Originate + AMI-event-matching pattern already used
-in dialerService.js's customer-leg fix (matching ConfbridgeJoin by
-room), but this specific primitive — Originate directly into
-Application: "ConfBridge" with an ActionID matched via
-OriginateResponse — has NOT been exercised live yet. Flagging this
-explicitly rather than presenting it as tested: the AMI event field
-names assumed below (evt.actionid, evt.response, evt.channel) follow
-the same lowercased-field convention documented in config/ami.js for
-other events, but that convention hasn't been specifically re-verified
-for OriginateResponse. Expect this to need live debugging, the same
-as every other Asterisk-facing change tonight did.
+REAL BUG FOUND AND FIXED HERE, confirmed via a real test call: the
+external-number case (isExtension: false) used to Originate directly
+as `PJSIP/${target}@CMXSandbox` — going straight to the trunk,
+bypassing the dialplan entirely. The target's phone never rang. The
+PROVEN, working outbound customer-leg pattern (dialerService.js's own
+Originate for "Dial Next Number") never does this — it goes through
+`Local/${room}@trunkinbound`, letting the dialplan's own
+`_NXXNXXXXXX`/`_1NXXNXXXXXX` extension-matching handle the actual
+trunk egress (CID, number formatting, whatever else that pattern does)
+before the call ever reaches CMXSandbox. This function now mirrors
+that exact pattern for the external-number case — same Channel
+convention, same Context/Exten/Priority shape — rather than a raw
+direct-to-trunk Originate.
+
+The isExtension: true case (adding another AGENT's extension, not an
+external number) is UNCHANGED — a direct `PJSIP/${target}` Originate
+is correct there; a bare internal extension never needs to go through
+the outbound trunk/dialplan at all, and this case wasn't reported as
+broken.
 
 addParticipant(room, target, isExtension, callerIdLabel) — Originates
 a new channel directly into the SAME live ConfBridge room a call is
@@ -31,7 +38,8 @@ dialerService.js and inboundCallService.js separately.
   10-digit phone number for an outside line (routed via the same
   CMXSandbox trunk the app's own outbound Originate already uses).
 - isExtension: true routes Channel as PJSIP/${target} directly; false
-  routes as PJSIP/${target}@CMXSandbox (out through the trunk).
+  routes through Local/${room}@trunkinbound with Exten=target, exactly
+  like the proven outbound customer-leg pattern.
 - Resolves { success: true, channel } once the target ANSWERS and
   joins the room, or { success: false, reason } if they don't answer
   within ORIGINATE_TIMEOUT_MS or the Originate itself fails outright.
@@ -68,18 +76,28 @@ function addParticipant(room, target, isExtension, callerIdLabel) {
 
     ami.events.on("OriginateResponse", onResponse);
 
-    ami
-      .originate({
-        ActionID: actionId,
-        Channel: isExtension ? `PJSIP/${target}` : `PJSIP/${target}@CMXSandbox`,
-        Application: "ConfBridge",
-        Data: `${room},vici_agent_bridge,vici_agent_user`,
-        CallerID: `"${callerIdLabel}" <${room}>`,
-        Async: "true",
-      })
-      .catch(() => {
-        finish({ success: false, reason: "originate_request_failed" });
-      });
+    const originateParams = isExtension
+      ? {
+          ActionID: actionId,
+          Channel: `PJSIP/${target}`,
+          Application: "ConfBridge",
+          Data: `${room},vici_agent_bridge,vici_agent_user`,
+          CallerID: `"${callerIdLabel}" <${room}>`,
+          Async: "true",
+        }
+      : {
+          ActionID: actionId,
+          Channel: `Local/${room}@trunkinbound`,
+          Context: "trunkinbound",
+          Exten: target,
+          Priority: 1,
+          CallerID: `"${callerIdLabel}" <${room}>`,
+          Async: "true",
+        };
+
+    ami.originate(originateParams).catch(() => {
+      finish({ success: false, reason: "originate_request_failed" });
+    });
   });
 }
 
