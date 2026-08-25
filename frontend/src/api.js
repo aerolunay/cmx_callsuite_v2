@@ -66,8 +66,8 @@ export const api = {
     request("/dialer/conference-add", { method: "POST", body: JSON.stringify({ target, isExtension }) }),
   transferBlind: (target, isExtension) =>
     request("/dialer/transfer-blind", { method: "POST", body: JSON.stringify({ target, isExtension }) }),
-  setStatus: (status) =>
-    request("/dialer/status", { method: "POST", body: JSON.stringify({ status }) }),
+  setStatus: (status, campaignId) =>
+    request("/dialer/status", { method: "POST", body: JSON.stringify({ status, campaignId }) }),
   hasLeads: (campaignId) => request(`/dialer/has-leads?campaignId=${encodeURIComponent(campaignId)}`),
 
   // Dialer

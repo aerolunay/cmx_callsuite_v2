@@ -272,7 +272,7 @@ export default function DialerPage() {
     setError("");
     setBusy(true);
     try {
-      const data = await api.setStatus(statusDraft);
+      const data = await api.setStatus(statusDraft, campaign?.campaign_id);
       setAgentStatus(data.status);
       baseElapsedRef.current = data.status.elapsedSeconds;
       baseAtRef.current = Date.now();

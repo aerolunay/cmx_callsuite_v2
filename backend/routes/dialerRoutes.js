@@ -290,7 +290,7 @@ router.get("/dialer/status", requireAuth, async (req, res) => {
 
 router.post("/dialer/status", requireAuth, async (req, res) => {
   try {
-    const { status } = req.body;
+    const { status, campaignId } = req.body;
 
     if (!agentStatusService.isManualStatus(status)) {
       return res.status(400).json({
@@ -322,7 +322,20 @@ router.post("/dialer/status", requireAuth, async (req, res) => {
       });
     }
 
-    const current = await agentStatusService.setStatus(req.session.agent.appUserId, status);
+    // REAL BUG FIX: this never passed a campaignId at all, even though
+    // setStatus() already supports relatedCampaignId as an option —
+    // meaning every manual status change (READY/NOT_READY/etc.) wrote
+    // a status_log row with related_campaign_id = NULL. The Live
+    // Dashboard's fallback logic then had no way to know which
+    // campaign a multi-assignment agent was actually working, and
+    // guessed by picking whichever assigned campaign sorted first
+    // alphabetically — confirmed live: an agent working CMXRNYBL
+    // showed as CMXBSMSC simply because "B" < "R". Now records the
+    // agent's actual currently-selected campaign on every status
+    // change, not just call-tied ones.
+    const current = await agentStatusService.setStatus(req.session.agent.appUserId, status, {
+      relatedCampaignId: campaignId || null,
+    });
     return res.json({ success: true, status: current });
   } catch (error) {
     console.error("POST /api/dialer/status failed:", error);
