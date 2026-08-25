@@ -6,16 +6,21 @@ import { api } from "../api";
 INTERNAL TRANSFER MODAL
 ==================================================
 Per explicit request — replaces the earlier TransferExtensionModal
-(Transfer-only) with a version that supports BOTH actions: pick an
-agent from the list, then choose Transfer or Conference. This is now
-the ONLY way to target another agent's extension at all — the shared
-manual number field in MiniPhone lost its "Ext" checkbox entirely
-(per explicit request) once this existed, so it's phone-number-only
-now; extension-targeting lives exclusively here.
+with a version that shows real agents on the same campaign to pick
+from, instead of typing an extension blind. This is now the ONLY way
+to target another agent's extension at all — the shared manual number
+field in MiniPhone lost its "Ext" checkbox entirely once this existed,
+so it's phone-number-only now; extension-targeting lives exclusively
+here.
+
+UPDATED — Conference and Transfer are now the same underlying action
+(add someone to the call, no auto-hangup — the agent's own later
+choice to hang up or stay on is what actually distinguishes a handoff
+from a true 3-way, not the button). This modal now has a single
+Transfer action instead of two.
 
 Selection is just local UI state (radio-button-style row highlight) —
-nothing is sent to the backend until Transfer or Conference is
-actually clicked.
+nothing is sent to the backend until Transfer is actually clicked.
 ==================================================
 */
 const STATUS_LABELS = {
@@ -34,12 +39,12 @@ const STATUS_LABELS = {
   TRAINING: "Training",
 };
 
-export default function InternalTransferModal({ campaignId, onClose, onTransfer, onConference }) {
+export default function InternalTransferModal({ campaignId, onClose, onTransfer }) {
   const [agents, setAgents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [selectedExtension, setSelectedExtension] = useState(null);
-  const [busyAction, setBusyAction] = useState(null); // null | "transfer" | "conference"
+  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     api
@@ -49,17 +54,13 @@ export default function InternalTransferModal({ campaignId, onClose, onTransfer,
       .finally(() => setLoading(false));
   }, [campaignId]);
 
-  async function handleAction(action) {
+  async function handleTransferClick() {
     if (!selectedExtension) return;
-    setBusyAction(action);
+    setBusy(true);
     try {
-      if (action === "transfer") {
-        await onTransfer(selectedExtension);
-      } else {
-        await onConference(selectedExtension);
-      }
+      await onTransfer(selectedExtension);
     } finally {
-      setBusyAction(null);
+      setBusy(false);
     }
   }
 
@@ -117,18 +118,10 @@ export default function InternalTransferModal({ campaignId, onClose, onTransfer,
           <button
             type="button"
             className="button-secondary"
-            onClick={() => handleAction("transfer")}
-            disabled={!selectedExtension || busyAction !== null}
+            onClick={handleTransferClick}
+            disabled={!selectedExtension || busy}
           >
-            {busyAction === "transfer" ? "Transferring…" : "Transfer"}
-          </button>
-          <button
-            type="button"
-            className="button-secondary"
-            onClick={() => handleAction("conference")}
-            disabled={!selectedExtension || busyAction !== null}
-          >
-            {busyAction === "conference" ? "Adding…" : "Conference"}
+            {busy ? "Transferring…" : "Transfer"}
           </button>
         </div>
       </div>

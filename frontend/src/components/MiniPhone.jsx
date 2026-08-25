@@ -21,8 +21,12 @@ directly. DialerPage supplies:
     the agent's own leg.
   - onManualDial(phoneNumber): places a tracked outbound call, same
     disposition-enforced path as Callback/Dial Next Number
-  - onConferenceAdd(target, isExtension) / onTransferBlind(target,
-    isExtension): add a participant to / hand off the live call
+  - onTransferBlind(target, isExtension): adds a participant to the
+    live call — Conference and Transfer are now the same underlying
+    action (add someone, no auto-hangup); the agent's own later
+    choice to hang up (handoff complete) or stay on (true 3-way) is
+    what actually distinguishes the two, not the button itself. There
+    is deliberately no separate onConferenceAdd anymore.
 
 HANG UP correctness: initially, removing the separate End Call button
 and relying solely on JsSIP's phone.hangup() (agent-leg-only) was a
@@ -135,7 +139,6 @@ export function MiniPhone({
   onToggleHold,
   onHangUp,
   onManualDial,
-  onConferenceAdd,
   onTransferBlind,
 }) {
   const phone = useJsSipPhone();
@@ -144,24 +147,26 @@ export function MiniPhone({
   const [dialNumber, setDialNumber] = useState("");
   const [isMuted, setIsMuted] = useState(false);
 
-  // UPDATED — per explicit request: the shared manual field lost its
-  // "Ext" checkbox entirely. Extension-targeting now lives EXCLUSIVELY
-  // in the Internal Transfer picker below (which supports both
-  // Transfer AND Conference to a picked agent) — this field is
-  // phone-number-only for both buttons now.
+  // UPDATED — per explicit request: Conference and Transfer are now
+  // functionally identical (add someone to the room, no auto-hangup —
+  // the agent completes a handoff by hanging up normally, or stays on
+  // for a true 3-way; see dialerRoutes.js/dialerService.js). Since
+  // there's no longer any real behavioral difference, this collapses
+  // down to ONE action, labeled "Transfer" everywhere (the manual
+  // number field AND the Internal Transfer picker) — "Conference" as
+  // a separate concept is gone.
   const [targetInput, setTargetInput] = useState("");
-  const [targetBusyAction, setTargetBusyAction] = useState(null); // null | "conference" | "transfer"
+  const [targetBusy, setTargetBusy] = useState(false);
   const [targetError, setTargetError] = useState("");
 
   // Per explicit request — separate from the shared number field
   // entirely: "Internal Transfer" opens a picker listing real agents
-  // on the same campaign, then lets the agent choose Transfer OR
-  // Conference for whichever one they select.
+  // on the same campaign.
   const [showInternalTransferModal, setShowInternalTransferModal] = useState(false);
 
   async function handlePickedExtensionTransfer(extension) {
     setTargetError("");
-    setTargetBusyAction("transfer");
+    setTargetBusy(true);
     try {
       await onTransferBlind(extension, true);
       setShowInternalTransferModal(false);
@@ -169,21 +174,7 @@ export function MiniPhone({
       setTargetError(err.message);
       throw err; // let the modal know it failed too, so its own busy state clears correctly
     } finally {
-      setTargetBusyAction(null);
-    }
-  }
-
-  async function handlePickedExtensionConference(extension) {
-    setTargetError("");
-    setTargetBusyAction("conference");
-    try {
-      await onConferenceAdd(extension, true);
-      setShowInternalTransferModal(false);
-    } catch (err) {
-      setTargetError(err.message);
-      throw err;
-    } finally {
-      setTargetBusyAction(null);
+      setTargetBusy(false);
     }
   }
 
@@ -264,32 +255,17 @@ export function MiniPhone({
     setDialNumber("");
   }
 
-  async function handleConferenceAdd(e) {
-    e.preventDefault();
-    if (!targetInput.trim()) return;
-    setTargetError("");
-    setTargetBusyAction("conference");
-    try {
-      await onConferenceAdd(targetInput.trim(), false);
-      setTargetInput("");
-    } catch (err) {
-      setTargetError(err.message);
-    } finally {
-      setTargetBusyAction(null);
-    }
-  }
-
   async function handleTransfer() {
     if (!targetInput.trim()) return;
     setTargetError("");
-    setTargetBusyAction("transfer");
+    setTargetBusy(true);
     try {
       await onTransferBlind(targetInput.trim(), false);
       setTargetInput("");
     } catch (err) {
       setTargetError(err.message);
     } finally {
-      setTargetBusyAction(null);
+      setTargetBusy(false);
     }
   }
 
@@ -347,15 +323,15 @@ export function MiniPhone({
           className="phone-btn phone-btn-end"
           onClick={handleHangUpClick}
           // Per explicit request: Hang Up is disabled while a
-          // Conference/Transfer attempt is actually in flight
-          // (targetBusyAction set by either the manual field's
-          // buttons or the Internal Transfer modal's actions) — re-
-          // enabled the instant it resolves, whether that's success
-          // (target joined) or failure (didn't answer/unreachable).
-          disabled={(!isIncoming && !isActive) || targetBusyAction !== null}
+          // Transfer attempt is actually in flight (targetBusy set by
+          // either the manual field's button or the Internal Transfer
+          // modal) — re-enabled the instant it resolves, whether
+          // that's success (target joined) or failure (didn't
+          // answer/unreachable).
+          disabled={(!isIncoming && !isActive) || targetBusy}
           title={
-            targetBusyAction !== null
-              ? "Please wait for the transfer/conference attempt to finish"
+            targetBusy
+              ? "Please wait for the transfer attempt to finish"
               : isIncoming
                 ? "Decline"
                 : "Hang Up"
@@ -381,36 +357,27 @@ export function MiniPhone({
           placeholder="Phone number"
           value={targetInput}
           onChange={(e) => setTargetInput(e.target.value)}
-          disabled={!isActive || targetBusyAction !== null}
+          disabled={!isActive || targetBusy}
         />
         <button
           type="button"
           className="button-secondary"
           onClick={handleTransfer}
-          disabled={!isActive || targetBusyAction !== null || !targetInput.trim()}
+          disabled={!isActive || targetBusy || !targetInput.trim()}
         >
-          {targetBusyAction === "transfer" ? "Transferring…" : "Transfer"}
-        </button>
-        <button
-          type="button"
-          className="button-secondary"
-          onClick={handleConferenceAdd}
-          disabled={!isActive || targetBusyAction !== null || !targetInput.trim()}
-        >
-          {targetBusyAction === "conference" ? "Adding…" : "Conference"}
+          {targetBusy ? "Transferring…" : "Transfer"}
         </button>
       </div>
       {targetError && <div className="error phone-extra-error">{targetError}</div>}
 
       {/* Separate from the number field entirely, per explicit
-          request — opens a picker to choose an agent, then either
-          Transfer or Conference them in. */}
+          request — opens a picker to choose an agent to transfer to. */}
       <button
         type="button"
         className="button-secondary"
         style={{ marginTop: 8 }}
         onClick={() => setShowInternalTransferModal(true)}
-        disabled={!isActive || targetBusyAction !== null || !campaignId}
+        disabled={!isActive || targetBusy || !campaignId}
       >
         Internal Transfer
       </button>
@@ -420,7 +387,6 @@ export function MiniPhone({
           campaignId={campaignId}
           onClose={() => setShowInternalTransferModal(false)}
           onTransfer={handlePickedExtensionTransfer}
-          onConference={handlePickedExtensionConference}
         />
       )}
     </div>
