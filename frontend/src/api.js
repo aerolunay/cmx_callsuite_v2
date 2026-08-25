@@ -54,6 +54,7 @@ export const api = {
   // dialerRoutes.js's GET /campaigns/mine for why this is a genuinely
   // separate endpoint from getCampaigns() above, not a variant of it.
   getMyCampaigns: () => request("/campaigns/mine"),
+  getCampaignAgents: (campaignId) => request(`/dialer/campaign-agents?campaignId=${encodeURIComponent(campaignId)}`),
 
   // Call history / stats
   getCallLog: (campaignId) => request(`/dialer/call-log?campaignId=${encodeURIComponent(campaignId)}`),

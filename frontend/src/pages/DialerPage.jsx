@@ -811,6 +811,7 @@ export default function DialerPage() {
             <MiniPhone
               agentStatus={agentStatus?.status}
               hasActiveCall={Boolean(call || inboundCall)}
+              campaignId={campaign?.campaign_id}
               canHold={Boolean(
                 (call && call.status === "customer_connected") ||
                   (inboundCall && inboundCall.status === "agent_connected")

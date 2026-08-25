@@ -280,6 +280,63 @@ router.get("/campaigns/mine", requireAuth, async (req, res) => {
 
 /*
 ==================================================
+GET /api/dialer/campaign-agents?campaignId=X
+==================================================
+New, per explicit request — powers the "Transfer to Extension" picker
+in MiniPhone: instead of blindly typing an extension number, shows
+real agents assigned to the SAME campaign as the active call, with
+their live status, so the transferring agent can see who's actually
+around before picking someone.
+
+Excludes: the requesting agent themselves (can't transfer to your own
+line), any agent with no extension at all (vicidial_user IS NULL —
+nothing to dial), and inactive assignments/accounts.
+
+Deliberately does NOT filter to READY-only — showing NOT_READY/IN_CALL
+agents too (with their real status visible) is more useful than
+silently hiding them; the picker shows status precisely so the agent
+can make an informed choice, not to pre-filter it for them.
+==================================================
+*/
+router.get("/dialer/campaign-agents", requireAuth, async (req, res) => {
+  try {
+    const { campaignId } = req.query;
+    if (!campaignId) {
+      return res.status(400).json({ success: false, message: "campaignId is required." });
+    }
+
+    const [rows] = await db.execute(
+      `
+        SELECT au.app_user_id, au.full_name, au.vicidial_user AS extension, asl.status
+        FROM cmx_dialer.agent_campaign_assignments aca
+        JOIN cmx_dialer.app_users au ON au.app_user_id = aca.app_user_id
+        LEFT JOIN cmx_dialer.agent_status_log asl ON asl.app_user_id = au.app_user_id AND asl.ended_at IS NULL
+        WHERE aca.campaign_id = ?
+          AND aca.active = 1
+          AND au.active = 1
+          AND au.vicidial_user IS NOT NULL
+          AND au.app_user_id != ?
+        ORDER BY au.full_name ASC
+      `,
+      [campaignId, req.session.agent.appUserId]
+    );
+
+    const agents = rows.map((r) => ({
+      appUserId: r.app_user_id,
+      fullName: r.full_name,
+      extension: r.extension,
+      status: r.status || "LOGGED_OUT",
+    }));
+
+    return res.json({ success: true, agents });
+  } catch (error) {
+    console.error("GET /api/dialer/campaign-agents failed:", error);
+    return res.status(500).json({ success: false, message: "Failed to load campaign agents." });
+  }
+});
+
+/*
+==================================================
 AGENT STATUS
 ==================================================
 */

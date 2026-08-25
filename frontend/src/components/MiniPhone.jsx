@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useJsSipPhone } from "../hooks/useJsSipPhone";
+import TransferExtensionModal from "../modals/TransferExtensionModal";
 
 /*
 ==================================================
@@ -128,6 +129,7 @@ function statusDotClass(phone, agentStatus) {
 export function MiniPhone({
   agentStatus,
   hasActiveCall,
+  campaignId,
   canHold,
   onHold,
   onToggleHold,
@@ -142,29 +144,50 @@ export function MiniPhone({
   const [dialNumber, setDialNumber] = useState("");
   const [isMuted, setIsMuted] = useState(false);
 
-  const [addTarget, setAddTarget] = useState("");
-  const [addIsExtension, setAddIsExtension] = useState(true);
-  const [addBusy, setAddBusy] = useState(false);
-  const [addError, setAddError] = useState("");
+  // UPDATED — per explicit request: Conference and Transfer used to
+  // each have their own separate input+checkbox+button row. Now one
+  // shared number/extension field and one shared "Ext" checkbox feed
+  // BOTH actions — the two buttons just act on whatever's currently
+  // typed, rather than each button owning its own separate typed
+  // value. transferAction tracks which of the two is actually in
+  // flight, so only the button that was clicked shows "…ing" while
+  // the other stays put, and so a failure from one doesn't get
+  // mistakenly attributed to the other.
+  const [targetInput, setTargetInput] = useState("");
+  const [targetIsExtension, setTargetIsExtension] = useState(true);
+  const [targetBusyAction, setTargetBusyAction] = useState(null); // null | "conference" | "transfer"
+  const [targetError, setTargetError] = useState("");
 
-  const [transferTarget, setTransferTarget] = useState("");
-  const [transferIsExtension, setTransferIsExtension] = useState(true);
-  const [transferBusy, setTransferBusy] = useState(false);
-  const [transferError, setTransferError] = useState("");
+  // Per explicit request — separate from the shared number field
+  // entirely: a dedicated "Transfer to Extension" button opens a
+  // picker modal listing real agents on the same campaign, instead of
+  // requiring the extension to be typed blind.
+  const [showExtensionPicker, setShowExtensionPicker] = useState(false);
 
-  // REAL BUG FIX, per explicit request: addError/transferError never
-  // got cleared once set — confirmed live, a failed (or even a
+  async function handlePickedExtensionTransfer(extension) {
+    setShowExtensionPicker(false);
+    setTargetError("");
+    setTargetBusyAction("transfer");
+    try {
+      await onTransferBlind(extension, true);
+    } catch (err) {
+      setTargetError(err.message);
+    } finally {
+      setTargetBusyAction(null);
+    }
+  }
+
+  // REAL BUG FIX, per explicit request: this error never got cleared
+  // once set — confirmed live, a failed (or even a
   // successful-but-misreported, see conferenceService.js's own fix)
   // Conference/Transfer attempt left its error message showing
   // indefinitely, even once the agent moved on to a brand new call
   // entirely. hasActiveCall transitions false->true exactly when a
-  // new call actually starts, so clearing both here on that
-  // transition means old messages never bleed into a new, unrelated
-  // call.
+  // new call actually starts, so clearing it here on that transition
+  // means old messages never bleed into a new, unrelated call.
   useEffect(() => {
     if (hasActiveCall) {
-      setAddError("");
-      setTransferError("");
+      setTargetError("");
     }
   }, [hasActiveCall]);
 
@@ -233,33 +256,32 @@ export function MiniPhone({
     setDialNumber("");
   }
 
-  async function handleAddParticipant(e) {
+  async function handleConferenceAdd(e) {
     e.preventDefault();
-    if (!addTarget.trim()) return;
-    setAddError("");
-    setAddBusy(true);
+    if (!targetInput.trim()) return;
+    setTargetError("");
+    setTargetBusyAction("conference");
     try {
-      await onConferenceAdd(addTarget.trim(), addIsExtension);
-      setAddTarget("");
+      await onConferenceAdd(targetInput.trim(), targetIsExtension);
+      setTargetInput("");
     } catch (err) {
-      setAddError(err.message);
+      setTargetError(err.message);
     } finally {
-      setAddBusy(false);
+      setTargetBusyAction(null);
     }
   }
 
-  async function handleTransfer(e) {
-    e.preventDefault();
-    if (!transferTarget.trim()) return;
-    setTransferError("");
-    setTransferBusy(true);
+  async function handleTransfer() {
+    if (!targetInput.trim()) return;
+    setTargetError("");
+    setTargetBusyAction("transfer");
     try {
-      await onTransferBlind(transferTarget.trim(), transferIsExtension);
-      setTransferTarget("");
+      await onTransferBlind(targetInput.trim(), targetIsExtension);
+      setTargetInput("");
     } catch (err) {
-      setTransferError(err.message);
+      setTargetError(err.message);
     } finally {
-      setTransferBusy(false);
+      setTargetBusyAction(null);
     }
   }
 
@@ -333,51 +355,62 @@ export function MiniPhone({
         </p>
       )}
 
-      <form onSubmit={handleAddParticipant} className="phone-extra-row">
+      <div className="phone-extra-row">
         <input
           type="text"
           placeholder="Extension or number"
-          value={addTarget}
-          onChange={(e) => setAddTarget(e.target.value)}
-          disabled={!isActive || addBusy}
+          value={targetInput}
+          onChange={(e) => setTargetInput(e.target.value)}
+          disabled={!isActive || targetBusyAction !== null}
         />
         <label className="phone-extra-checkbox">
           <input
             type="checkbox"
-            checked={addIsExtension}
-            onChange={(e) => setAddIsExtension(e.target.checked)}
-            disabled={!isActive || addBusy}
+            checked={targetIsExtension}
+            onChange={(e) => setTargetIsExtension(e.target.checked)}
+            disabled={!isActive || targetBusyAction !== null}
           />
           Ext
         </label>
-        <button type="submit" className="button-secondary" disabled={!isActive || addBusy || !addTarget.trim()}>
-          {addBusy ? "Adding…" : "Conference"}
+        <button
+          type="button"
+          className="button-secondary"
+          onClick={handleTransfer}
+          disabled={!isActive || targetBusyAction !== null || !targetInput.trim()}
+        >
+          {targetBusyAction === "transfer" ? "Transferring…" : "Transfer"}
         </button>
-      </form>
-      {addError && <div className="error phone-extra-error">{addError}</div>}
+        <button
+          type="button"
+          className="button-secondary"
+          onClick={handleConferenceAdd}
+          disabled={!isActive || targetBusyAction !== null || !targetInput.trim()}
+        >
+          {targetBusyAction === "conference" ? "Adding…" : "Conference"}
+        </button>
+      </div>
+      {targetError && <div className="error phone-extra-error">{targetError}</div>}
 
-      <form onSubmit={handleTransfer} className="phone-extra-row">
-        <input
-          type="text"
-          placeholder="Extension or number"
-          value={transferTarget}
-          onChange={(e) => setTransferTarget(e.target.value)}
-          disabled={!isActive || transferBusy}
+      {/* Separate from the number field entirely, per explicit
+          request — opens a picker instead of requiring a typed
+          extension. */}
+      <button
+        type="button"
+        className="button-secondary"
+        style={{ marginTop: 8 }}
+        onClick={() => setShowExtensionPicker(true)}
+        disabled={!isActive || targetBusyAction !== null || !campaignId}
+      >
+        Transfer to Extension…
+      </button>
+
+      {showExtensionPicker && (
+        <TransferExtensionModal
+          campaignId={campaignId}
+          onClose={() => setShowExtensionPicker(false)}
+          onSelect={handlePickedExtensionTransfer}
         />
-        <label className="phone-extra-checkbox">
-          <input
-            type="checkbox"
-            checked={transferIsExtension}
-            onChange={(e) => setTransferIsExtension(e.target.checked)}
-            disabled={!isActive || transferBusy}
-          />
-          Ext
-        </label>
-        <button type="submit" className="button-secondary" disabled={!isActive || transferBusy || !transferTarget.trim()}>
-          {transferBusy ? "Transferring…" : "Transfer"}
-        </button>
-      </form>
-      {transferError && <div className="error phone-extra-error">{transferError}</div>}
+      )}
     </div>
   );
 }
