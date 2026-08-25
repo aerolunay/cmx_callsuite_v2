@@ -936,12 +936,7 @@ router.get(
           open_row.related_call_id AS open_related_call_id,
           open_row.related_campaign_id AS open_related_campaign_id,
           open_row.related_call_direction AS open_related_call_direction,
-          last_closed.logged_out_elapsed_seconds,
-          (
-            SELECT aca.campaign_id FROM cmx_dialer.agent_campaign_assignments aca
-            WHERE aca.app_user_id = au.app_user_id AND aca.active = 1
-            ORDER BY aca.campaign_id LIMIT 1
-          ) AS assigned_campaign_id
+          last_closed.logged_out_elapsed_seconds
         FROM cmx_dialer.app_users au
         LEFT JOIN (
           SELECT app_user_id, status, related_call_id, related_campaign_id, related_call_direction, TIMESTAMPDIFF(SECOND, started_at, NOW()) AS elapsed_seconds
@@ -1001,42 +996,55 @@ router.get(
       callerIdsByCallId[call.callId] = call.callerIdNumber;
     }
 
-    const agents = rows.map((r) => {
-      const displayCampaignId = r.open_related_campaign_id || r.assigned_campaign_id || null;
+    // REAL BUG FIX, per explicit request: this used to fall back to
+    // "assigned_campaign_id" (a subquery guessing whichever campaign
+    // sorted first alphabetically among the agent's assignments) any
+    // time open_related_campaign_id was null — which was ALWAYS the
+    // case right after login, before the agent's first manual status
+    // change ever recorded a real campaign. That guess was
+    // confirmed wrong in practice (an agent actually on CMXRNYBL
+    // showed as CMXBSMSC purely because "B" < "R"). No more guessing —
+    // an agent who is actively logged in (has an open status row) but
+    // hasn't had a campaign recorded yet is filtered OUT of this list
+    // entirely, rather than shown with a misleading campaign. LOGGED_OUT
+    // agents (no open status row at all) are unaffected by this and
+    // still show normally, regardless of campaign.
+    const agents = rows
+      .filter((r) => !r.open_status || r.open_related_campaign_id)
+      .map((r) => {
+        if (r.open_status) {
+          const isCallRelated =
+            r.open_status === "IN_CALL" || r.open_status === "ON_HOLD" || r.open_status === "AFTER_CALL_WORK";
+          const useAggregatedDuration = r.open_status === "IN_CALL";
+          const totalHandlingSeconds = useAggregatedDuration ? totalsByCallId.get(r.open_related_call_id) : undefined;
 
-      if (r.open_status) {
-        const isCallRelated =
-          r.open_status === "IN_CALL" || r.open_status === "ON_HOLD" || r.open_status === "AFTER_CALL_WORK";
-        const useAggregatedDuration = r.open_status === "IN_CALL";
-        const totalHandlingSeconds = useAggregatedDuration ? totalsByCallId.get(r.open_related_call_id) : undefined;
-
+          return {
+            appUserId: r.app_user_id,
+            fullName: r.full_name,
+            email: r.email,
+            vicidialUser: r.vicidial_user,
+            campaignId: r.open_related_campaign_id,
+            status: r.open_status,
+            direction: isCallRelated ? r.open_related_call_direction || null : null,
+            callerId: isCallRelated ? callerIdsByCallId[r.open_related_call_id] || null : null,
+            elapsedSeconds: totalHandlingSeconds !== undefined ? totalHandlingSeconds : r.open_elapsed_seconds,
+            lastLoginAt: r.last_login_at,
+            priority: r.priority,
+          };
+        }
         return {
           appUserId: r.app_user_id,
           fullName: r.full_name,
           email: r.email,
           vicidialUser: r.vicidial_user,
-          campaignId: displayCampaignId,
-          status: r.open_status,
-          direction: isCallRelated ? r.open_related_call_direction || null : null,
-          callerId: isCallRelated ? callerIdsByCallId[r.open_related_call_id] || null : null,
-          elapsedSeconds: totalHandlingSeconds !== undefined ? totalHandlingSeconds : r.open_elapsed_seconds,
+          campaignId: null,
+          status: "LOGGED_OUT",
+          direction: null,
+          elapsedSeconds: r.logged_out_elapsed_seconds,
           lastLoginAt: r.last_login_at,
           priority: r.priority,
         };
-      }
-      return {
-        appUserId: r.app_user_id,
-        fullName: r.full_name,
-        email: r.email,
-        vicidialUser: r.vicidial_user,
-        campaignId: displayCampaignId,
-        status: "LOGGED_OUT",
-        direction: null,
-        elapsedSeconds: r.logged_out_elapsed_seconds,
-        lastLoginAt: r.last_login_at,
-        priority: r.priority,
-      };
-    });
+      });
 
     return res.json({ success: true, agents });
   } catch (error) {

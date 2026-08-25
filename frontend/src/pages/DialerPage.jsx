@@ -172,6 +172,48 @@ export default function DialerPage() {
       .catch((err) => setError(err.message));
   }, []);
 
+  // REAL BUG FIX — per explicit request: right after login (before the
+  // agent ever manually touches the status dropdown), their open
+  // status row has NO campaign recorded at all — the Live Dashboard's
+  // guess-based fallback then showed the wrong (alphabetically-first)
+  // campaign for anyone with multiple assignments. Once both the
+  // agent's actual campaign selection (from localStorage) and their
+  // current open status row are known, this stamps the correct
+  // campaignId onto that row — WITHOUT changing what status they're
+  // actually in (NOT_READY stays NOT_READY, just now correctly
+  // tagged).
+  //
+  // campaignStampedRef guards this to run AT MOST ONCE per mount, and
+  // the relatedCampaignId comparison itself means it's a genuine no-op
+  // on every ordinary page refresh AFTER the first correct stamp —
+  // critical to not resurrect the earlier "status resets on every
+  // refresh" bug (see ws.js's own fix for that), since setStatus()
+  // always closes and reopens the row, which must only ever happen
+  // when something has actually changed.
+  const campaignStampedRef = useRef(false);
+
+  useEffect(() => {
+    if (!campaign || !agentStatus) return;
+    if (campaignStampedRef.current) return;
+
+    if (agentStatus.relatedCampaignId === campaign.campaign_id) {
+      campaignStampedRef.current = true;
+      return;
+    }
+
+    campaignStampedRef.current = true;
+    api
+      .setStatus(agentStatus.status, campaign.campaign_id)
+      .then((data) => {
+        setAgentStatus(data.status);
+        baseElapsedRef.current = data.status.elapsedSeconds;
+        baseAtRef.current = Date.now();
+      })
+      .catch(() => {
+        campaignStampedRef.current = false; // allow a retry on the next render if this failed
+      });
+  }, [campaign, agentStatus]);
+
   useEffect(() => {
     clearInterval(elapsedTimerRef.current);
     if (!agentStatus) return;

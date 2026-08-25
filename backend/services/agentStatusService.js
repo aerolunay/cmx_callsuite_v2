@@ -104,7 +104,7 @@ function isManualStatus(status) {
 async function getCurrentStatus(appUserId) {
   const [rows] = await db.execute(
     `
-      SELECT status, started_at, TIMESTAMPDIFF(SECOND, started_at, NOW()) AS elapsed_seconds
+      SELECT status, started_at, related_campaign_id, TIMESTAMPDIFF(SECOND, started_at, NOW()) AS elapsed_seconds
       FROM cmx_dialer.agent_status_log
       WHERE app_user_id = ? AND ended_at IS NULL
       ORDER BY status_log_id DESC
@@ -115,7 +115,7 @@ async function getCurrentStatus(appUserId) {
 
   if (!rows.length) return null;
 
-  return { status: rows[0].status, elapsedSeconds: rows[0].elapsed_seconds };
+  return { status: rows[0].status, elapsedSeconds: rows[0].elapsed_seconds, relatedCampaignId: rows[0].related_campaign_id };
 }
 
 /*
