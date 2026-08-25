@@ -42,7 +42,11 @@ export default function ReportsPage() {
   // Reports roles: supervisor, account_manager, wfm, admin — NOT
   // training_quality (Reports isn't part of that role's access per the
   // finished matrix). admin/wfm get the full unscoped campaign list;
-  // supervisor/account_manager get only their own assignments.
+  // supervisor/account_manager get only their own assignments — but
+  // "All" is now a real, valid option for them too (resolved
+  // server-side to "every campaign I'm assigned to", via
+  // resolveCampaignScope — see adminRoutes.js), not just a single
+  // forced campaign anymore.
   const REPORTS_ROLES = ["supervisor", "account_manager", "wfm", "admin"];
   const isUnrestrictedCampaignAccess = agent?.accessLevel === "admin" || agent?.accessLevel === "wfm";
 
@@ -52,11 +56,7 @@ export default function ReportsPage() {
     } else if (agent) {
       api
         .getMyCampaigns()
-        .then((data) => {
-          const list = data.campaigns || [];
-          setCampaigns(list);
-          if (list.length > 0) setCampaignId((prev) => prev || list[0].campaign_id);
-        })
+        .then((data) => setCampaigns(data.campaigns || []))
         .catch(() => {});
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -64,9 +64,6 @@ export default function ReportsPage() {
 
   function load() {
     if (!startDate || !endDate) return;
-    // Scoped roles must have a real campaignId before this can run at
-    // all — the backend rejects an empty one for them.
-    if (!isUnrestrictedCampaignAccess && !campaignId) return;
     setLoading(true);
     setError("");
 
@@ -174,7 +171,15 @@ export default function ReportsPage() {
           <div>
             <label className="comments-label">Campaign</label>
             <select value={campaignId} onChange={(e) => setCampaignId(e.target.value)}>
-              {isUnrestrictedCampaignAccess && <option value="">— All Campaigns —</option>}
+              {/* "All" is now valid for every role — for
+                  supervisor/account_manager, the backend
+                  (resolveCampaignScope) resolves an empty selection to
+                  "every campaign I'm actually assigned to," never the
+                  full system-wide list. Only admin/wfm get a truly
+                  unrestricted "All". */}
+              <option value="">
+                {isUnrestrictedCampaignAccess ? "— All Campaigns —" : "— All My Campaigns —"}
+              </option>
               {campaigns.map((c) => (
                 <option key={c.campaign_id} value={c.campaign_id}>
                   {c.campaign_name} ({c.campaign_id})

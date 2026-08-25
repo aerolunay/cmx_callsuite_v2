@@ -12,7 +12,7 @@ const ws = require("../config/ws");
 const ami = require("../config/ami");
 const { transporter } = require("../config/mailer");
 const { buildWelcomeEmail } = require("../services/emailTemplates");
-const { requireRoles, requireCampaignAccess } = require("../services/accessControlService");
+const { requireRoles, requireCampaignAccess, resolveCampaignScope } = require("../services/accessControlService");
 
 const router = express.Router();
 
@@ -1441,10 +1441,10 @@ alone won't work without that corresponding function existing.
 router.get(
   "/reports/campaign-agent-breakdown",
   requireRoles("supervisor", "account_manager", "wfm", "admin"),
-  requireCampaignAccess,
+  resolveCampaignScope,
   async (req, res) => {
   try {
-    const { startDate, endDate, campaignId } = req.query;
+    const { startDate, endDate } = req.query;
     if (!startDate || !endDate) {
       return res.status(400).json({ success: false, message: "startDate and endDate query params are required." });
     }
@@ -1452,7 +1452,7 @@ router.get(
     const report = await statsService.getCampaignAgentBreakdown({
       startDate,
       endDate,
-      campaignId: campaignId || null,
+      campaignIds: req.campaignScope,
     });
     return res.json({ success: true, report });
   } catch (error) {
@@ -1508,21 +1508,22 @@ functions was a real bug found and fixed elsewhere in this app
 router.get(
   "/reports/raw-calls",
   requireRoles("supervisor", "account_manager", "wfm", "admin"),
-  requireCampaignAccess,
+  resolveCampaignScope,
   async (req, res) => {
     try {
-      const { startDate, endDate, campaignId } = req.query;
+      const { startDate, endDate } = req.query;
       if (!startDate || !endDate) {
         return res.status(400).json({ success: false, message: "startDate and endDate query params are required." });
       }
 
       const { start, end } = await statsService.getEasternRangeBoundsForServerClock(startDate, endDate);
+      const campaignIds = req.campaignScope; // null = truly unrestricted (admin/wfm "All"), array = one or more specific campaigns
 
       const params = [start, end];
       let campaignFilter = "";
-      if (campaignId) {
-        campaignFilter = "AND combined.campaign_id = ?";
-        params.push(campaignId);
+      if (campaignIds && campaignIds.length > 0) {
+        campaignFilter = `AND combined.campaign_id IN (${campaignIds.map(() => "?").join(",")})`;
+        params.push(...campaignIds);
       }
 
       const [rows] = await db.execute(
@@ -1556,14 +1557,13 @@ router.get(
       // Per-call talk/hold/ACW — same segment-aggregation query as
       // computeDirectionStats, just not scoped to one direction/agent
       // at a time since this report already combines both directions
-      // in one pass. Bounded by the same date range (and campaign, via
-      // related_campaign_id) as the raw call rows above, so this never
-      // pulls segments for calls outside what's actually being shown.
+      // in one pass. Bounded by the same date range (and campaign
+      // scope, via related_campaign_id) as the raw call rows above.
       const segParams = [start, end];
       let segCampaignFilter = "";
-      if (campaignId) {
-        segCampaignFilter = "AND related_campaign_id = ?";
-        segParams.push(campaignId);
+      if (campaignIds && campaignIds.length > 0) {
+        segCampaignFilter = `AND related_campaign_id IN (${campaignIds.map(() => "?").join(",")})`;
+        segParams.push(...campaignIds);
       }
       const [segRows] = await db.execute(
         `

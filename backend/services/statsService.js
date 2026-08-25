@@ -177,12 +177,22 @@ present on the call-log tables) against app_users to attach a
 app_user_id/full_name, and for merging inbound+outbound together.
 ==================================================
 */
-async function computeDirectionStatsGrouped({ direction, campaignId, start, end }) {
+async function computeDirectionStatsGrouped({ direction, campaignId, campaignIds, start, end }) {
   const table = direction === "inbound" ? "inbound_call_log" : "dialer_call_log";
 
+  // campaignIds (array) takes priority over the older singular
+  // campaignId — added to support "All (My Campaigns)" for scoped
+  // roles on the Reports page (an IN-list of their real assignments,
+  // never the full system-wide list) alongside the pre-existing
+  // "exactly one campaign" and "no filter at all" cases. See
+  // accessControlService.js's resolveCampaignScope for where this
+  // array actually comes from.
   const countParams = [start, end];
   let countFilter = "";
-  if (campaignId) {
+  if (campaignIds && campaignIds.length > 0) {
+    countFilter += ` AND campaign_id IN (${campaignIds.map(() => "?").join(",")})`;
+    countParams.push(...campaignIds);
+  } else if (campaignId) {
     countFilter += " AND campaign_id = ?";
     countParams.push(campaignId);
   }
@@ -198,7 +208,10 @@ async function computeDirectionStatsGrouped({ direction, campaignId, start, end 
 
   const segParams = [direction, start, end];
   let segFilter = "";
-  if (campaignId) {
+  if (campaignIds && campaignIds.length > 0) {
+    segFilter += ` AND related_campaign_id IN (${campaignIds.map(() => "?").join(",")})`;
+    segParams.push(...campaignIds);
+  } else if (campaignId) {
     segFilter += " AND related_campaign_id = ?";
     segParams.push(campaignId);
   }
@@ -268,12 +281,12 @@ by username, rather than silently merging with another such row under
 a shared "null" key.
 ==================================================
 */
-async function getCampaignAgentBreakdown({ startDate, endDate, campaignId }) {
+async function getCampaignAgentBreakdown({ startDate, endDate, campaignId, campaignIds }) {
   const { start, end } = await getEasternRangeBoundsForServerClock(startDate, endDate);
 
   const [inbound, outbound, [agentRows], [campaignRows]] = await Promise.all([
-    computeDirectionStatsGrouped({ direction: "inbound", campaignId, start, end }),
-    computeDirectionStatsGrouped({ direction: "outbound", campaignId, start, end }),
+    computeDirectionStatsGrouped({ direction: "inbound", campaignId, campaignIds, start, end }),
+    computeDirectionStatsGrouped({ direction: "outbound", campaignId, campaignIds, start, end }),
     db.execute(`SELECT app_user_id, vicidial_user, full_name FROM cmx_dialer.app_users WHERE vicidial_user IS NOT NULL`),
     db.execute(`SELECT campaign_id, campaign_name FROM vicidial_campaigns`),
   ]);
