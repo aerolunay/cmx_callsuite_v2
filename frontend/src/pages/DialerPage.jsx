@@ -536,6 +536,21 @@ export default function DialerPage() {
     return api.transferBlind(target, isExtension);
   }
 
+  // Same pass-through pattern as Conference/Transfer above — MiniPhone
+  // owns its own busy/error state for these, errors intentionally
+  // reach it uncaught.
+  function handleStartLineTwo(target, isExtension) {
+    return api.startLineTwo(target, isExtension);
+  }
+
+  function handleCompleteLineTwo(action) {
+    return api.completeLineTwo(action);
+  }
+
+  function handleCancelLineTwo() {
+    return api.cancelLineTwo();
+  }
+
   async function handleToggleHold() {
     if (!call) return;
     setError("");
@@ -820,8 +835,10 @@ export default function DialerPage() {
               onToggleHold={handlePhoneToggleHold}
               onHangUp={handlePhoneHangUp}
               onManualDial={handleManualDial}
-              onConferenceAdd={handleConferenceAdd}
               onTransferBlind={handleTransferBlind}
+              onStartLineTwo={handleStartLineTwo}
+              onCompleteLineTwo={handleCompleteLineTwo}
+              onCancelLineTwo={handleCancelLineTwo}
             />
 
         {inboundCall && (

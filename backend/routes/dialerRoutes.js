@@ -11,6 +11,7 @@ const inboundCallService = require("../services/inboundCallService");
 const crossAppHandoffService = require("../services/crossAppHandoffService");
 const recordingUploadService = require("../services/recordingUploadService");
 const conferenceService = require("../services/conferenceService");
+const attendedTransferService = require("../services/attendedTransferService");
 const { requireRoles, requireCampaignAccess, getAssignedCampaignIds, UNRESTRICTED_CAMPAIGN_ROLES } = require("../services/accessControlService");
 
 const router = express.Router();
@@ -124,6 +125,8 @@ function resolveActiveRoom(appUserId) {
       agentChannel: outboundCall.agentChannel,
       customerChannel: outboundCall.customerChannel,
       rawCall: outboundCall,
+      callId: outboundCall.callId,
+      isInbound: false,
     };
   }
   const inboundCall = inboundCallService.getInboundCallForAgent(appUserId);
@@ -133,6 +136,8 @@ function resolveActiveRoom(appUserId) {
       agentChannel: inboundCall.agentChannel,
       customerChannel: inboundCall.customerChannel,
       rawCall: inboundCall,
+      callId: inboundCall.callId,
+      isInbound: true,
     };
   }
   return null;
@@ -234,6 +239,82 @@ router.post("/dialer/transfer-blind", requireAuth, async (req, res) => {
   } catch (error) {
     console.error("POST /api/dialer/transfer-blind failed:", error);
     return res.status(500).json({ success: false, message: "Failed to transfer call." });
+  }
+});
+
+/*
+==================================================
+ATTENDED TRANSFER ("Line 2") — per explicit request
+==================================================
+Real attended transfer: the customer is put on hold (hears nothing)
+while the agent privately talks to a new target on a separate,
+private line, then either completes a handoff (Transfer) or brings
+everyone together (Conference) — or cancels and returns to the
+original call. See attendedTransferService.js for the full design
+rationale and exact dialplan patterns this relies on.
+==================================================
+*/
+router.post("/dialer/line-two/start", requireAuth, async (req, res) => {
+  try {
+    const { target, isExtension } = req.body;
+    if (!target) {
+      return res.status(400).json({ success: false, message: "target is required." });
+    }
+
+    const active = resolveActiveRoom(req.session.agent.appUserId);
+    if (!active) {
+      return res.status(409).json({ success: false, message: "You're not currently on a call." });
+    }
+
+    const result = await attendedTransferService.startLineTwo(active, target, Boolean(isExtension));
+
+    if (!result.success) {
+      return res.status(502).json({
+        success: false,
+        message: `${target} didn't answer — you're back with your original call.`,
+        reason: result.reason,
+      });
+    }
+
+    return res.json({ success: true });
+  } catch (error) {
+    console.error("POST /api/dialer/line-two/start failed:", error);
+    return res.status(500).json({ success: false, message: error.message || "Failed to start Line 2." });
+  }
+});
+
+router.post("/dialer/line-two/complete", requireAuth, async (req, res) => {
+  try {
+    const { action } = req.body;
+    if (action !== "transfer" && action !== "conference") {
+      return res.status(400).json({ success: false, message: 'action must be "transfer" or "conference".' });
+    }
+
+    const active = resolveActiveRoom(req.session.agent.appUserId);
+    if (!active) {
+      return res.status(409).json({ success: false, message: "You're not currently on a call." });
+    }
+
+    await attendedTransferService.completeLineTwo(active, action);
+    return res.json({ success: true });
+  } catch (error) {
+    console.error("POST /api/dialer/line-two/complete failed:", error);
+    return res.status(500).json({ success: false, message: error.message || "Failed to complete Line 2." });
+  }
+});
+
+router.post("/dialer/line-two/cancel", requireAuth, async (req, res) => {
+  try {
+    const active = resolveActiveRoom(req.session.agent.appUserId);
+    if (!active) {
+      return res.status(409).json({ success: false, message: "You're not currently on a call." });
+    }
+
+    await attendedTransferService.cancelLineTwo(active);
+    return res.json({ success: true });
+  } catch (error) {
+    console.error("POST /api/dialer/line-two/cancel failed:", error);
+    return res.status(500).json({ success: false, message: error.message || "Failed to cancel Line 2." });
   }
 });
 

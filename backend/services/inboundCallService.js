@@ -76,6 +76,29 @@ function roomFromSuffix(suffix) {
 
 /*
 ==================================================
+rekeyInboundCallRoom — new, for attended transfer (Line 2)
+==================================================
+inboundCalls is keyed by ROOM NUMBER, not callId (see inboundCalls.set
+calls throughout this file) — unlike activeCalls in dialerService.js,
+which is keyed by callId and therefore unaffected when a call's room
+changes. Completing an attended transfer moves the customer (and the
+call's own tracked room) from the original room into Line 2's private
+room — without re-keying this Map, the call would become unreachable
+under BOTH the old room (deleted) and the new one (never actually
+stored there), breaking every later lookup (hold, hangup, disposition,
+etc).
+==================================================
+*/
+function rekeyInboundCallRoom(oldRoom, newRoom) {
+  const call = inboundCalls.get(oldRoom);
+  if (!call) return;
+  inboundCalls.delete(oldRoom);
+  call.room = newRoom;
+  inboundCalls.set(newRoom, call);
+}
+
+/*
+==================================================
 RECORDING PATH — NEW
 ==================================================
 Same convention as dialerService.js's recordingPathForCall — kept as
@@ -196,6 +219,7 @@ async function allocateInboundRoom(did) {
     // to end the whole room out from under a still-connected third
     // party when the original agent hangs up.
     extraParticipants: [],
+    lineTwo: null, // see attendedTransferService.js
   };
   inboundCalls.set(room, call);
 
@@ -841,4 +865,6 @@ module.exports = {
   getAbandonedCallsToday,
   findByCallId,
   recordingPathForCall,
+  releaseRoomSuffix,
+  rekeyInboundCallRoom,
 };

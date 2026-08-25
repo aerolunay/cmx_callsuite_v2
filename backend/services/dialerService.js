@@ -393,6 +393,7 @@ function startCall({ appUserId, agentUser, agentExtension, lead, leadId, phoneNu
       // call (and releasing the room number for reuse) out from under
       // them.
       extraParticipants: [],
+      lineTwo: null, // see attendedTransferService.js
     };
 
     activeCalls.set(callId, callState);
@@ -1067,4 +1068,7 @@ module.exports = {
   saveDisposition,
   getCallLog,
   recordingPathForCall,
+  allocateRoomSuffix,
+  releaseRoomSuffix,
+  roomFromSuffix,
 };

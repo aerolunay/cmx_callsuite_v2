@@ -21,12 +21,15 @@ directly. DialerPage supplies:
     the agent's own leg.
   - onManualDial(phoneNumber): places a tracked outbound call, same
     disposition-enforced path as Callback/Dial Next Number
-  - onTransferBlind(target, isExtension): adds a participant to the
-    live call — Conference and Transfer are now the same underlying
-    action (add someone, no auto-hangup); the agent's own later
-    choice to hang up (handoff complete) or stay on (true 3-way) is
-    what actually distinguishes the two, not the button itself. There
-    is deliberately no separate onConferenceAdd anymore.
+  - onStartLineTwo(target, isExtension) / onCompleteLineTwo(action) /
+    onCancelLineTwo(): real attended transfer, per explicit request —
+    a traditional phone's Line 1/Line 2 model. Starting Line 2 puts
+    the ORIGINAL customer on hold (they hear nothing) while the agent
+    privately dials and talks to a new target on a separate line.
+    Completing brings the customer in — either as a handoff (Transfer,
+    agent leaves) or a true 3-way (Conference, agent stays). Canceling
+    hangs up Line 2 and restores the original call exactly as it was.
+    See attendedTransferService.js on the backend for the full design.
 
 HANG UP correctness: initially, removing the separate End Call button
 and relying solely on JsSIP's phone.hangup() (agent-leg-only) was a
@@ -40,23 +43,14 @@ BOTH channels via AMI and explicitly triggers markCallEnded) before
 also calling phone.hangup() for JsSIP's own local cleanup.
 
 ALL action buttons are always rendered (Answer, Decline, Call, Hang
-Up, Mute, Conference, Transfer) — none are conditionally hidden;
-each is individually enabled/disabled based on current call state.
+Up, Mute) — none are conditionally hidden; each is individually
+enabled/disabled based on current call state. Line 2's own controls
+DO swap between two distinct rows (dial vs. decide) — that's a real
+state machine, not just a disabled/enabled toggle.
 
 The main dial field only accepts digits — it's a phone number field.
-The Conference/Transfer "target" fields deliberately still allow
-letters, since this app's extensions are named like "bsmsc901", not
-purely numeric.
-
-CONFERENCE AND TRANSFER ARE NOT YET CONFIRMED against a real test
-call — the backend primitive they call (conferenceService.js) is new
-tonight and hasn't been exercised live. Expect this to need debugging
-the same way every other Asterisk-facing change has tonight.
-
-ATTENDED TRANSFER IS NOT IMPLEMENTED — only blind transfer (hand off
-and immediately leave) exists right now. Attended (talk to the target
-privately first) needs real ConfBridge/AMI bridge-manipulation work
-deliberately left for a separate pass rather than guessed at here.
+Line 2's target field deliberately still allows letters, since this
+app's extensions are named like "bsmsc901", not purely numeric.
 ==================================================
 */
 
@@ -139,7 +133,9 @@ export function MiniPhone({
   onToggleHold,
   onHangUp,
   onManualDial,
-  onTransferBlind,
+  onStartLineTwo,
+  onCompleteLineTwo,
+  onCancelLineTwo,
 }) {
   const phone = useJsSipPhone();
   const autoAnsweredCallRef = useRef(null); // guards against re-answering the same ring on every re-render
@@ -147,34 +143,77 @@ export function MiniPhone({
   const [dialNumber, setDialNumber] = useState("");
   const [isMuted, setIsMuted] = useState(false);
 
-  // UPDATED — per explicit request: Conference and Transfer are now
-  // functionally identical (add someone to the room, no auto-hangup —
-  // the agent completes a handoff by hanging up normally, or stays on
-  // for a true 3-way; see dialerRoutes.js/dialerService.js). Since
-  // there's no longer any real behavioral difference, this collapses
-  // down to ONE action, labeled "Transfer" everywhere (the manual
-  // number field AND the Internal Transfer picker) — "Conference" as
-  // a separate concept is gone.
+  // UPDATED — per explicit request: real attended transfer, like a
+  // traditional phone's Line 1/Line 2. The number field + Internal
+  // Transfer picker below now START Line 2 (puts the customer on
+  // hold, privately dials the target) instead of instantly adding
+  // them to the live call. Once Line 2 answers, lineTwoActive flips
+  // true and a separate decision row appears: Transfer (complete the
+  // handoff, hang up), Conference (bring everyone together, stay on),
+  // or Cancel (hang up Line 2, go back to the original customer).
   const [targetInput, setTargetInput] = useState("");
-  const [targetBusy, setTargetBusy] = useState(false);
   const [targetError, setTargetError] = useState("");
+  const [lineTwoActive, setLineTwoActive] = useState(false);
+  const [lineTwoBusy, setLineTwoBusy] = useState(false);
 
   // Per explicit request — separate from the shared number field
   // entirely: "Internal Transfer" opens a picker listing real agents
   // on the same campaign.
   const [showInternalTransferModal, setShowInternalTransferModal] = useState(false);
 
-  async function handlePickedExtensionTransfer(extension) {
+  async function handleStartLineTwo() {
+    if (!targetInput.trim()) return;
     setTargetError("");
-    setTargetBusy(true);
+    setLineTwoBusy(true);
     try {
-      await onTransferBlind(extension, true);
+      await onStartLineTwo(targetInput.trim(), false);
+      setLineTwoActive(true);
+      setTargetInput("");
+    } catch (err) {
+      setTargetError(err.message);
+    } finally {
+      setLineTwoBusy(false);
+    }
+  }
+
+  async function handlePickedExtensionStartLineTwo(extension) {
+    setTargetError("");
+    setLineTwoBusy(true);
+    try {
+      await onStartLineTwo(extension, true);
+      setLineTwoActive(true);
       setShowInternalTransferModal(false);
     } catch (err) {
       setTargetError(err.message);
       throw err; // let the modal know it failed too, so its own busy state clears correctly
     } finally {
-      setTargetBusy(false);
+      setLineTwoBusy(false);
+    }
+  }
+
+  async function handleCompleteLineTwoClick(action) {
+    setTargetError("");
+    setLineTwoBusy(true);
+    try {
+      await onCompleteLineTwo(action);
+      setLineTwoActive(false);
+    } catch (err) {
+      setTargetError(err.message);
+    } finally {
+      setLineTwoBusy(false);
+    }
+  }
+
+  async function handleCancelLineTwoClick() {
+    setTargetError("");
+    setLineTwoBusy(true);
+    try {
+      await onCancelLineTwo();
+      setLineTwoActive(false);
+    } catch (err) {
+      setTargetError(err.message);
+    } finally {
+      setLineTwoBusy(false);
     }
   }
 
@@ -218,6 +257,7 @@ export function MiniPhone({
       setIsMuted(false);
       setTargetInput("");
       setTargetError("");
+      setLineTwoActive(false);
     }
   }, [phone.callState]);
 
@@ -253,20 +293,6 @@ export function MiniPhone({
     if (!canDial || !dialNumber.trim()) return;
     onManualDial(dialNumber.trim());
     setDialNumber("");
-  }
-
-  async function handleTransfer() {
-    if (!targetInput.trim()) return;
-    setTargetError("");
-    setTargetBusy(true);
-    try {
-      await onTransferBlind(targetInput.trim(), false);
-      setTargetInput("");
-    } catch (err) {
-      setTargetError(err.message);
-    } finally {
-      setTargetBusy(false);
-    }
   }
 
   const isIdle = phone.callState === phone.CALL_STATES.IDLE || phone.callState === phone.CALL_STATES.ENDED;
@@ -322,16 +348,13 @@ export function MiniPhone({
           type="button"
           className="phone-btn phone-btn-end"
           onClick={handleHangUpClick}
-          // Per explicit request: Hang Up is disabled while a
-          // Transfer attempt is actually in flight (targetBusy set by
-          // either the manual field's button or the Internal Transfer
-          // modal) — re-enabled the instant it resolves, whether
-          // that's success (target joined) or failure (didn't
-          // answer/unreachable).
-          disabled={(!isIncoming && !isActive) || targetBusy}
+          // Hang Up is disabled while a Line 2 action is actually in
+          // flight (starting, completing, or canceling) — re-enabled
+          // the instant it resolves, whether success or failure.
+          disabled={(!isIncoming && !isActive) || lineTwoBusy}
           title={
-            targetBusy
-              ? "Please wait for the transfer attempt to finish"
+            lineTwoBusy
+              ? "Please wait for the Line 2 action to finish"
               : isIncoming
                 ? "Decline"
                 : "Hang Up"
@@ -351,42 +374,77 @@ export function MiniPhone({
         </p>
       )}
 
-      <div className="phone-extra-row">
-        <input
-          type="text"
-          placeholder="Phone number"
-          value={targetInput}
-          onChange={(e) => setTargetInput(e.target.value)}
-          disabled={!isActive || targetBusy}
-        />
-        <button
-          type="button"
-          className="button-secondary"
-          onClick={handleTransfer}
-          disabled={!isActive || targetBusy || !targetInput.trim()}
-        >
-          {targetBusy ? "Transferring…" : "Transfer"}
-        </button>
-      </div>
-      {targetError && <div className="error phone-extra-error">{targetError}</div>}
+      {/* LINE 2 — real attended transfer, per explicit request. While
+          not active: dial a target privately (customer goes on hold,
+          hears nothing) via the number field or the Internal Transfer
+          picker. Once Line 2 answers, this becomes a decision row:
+          Transfer (complete the handoff, hang up), Conference (bring
+          everyone together, stay on), or Cancel (hang up Line 2, go
+          back to the original customer). */}
+      {!lineTwoActive ? (
+        <>
+          <div className="phone-extra-row">
+            <input
+              type="text"
+              placeholder="Phone number"
+              value={targetInput}
+              onChange={(e) => setTargetInput(e.target.value)}
+              disabled={!isActive || lineTwoBusy}
+            />
+            <button
+              type="button"
+              className="button-secondary"
+              onClick={handleStartLineTwo}
+              disabled={!isActive || lineTwoBusy || !targetInput.trim()}
+            >
+              {lineTwoBusy ? "Calling…" : "Call Line 2"}
+            </button>
+          </div>
+          {targetError && <div className="error phone-extra-error">{targetError}</div>}
 
-      {/* Separate from the number field entirely, per explicit
-          request — opens a picker to choose an agent to transfer to. */}
-      <button
-        type="button"
-        className="button-secondary"
-        style={{ marginTop: 8 }}
-        onClick={() => setShowInternalTransferModal(true)}
-        disabled={!isActive || targetBusy || !campaignId}
-      >
-        Internal Transfer
-      </button>
+          {/* Separate from the number field entirely, per explicit
+              request — opens a picker to choose an agent for Line 2. */}
+          <button
+            type="button"
+            className="button-secondary"
+            style={{ marginTop: 8 }}
+            onClick={() => setShowInternalTransferModal(true)}
+            disabled={!isActive || lineTwoBusy || !campaignId}
+          >
+            Internal Transfer
+          </button>
+        </>
+      ) : (
+        <div className="phone-extra-row" style={{ flexWrap: "wrap" }}>
+          <span className="badge">Line 2 connected — customer is on hold</span>
+          <button
+            type="button"
+            className="button-secondary"
+            onClick={() => handleCompleteLineTwoClick("transfer")}
+            disabled={lineTwoBusy}
+          >
+            Transfer
+          </button>
+          <button
+            type="button"
+            className="button-secondary"
+            onClick={() => handleCompleteLineTwoClick("conference")}
+            disabled={lineTwoBusy}
+          >
+            Conference
+          </button>
+          <button type="button" className="link" onClick={handleCancelLineTwoClick} disabled={lineTwoBusy}>
+            Cancel — back to customer
+          </button>
+          {targetError && <div className="error phone-extra-error">{targetError}</div>}
+        </div>
+      )}
 
       {showInternalTransferModal && (
         <InternalTransferModal
           campaignId={campaignId}
           onClose={() => setShowInternalTransferModal(false)}
-          onTransfer={handlePickedExtensionTransfer}
+          onTransfer={handlePickedExtensionStartLineTwo}
         />
       )}
     </div>
