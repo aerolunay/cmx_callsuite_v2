@@ -215,10 +215,8 @@ export function MiniPhone({
   useEffect(() => {
     if (phone.callState === phone.CALL_STATES.IDLE || phone.callState === phone.CALL_STATES.ENDED) {
       setIsMuted(false);
-      setAddTarget("");
-      setAddError("");
-      setTransferTarget("");
-      setTransferError("");
+      setTargetInput("");
+      setTargetError("");
     }
   }, [phone.callState]);
 
