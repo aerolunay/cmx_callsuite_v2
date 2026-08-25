@@ -159,6 +159,12 @@ export const api = {
     if (campaignId) params.set("campaignId", campaignId);
     return request(`/admin/reports/campaign-agent-breakdown?${params.toString()}`);
   },
+  // Second report type — one row per call, combining inbound+outbound.
+  getRawCallsReport: (startDate, endDate, campaignId) => {
+    const params = new URLSearchParams({ startDate, endDate });
+    if (campaignId) params.set("campaignId", campaignId);
+    return request(`/admin/reports/raw-calls?${params.toString()}`);
+  },
 
   // Campaign management — create/edit auto-creates the DID routing,
   // dialplan, and audio prompts server-side (see campaignRoutes.js).

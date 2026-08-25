@@ -1461,4 +1461,87 @@ router.get(
   }
 });
 
+/*
+==================================================
+GET /api/admin/reports/raw-calls?startDate=&endDate=&campaignId=optional
+==================================================
+Second report type, per explicit request — "Raw Data for inbound and
+outbound calls (combined)", alongside the existing aggregated
+breakdown above. Returns one row PER CALL (not aggregated at all),
+combining dialer_call_log (outbound) and inbound_call_log (inbound)
+via UNION ALL, same pattern already used for GET /recordings and
+GET /total-calls.
+
+Same role gate + requireCampaignAccess as the aggregated report —
+"the data to be downloaded must also be filtered based on the user's
+assigned campaigns, except WFM and Admin" is enforced by
+requireCampaignAccess here exactly the same way it already is for the
+aggregated report and every Live Dashboard endpoint: campaignId is
+REQUIRED and must be one of the caller's real assignments for every
+role except wfm/admin, checked server-side regardless of what the
+frontend sends.
+
+Uses the same Eastern-timezone day-bounds resolution as the aggregated
+report (getEasternRangeBoundsForServerClock) so both report types
+agree on what "startDate to endDate" actually means in real server
+time — these previously disagreeing between different report/stats
+functions was a real bug found and fixed elsewhere in this app
+(see computeDirectionStats's own comment).
+==================================================
+*/
+router.get(
+  "/reports/raw-calls",
+  requireRoles("supervisor", "account_manager", "wfm", "admin"),
+  requireCampaignAccess,
+  async (req, res) => {
+    try {
+      const { startDate, endDate, campaignId } = req.query;
+      if (!startDate || !endDate) {
+        return res.status(400).json({ success: false, message: "startDate and endDate query params are required." });
+      }
+
+      const { start, end } = await statsService.getEasternRangeBoundsForServerClock(startDate, endDate);
+
+      const params = [start, end];
+      let campaignFilter = "";
+      if (campaignId) {
+        campaignFilter = "AND combined.campaign_id = ?";
+        params.push(campaignId);
+      }
+
+      const [rows] = await db.execute(
+        `
+          SELECT combined.call_id, combined.campaign_id, combined.agent_user, au.full_name AS agent_name,
+                 combined.phone_number, combined.call_started_at, combined.call_ended_at,
+                 combined.direction, combined.disposition, combined.comments, combined.wait_seconds
+          FROM (
+            SELECT
+              d.call_id, d.campaign_id, d.agent_user, d.phone_number,
+              d.call_started_at, d.call_ended_at, 'outbound' AS direction,
+              d.disposition, d.comments, NULL AS wait_seconds
+            FROM cmx_dialer.dialer_call_log d
+
+            UNION ALL
+
+            SELECT
+              i.call_id, i.campaign_id, i.agent_user, i.caller_id_number AS phone_number,
+              i.call_started_at, i.call_ended_at, 'inbound' AS direction,
+              i.disposition, i.comments, i.wait_seconds
+            FROM cmx_dialer.inbound_call_log i
+          ) combined
+          LEFT JOIN cmx_dialer.app_users au ON au.vicidial_user = combined.agent_user
+          WHERE combined.call_started_at >= ? AND combined.call_started_at <= ? ${campaignFilter}
+          ORDER BY combined.call_started_at DESC
+        `,
+        params
+      );
+
+      return res.json({ success: true, calls: rows });
+    } catch (error) {
+      console.error("GET /api/admin/reports/raw-calls failed:", error);
+      return res.status(500).json({ success: false, message: error.message || "Failed to load raw call data." });
+    }
+  }
+);
+
 module.exports = router;

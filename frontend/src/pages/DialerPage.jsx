@@ -4,7 +4,6 @@ import Header from "../components/Header";
 import ContactDetailsCard from "../components/ContactDetailsCard";
 import CallLogTable from "../components/CallLogTable";
 import StatsPanel from "../components/StatsPanel";
-import AggregateStatsPanel from "../components/AggregateStatsPanel";
 import { api } from "../api";
 import { useAuth } from "../context/AuthContext";
 import { useDialerSocket } from "../hooks/useDialerSocket";
@@ -95,15 +94,13 @@ export default function DialerPage() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [hasLeads, setHasLeads] = useState(true); // optimistic default — avoids a flash of "no leads" before the check resolves
-  const [allCampaigns, setAllCampaigns] = useState([]); // full campaign list, only needed for AggregateStatsPanel's filter (admin/supervisor)
-  // How many campaigns THIS agent is actually assigned to — distinct
-  // from allCampaigns above (which is the full system-wide list, only
-  // fetched for admin/supervisor). Used purely to decide whether
-  // "Change campaign" should even be shown — an agent with only one
-  // assignment has nothing to change TO, so the control is just noise.
-  // Defaults to 2 (not 0/1) so the button doesn't flash-hide before
-  // this resolves — fails open toward showing it, never toward hiding
-  // a control someone might actually need.
+  // How many campaigns THIS agent is actually assigned to. Used purely
+  // to decide whether "Change campaign" should even be shown — an
+  // agent with only one assignment has nothing to change TO, so the
+  // control is just noise. Defaults to 2 (not 0/1) so the button
+  // doesn't flash-hide before this resolves — fails open toward
+  // showing it, never toward hiding a control someone might actually
+  // need.
   const [myCampaignCount, setMyCampaignCount] = useState(2);
 
   const elapsedTimerRef = useRef(null);
@@ -127,12 +124,6 @@ export default function DialerPage() {
   // Hide "Dial Next Number" entirely for campaigns with no leads at
   // all (e.g. CMXBSMSC, which is inbound-only and relies on the
   // Callback feature instead) — checked once campaign is known.
-  useEffect(() => {
-    if (agent?.accessLevel === "admin" || agent?.accessLevel === "supervisor") {
-      api.getCampaigns().then((data) => setAllCampaigns(data.campaigns)).catch(() => {});
-    }
-  }, [agent]);
-
   useEffect(() => {
     if (!campaign) return;
     api
@@ -959,10 +950,6 @@ export default function DialerPage() {
             {/* Stats moved here per redesign request — right column,
                 above Call Logs, each stat as its own card. */}
             <StatsPanel refreshKey={callLogVersion} campaignId={campaign?.campaign_id} />
-
-            {(agent.accessLevel === "admin" || agent.accessLevel === "supervisor") && (
-              <AggregateStatsPanel campaigns={allCampaigns} />
-            )}
 
             <CallLogTable
               refreshKey={callLogVersion}

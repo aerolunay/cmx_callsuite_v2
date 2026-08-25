@@ -30,7 +30,12 @@ export default function ReportsPage() {
   const [startDate, setStartDate] = useState(todayNY());
   const [endDate, setEndDate] = useState(todayNY());
 
+  // Two report types, per explicit request: the existing aggregated
+  // campaign->agent breakdown, and a new "Raw Data" option — one row
+  // per call, inbound+outbound combined, no aggregation at all.
+  const [reportType, setReportType] = useState("aggregated");
   const [report, setReport] = useState(null);
+  const [rawCalls, setRawCalls] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -64,11 +69,20 @@ export default function ReportsPage() {
     if (!isUnrestrictedCampaignAccess && !campaignId) return;
     setLoading(true);
     setError("");
-    api
-      .getCampaignAgentBreakdown(startDate, endDate, campaignId || undefined)
-      .then((data) => setReport(data.report))
-      .catch((err) => setError(err.message))
-      .finally(() => setLoading(false));
+
+    if (reportType === "raw") {
+      api
+        .getRawCallsReport(startDate, endDate, campaignId || undefined)
+        .then((data) => setRawCalls(data.calls))
+        .catch((err) => setError(err.message))
+        .finally(() => setLoading(false));
+    } else {
+      api
+        .getCampaignAgentBreakdown(startDate, endDate, campaignId || undefined)
+        .then((data) => setReport(data.report))
+        .catch((err) => setError(err.message))
+        .finally(() => setLoading(false));
+    }
   }
 
   useEffect(() => {
@@ -76,7 +90,7 @@ export default function ReportsPage() {
       load();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agent, campaignId, startDate, endDate]);
+  }, [agent, campaignId, startDate, endDate, reportType]);
 
   if (agent && !REPORTS_ROLES.includes(agent.accessLevel)) {
     return <Navigate to="/" replace />;
@@ -107,7 +121,26 @@ export default function ReportsPage() {
       { label: "Avg OB ACW (s)", value: "avgObAcwSeconds" },
     ];
 
-    downloadCsv(`cmx-dialer-report_${startDate}_to_${endDate}.csv`, columns, flatRows);
+    downloadCsv(`cmx-dialer-report-aggregated_${startDate}_to_${endDate}.csv`, columns, flatRows);
+  }
+
+  function handleDownloadRawCsv() {
+    if (!rawCalls) return;
+
+    const columns = [
+      { label: "Call ID", value: "call_id" },
+      { label: "Campaign", value: "campaign_id" },
+      { label: "Direction", value: (row) => (row.direction === "inbound" ? "Inbound" : "Outbound") },
+      { label: "Agent", value: (row) => row.agent_name || row.agent_user || "" },
+      { label: "Phone Number", value: "phone_number" },
+      { label: "Call Started", value: "call_started_at" },
+      { label: "Call Ended", value: "call_ended_at" },
+      { label: "Disposition", value: "disposition" },
+      { label: "Wait Seconds", value: "wait_seconds" },
+      { label: "Comments", value: "comments" },
+    ];
+
+    downloadCsv(`cmx-dialer-report-raw-calls_${startDate}_to_${endDate}.csv`, columns, rawCalls);
   }
 
   return (
@@ -117,6 +150,13 @@ export default function ReportsPage() {
         <h2>Reports</h2>
 
         <div className="card" style={{ marginBottom: 20, display: "flex", gap: 16, flexWrap: "wrap", alignItems: "flex-end" }}>
+          <div>
+            <label className="comments-label">Report Type</label>
+            <select value={reportType} onChange={(e) => setReportType(e.target.value)}>
+              <option value="aggregated">Aggregated</option>
+              <option value="raw">Raw Data (Inbound + Outbound, combined)</option>
+            </select>
+          </div>
           <div>
             <label className="comments-label">Start Date</label>
             <input type="date" value={startDate} max={endDate} onChange={(e) => setStartDate(e.target.value)} />
@@ -136,7 +176,12 @@ export default function ReportsPage() {
               ))}
             </select>
           </div>
-          <button type="button" className="button-secondary" onClick={handleDownloadCsv} disabled={!report}>
+          <button
+            type="button"
+            className="button-secondary"
+            onClick={reportType === "raw" ? handleDownloadRawCsv : handleDownloadCsv}
+            disabled={reportType === "raw" ? !rawCalls : !report}
+          >
             Download CSV
           </button>
         </div>
@@ -145,7 +190,7 @@ export default function ReportsPage() {
 
         {loading && <p>Loading…</p>}
 
-        {!loading && report && (
+        {!loading && reportType === "aggregated" && report && (
           <>
             <div className="card" style={{ marginBottom: 20 }}>
               <h3>All Campaigns — Totals</h3>
@@ -258,6 +303,42 @@ export default function ReportsPage() {
               </div>
             ))}
           </>
+        )}
+
+        {!loading && reportType === "raw" && rawCalls && (
+          <div className="card call-log-card">
+            <h3>Raw Call Data — {rawCalls.length} calls</h3>
+            {rawCalls.length === 0 ? (
+              <p>No calls in this range.</p>
+            ) : (
+              <table className="call-log-table">
+                <thead>
+                  <tr>
+                    <th>Started</th>
+                    <th>Campaign</th>
+                    <th>Direction</th>
+                    <th>Agent</th>
+                    <th>Phone Number</th>
+                    <th>Disposition</th>
+                    <th>Wait (s)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rawCalls.map((c) => (
+                    <tr key={c.call_id}>
+                      <td>{new Date(c.call_started_at).toLocaleString()}</td>
+                      <td>{c.campaign_id || "—"}</td>
+                      <td>{c.direction === "inbound" ? "Inbound" : "Outbound"}</td>
+                      <td>{c.agent_name || c.agent_user || "—"}</td>
+                      <td>{c.phone_number || "—"}</td>
+                      <td>{c.disposition || "—"}</td>
+                      <td>{c.wait_seconds ?? "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
         )}
       </div>
     </>
