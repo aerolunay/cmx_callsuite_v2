@@ -40,19 +40,37 @@ export default function Header({ agentStatus }) {
             ==================================================
             NAV MATRIX — per the finished access-level spec
             ==================================================
+            Dialer      : agent, supervisor, training_quality
             Live Status : supervisor, training_quality, account_manager, wfm, admin
             Reports     : supervisor, account_manager, wfm, admin (NOT training_quality)
             Recordings  : supervisor, training_quality, account_manager, admin (NOT wfm)
             Admin       : wfm, admin
 
-            Dialer has no Header link at all — reached via the landing
-            page's own "Start working a campaign" flow, unchanged by
-            this matrix. account_manager/wfm/admin are blocked from
-            /dialer itself at the page level (see DialerPage.jsx's own
-            guard) even though nothing here needs to hide a link for
-            it specifically.
+            UPDATED — Dialer previously had no Header link at all
+            (reached only via the landing page's own "Start working a
+            campaign" flow). That was fine while only agents ever had
+            Dialer access — they land there directly and never need to
+            navigate away, so no link is shown for them here either
+            (per explicit request — agent's ONLY page is Dialer, a
+            link back to the one place they already are is just
+            noise). Once supervisor/training_quality also got Dialer
+            access alongside Live Status/Recordings/etc., THEY had no
+            way back to Dialer once they'd navigated to one of those
+            other pages — added here to fix that real gap, for those
+            two roles specifically. Links straight to /dialer — its
+            own mount effect already redirects to /select-campaign if
+            no campaign is stored yet, so this is safe even for
+            someone who hasn't picked one. account_manager/wfm/admin
+            are blocked from /dialer itself at the page level (see
+            DialerPage.jsx's own guard), so no link is shown for them
+            here either.
             ==================================================
           */}
+          {["supervisor", "training_quality"].includes(agent.accessLevel) && (
+            <Link to="/dialer" className="header-admin-link">
+              Dialer
+            </Link>
+          )}
           {["supervisor", "training_quality", "account_manager", "wfm", "admin"].includes(agent.accessLevel) && (
             <Link to="/live-status" className="header-admin-link">
               Live Status

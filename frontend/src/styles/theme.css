@@ -587,7 +587,7 @@ other pages sharing the same base classes.
 /* ===== Wide page content for the dialer (needs more room than the
    default 800px-max content pages) ===== */
 .page-content-wide {
-  max-width: 1300px;
+  max-width: 1600px;
 }
 
 /* ===== Responsive two-column dialer layout =====
