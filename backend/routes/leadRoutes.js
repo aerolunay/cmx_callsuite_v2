@@ -4,7 +4,9 @@ const fs = require("fs");
 const path = require("path");
 const express = require("express");
 const multer = require("multer");
-const XLSX = require("xlsx");
+const ExcelJS = require("exceljs");
+const { parse: parseCsvSync } = require("csv-parse/sync");
+const { stringify: stringifyCsvSync } = require("csv-stringify/sync");
 const db = require("../config/db");
 
 const router = express.Router();
@@ -51,22 +53,36 @@ const upload = multer({
 ==================================================
 Template generation — shared helper
 ==================================================
-Builds a one-sheet workbook (headers + one example row) and streams it
-back as either .xlsx or .csv, depending on the requested format.
+Builds a one-sheet template (headers + one example row) and streams it
+back as either .xlsx or .csv.
+
+UPDATED — originally used the `xlsx` (SheetJS) npm package. Swapped out
+after a real, confirmed finding: every version of `xlsx` published to
+the public npm registry has unpatched HIGH-severity advisories
+(GHSA-4r6h-8v6p-xvw6, prototype pollution; GHSA-5pgg-2g8v-p4x9, ReDoS)
+— SheetJS's own fixed releases are only distributed via their own CDN,
+not npm, so a normal `npm install xlsx` can never actually get a
+patched version. Replaced with exceljs (.xlsx) + csv-parse/csv-stringify
+(.csv) — actively maintained, narrowly-scoped, no equivalent advisories
+at time of writing.
 ==================================================
 */
-function sendTemplate(res, filenameBase, headers, exampleRow, format) {
-  const worksheet = XLSX.utils.aoa_to_sheet([headers, exampleRow]);
-  const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, worksheet, "Template");
+async function sendTemplate(res, filenameBase, headers, exampleRow, format) {
+  if (format === "csv") {
+    const csvText = stringifyCsvSync([headers, exampleRow]);
+    res.setHeader("Content-Type", "text/csv");
+    res.setHeader("Content-Disposition", `attachment; filename="${filenameBase}.csv"`);
+    return res.send(csvText);
+  }
 
-  const bookType = format === "csv" ? "csv" : "xlsx";
-  const buffer = XLSX.write(workbook, { type: "buffer", bookType });
-  const contentType =
-    bookType === "csv" ? "text/csv" : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+  const workbook = new ExcelJS.Workbook();
+  const worksheet = workbook.addWorksheet("Template");
+  worksheet.addRow(headers);
+  worksheet.addRow(exampleRow);
+  const buffer = await workbook.xlsx.writeBuffer();
 
-  res.setHeader("Content-Type", contentType);
-  res.setHeader("Content-Disposition", `attachment; filename="${filenameBase}.${bookType}"`);
+  res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  res.setHeader("Content-Disposition", `attachment; filename="${filenameBase}.xlsx"`);
   return res.send(buffer);
 }
 
@@ -74,30 +90,60 @@ function sendTemplate(res, filenameBase, headers, exampleRow, format) {
 ==================================================
 Parses an uploaded CSV/XLSX file into an array of row objects, keyed
 by whatever header row the file actually has (case/whitespace
-normalized) — NOT positional. Works for both formats via the same
-XLSX.read() call — the library auto-detects CSV vs. real XLSX from
-the buffer contents.
+normalized) — NOT positional.
+
+Format is detected from the ORIGINAL filename's extension (multer's
+file.originalname — the client-provided name, not the randomized
+staged filename on disk). This is only ever used to pick which parser
+to run, never for anything security-sensitive — worst case a
+mismatched extension just fails to parse cleanly and surfaces a
+friendly error, not a vulnerability.
 ==================================================
 */
-function parseUploadedRows(filePath) {
-  const buffer = fs.readFileSync(filePath);
-  const workbook = XLSX.read(buffer, { type: "buffer" });
-  const firstSheetName = workbook.SheetNames[0];
-  const worksheet = workbook.Sheets[firstSheetName];
-  const rawRows = XLSX.utils.sheet_to_json(worksheet, { defval: "" });
+function normalizeRowKeys(row) {
+  const normalized = {};
+  for (const [key, value] of Object.entries(row)) {
+    const normalizedKey = String(key).trim().toLowerCase().replace(/\s+/g, "_");
+    normalized[normalizedKey] = typeof value === "string" ? value.trim() : value;
+  }
+  return normalized;
+}
 
-  // Normalize header keys (lowercase, trim, spaces->underscores) so
-  // "Phone Number" / "phone_number" / " Phone_Number " all resolve to
-  // the same key — real-world uploads are rarely byte-exact against
-  // the generated template.
-  return rawRows.map((row) => {
-    const normalized = {};
-    for (const [key, value] of Object.entries(row)) {
-      const normalizedKey = key.trim().toLowerCase().replace(/\s+/g, "_");
-      normalized[normalizedKey] = typeof value === "string" ? value.trim() : value;
+async function parseUploadedRows(file) {
+  const buffer = fs.readFileSync(file.path);
+  const isCsv = /\.csv$/i.test(file.originalname || "");
+
+  if (isCsv) {
+    const records = parseCsvSync(buffer.toString("utf8"), {
+      columns: true,
+      skip_empty_lines: true,
+      trim: true,
+    });
+    return records.map(normalizeRowKeys);
+  }
+
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(buffer);
+  const worksheet = workbook.worksheets[0];
+
+  let headerKeys = null;
+  const rows = [];
+  worksheet.eachRow((row, rowNumber) => {
+    // exceljs's row.values is 1-INDEXED (index 0 is always empty) —
+    // confirmed via its own documented API, not assumed.
+    const values = row.values.slice(1);
+    if (rowNumber === 1) {
+      headerKeys = values.map((v) => String(v ?? "").trim().toLowerCase().replace(/\s+/g, "_"));
+      return;
     }
-    return normalized;
+    const rowObj = {};
+    headerKeys.forEach((key, i) => {
+      const raw = values[i];
+      rowObj[key] = raw === undefined || raw === null ? "" : String(raw).trim();
+    });
+    rows.push(rowObj);
   });
+  return rows;
 }
 
 function cleanupStagedFile(file) {
@@ -116,9 +162,9 @@ LEADS — template + upload
 GET /api/admin/leads/template?format=xlsx|csv
 ==================================================
 */
-router.get("/leads/template", requireAdmin, (req, res) => {
+router.get("/leads/template", requireAdmin, async (req, res) => {
   const { format } = req.query;
-  sendTemplate(
+  await sendTemplate(
     res,
     "cmx-dialer-leads-template",
     ["phone_number", "first_name", "last_name"],
@@ -169,7 +215,7 @@ router.post("/leads/upload", requireAdmin, upload.single("file"), async (req, re
   }
 
   try {
-    const rows = parseUploadedRows(file.path);
+    const rows = await parseUploadedRows(file);
     const validRows = rows.filter((r) => r.phone_number);
     const skippedCount = rows.length - validRows.length;
 
@@ -247,9 +293,9 @@ sole primary key (confirmed via DESCRIBE) — no campaign scoping, no
 timestamp, no source tracking. Global and dead simple by design.
 ==================================================
 */
-router.get("/dnc/template", requireAdmin, (req, res) => {
+router.get("/dnc/template", requireAdmin, async (req, res) => {
   const { format } = req.query;
-  sendTemplate(res, "cmx-dialer-dnc-template", ["phone_number"], ["6468016974"], format);
+  await sendTemplate(res, "cmx-dialer-dnc-template", ["phone_number"], ["6468016974"], format);
 });
 
 router.get("/dnc", requireAdmin, async (req, res) => {
@@ -269,7 +315,7 @@ router.post("/dnc/upload", requireAdmin, upload.single("file"), async (req, res)
   }
 
   try {
-    const rows = parseUploadedRows(file.path);
+    const rows = await parseUploadedRows(file);
     const validRows = rows.filter((r) => r.phone_number);
     const skippedCount = rows.length - validRows.length;
 
