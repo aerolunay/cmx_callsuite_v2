@@ -161,23 +161,29 @@ export function MiniPhone({
 
   async function handlePickedExtensionTransfer(extension) {
     setTargetError("");
+    setTargetBusyAction("transfer");
     try {
       await onTransferBlind(extension, true);
       setShowInternalTransferModal(false);
     } catch (err) {
       setTargetError(err.message);
       throw err; // let the modal know it failed too, so its own busy state clears correctly
+    } finally {
+      setTargetBusyAction(null);
     }
   }
 
   async function handlePickedExtensionConference(extension) {
     setTargetError("");
+    setTargetBusyAction("conference");
     try {
       await onConferenceAdd(extension, true);
       setShowInternalTransferModal(false);
     } catch (err) {
       setTargetError(err.message);
       throw err;
+    } finally {
+      setTargetBusyAction(null);
     }
   }
 
@@ -340,8 +346,20 @@ export function MiniPhone({
           type="button"
           className="phone-btn phone-btn-end"
           onClick={handleHangUpClick}
-          disabled={!isIncoming && !isActive}
-          title={isIncoming ? "Decline" : "Hang Up"}
+          // Per explicit request: Hang Up is disabled while a
+          // Conference/Transfer attempt is actually in flight
+          // (targetBusyAction set by either the manual field's
+          // buttons or the Internal Transfer modal's actions) — re-
+          // enabled the instant it resolves, whether that's success
+          // (target joined) or failure (didn't answer/unreachable).
+          disabled={(!isIncoming && !isActive) || targetBusyAction !== null}
+          title={
+            targetBusyAction !== null
+              ? "Please wait for the transfer/conference attempt to finish"
+              : isIncoming
+                ? "Decline"
+                : "Hang Up"
+          }
         >
           {isIncoming ? "Decline" : "Hang Up"}
         </button>

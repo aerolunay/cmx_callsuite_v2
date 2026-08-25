@@ -190,6 +190,12 @@ async function allocateInboundRoom(did) {
     onHold: false,
     startedAt: new Date(),
     endedAt: null,
+    // Same reasoning as dialerService.js's callState — channels added
+    // via Conference/Transfer, tracked separately from
+    // customerChannel/agentChannel so endInboundCall() below knows not
+    // to end the whole room out from under a still-connected third
+    // party when the original agent hangs up.
+    extraParticipants: [],
   };
   inboundCalls.set(room, call);
 
@@ -414,8 +420,19 @@ async function endInboundCall(room) {
   call.endedAt = new Date();
   broadcastInboundStatus(call);
 
+  // REAL FIX, per explicit request — "just keep conference, but allow
+  // agents to hang up": when a Conference/Transfer participant is
+  // still in the room, the ORIGINAL agent's own leg ending must NOT
+  // also end the call for everyone — only their own leg drops,
+  // leaving the customer connected with whoever else is in the room.
+  // Previously this unconditionally hung up customerChannel too,
+  // whether the agent's OWN hangup triggered this or the customer's
+  // own hangup did — either way disconnecting everyone regardless of
+  // a still-active third party.
+  const hasExtraParticipants = call.extraParticipants && call.extraParticipants.length > 0;
+
   const hangups = [];
-  if (call.customerChannel) {
+  if (!hasExtraParticipants && call.customerChannel) {
     hangups.push(
       ami.hangupChannel(call.customerChannel).catch((err) => {
         console.error(`[inboundCallService] Failed to hang up customer channel ${call.customerChannel}:`, err.message);

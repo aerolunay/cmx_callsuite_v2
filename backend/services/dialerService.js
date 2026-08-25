@@ -383,6 +383,16 @@ function startCall({ appUserId, agentUser, agentExtension, lead, leadId, phoneNu
       endedAt: null,
       afterCallWorkTriggered: false,
       onHold: false,
+      // Channels added via Conference/Transfer (see dialerRoutes.js's
+      // conference-add/transfer-blind routes) — NOT customerChannel or
+      // agentChannel, which stay reserved for the original two legs.
+      // endCall() below checks this: if any extra participants are
+      // present when the agent hangs up, only THEIR OWN leg is
+      // dropped — the room stays alive with the customer + whoever
+      // else is in it, rather than unconditionally ending the whole
+      // call (and releasing the room number for reuse) out from under
+      // them.
+      extraParticipants: [],
     };
 
     activeCalls.set(callId, callState);
@@ -684,9 +694,20 @@ async function endCall(callId) {
     throw new Error(`No active call found for callId ${callId}.`);
   }
 
+  const hasExtraParticipants = call.extraParticipants && call.extraParticipants.length > 0;
   const hangups = [];
 
-  if (call.customerChannel) {
+  // REAL FIX, per explicit request — "just keep conference, but allow
+  // agents to hang up": when a Conference/Transfer participant is
+  // still in the room, the ORIGINAL agent hanging up must NOT end the
+  // call for everyone — only their own leg should drop, leaving the
+  // customer connected with whoever else is in the room. Previously
+  // this unconditionally hung up customerChannel too (and released
+  // the room number for reuse), which would have disconnected the
+  // customer AND left a real room-number collision risk — a future,
+  // unrelated call could get assigned the same room number while this
+  // one's third party was still actively using it.
+  if (!hasExtraParticipants && call.customerChannel) {
     hangups.push(ami.hangupChannel(call.customerChannel).catch((err) => {
       console.error(`[dialerService] Failed to hang up customer channel ${call.customerChannel}:`, err.message);
     }));
@@ -701,7 +722,14 @@ async function endCall(callId) {
   await Promise.all(hangups);
 
   await markCallEnded(call);
-  releaseRoomSuffix(call.roomSuffix);
+
+  // Same reasoning — only release the room number for reuse once the
+  // room is actually empty. If someone else is still in it, releasing
+  // this now would let a brand new future call collide with the same
+  // room number while it's still genuinely occupied.
+  if (!hasExtraParticipants) {
+    releaseRoomSuffix(call.roomSuffix);
+  }
 
   return getCallStatus(callId);
 }
