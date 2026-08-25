@@ -158,6 +158,17 @@ export default function DialerPage() {
       .catch(() => {});
   }, []);
 
+  // Tracks whether the initial GET /dialer/status fetch has actually
+  // RESOLVED (regardless of whether it found an open row) — needed
+  // because agentStatus itself starts as null and stays null both
+  // while "still loading" AND when "confirmed no open row exists yet"
+  // (a genuinely fresh login, before the agent's first-ever status
+  // row is created). Without this, those two very different states
+  // were indistinguishable, and the stamping effect below could never
+  // tell "wait for the fetch" apart from "there's really nothing
+  // here, go create it."
+  const [statusCheckDone, setStatusCheckDone] = useState(false);
+
   useEffect(() => {
     api
       .getStatus()
@@ -169,32 +180,56 @@ export default function DialerPage() {
           baseAtRef.current = Date.now();
         }
       })
-      .catch((err) => setError(err.message));
+      .catch((err) => setError(err.message))
+      .finally(() => setStatusCheckDone(true));
   }, []);
 
-  // REAL BUG FIX — per explicit request: right after login (before the
-  // agent ever manually touches the status dropdown), their open
-  // status row has NO campaign recorded at all — the Live Dashboard's
-  // guess-based fallback then showed the wrong (alphabetically-first)
-  // campaign for anyone with multiple assignments. Once both the
-  // agent's actual campaign selection (from localStorage) and their
-  // current open status row are known, this stamps the correct
-  // campaignId onto that row — WITHOUT changing what status they're
-  // actually in (NOT_READY stays NOT_READY, just now correctly
-  // tagged).
+  // REAL BUG FIX — per explicit request: right after a genuinely
+  // fresh login, the agent has NO open status row at all yet — one is
+  // only ever created the moment they manually pick something from
+  // the dropdown for the first time. Confirmed directly via the
+  // Network tab: no automatic POST /dialer/status ever fired, only
+  // the initial GET (which correctly came back with no status). That
+  // meant this effect's OWN earlier version — which only handled "an
+  // EXISTING row has the wrong/missing campaign" — never had anything
+  // to act on, since agentStatus stayed null the whole time. Now
+  // handles BOTH real cases: no row at all (create one, defaulting to
+  // NOT_READY, correctly tagged from the start) and an existing row
+  // with a mismatched campaign (stamp it, as before).
   //
   // campaignStampedRef guards this to run AT MOST ONCE per mount, and
-  // the relatedCampaignId comparison itself means it's a genuine no-op
-  // on every ordinary page refresh AFTER the first correct stamp —
-  // critical to not resurrect the earlier "status resets on every
-  // refresh" bug (see ws.js's own fix for that), since setStatus()
-  // always closes and reopens the row, which must only ever happen
-  // when something has actually changed.
+  // the relatedCampaignId comparison (for the "existing row" case)
+  // means it's a genuine no-op on every ordinary page refresh AFTER
+  // the first correct stamp — critical to not resurrect the earlier
+  // "status resets on every refresh" bug (see ws.js's own fix for
+  // that), since setStatus() always closes and reopens the row, which
+  // must only ever happen when something has actually changed.
   const campaignStampedRef = useRef(false);
 
   useEffect(() => {
-    if (!campaign || !agentStatus) return;
+    if (!campaign) return;
+    if (!statusCheckDone) return; // still waiting to know whether a row already exists
     if (campaignStampedRef.current) return;
+
+    if (!agentStatus) {
+      // Confirmed: no status row exists at all — create the very
+      // first one now, correctly tagged, instead of leaving the agent
+      // with no status (and invisible on the Live Dashboard) until
+      // they happen to touch the dropdown themselves.
+      campaignStampedRef.current = true;
+      api
+        .setStatus("NOT_READY", campaign.campaign_id)
+        .then((data) => {
+          setAgentStatus(data.status);
+          setStatusDraft(data.status.status);
+          baseElapsedRef.current = data.status.elapsedSeconds;
+          baseAtRef.current = Date.now();
+        })
+        .catch(() => {
+          campaignStampedRef.current = false;
+        });
+      return;
+    }
 
     if (agentStatus.relatedCampaignId === campaign.campaign_id) {
       campaignStampedRef.current = true;
@@ -212,7 +247,7 @@ export default function DialerPage() {
       .catch(() => {
         campaignStampedRef.current = false; // allow a retry on the next render if this failed
       });
-  }, [campaign, agentStatus]);
+  }, [campaign, agentStatus, statusCheckDone]);
 
   useEffect(() => {
     clearInterval(elapsedTimerRef.current);
@@ -354,6 +389,12 @@ export default function DialerPage() {
       // scary red error banner.
       if (err.status === 404) {
         setHasLeads(false);
+      } else if (err.status === 403) {
+        // Outside this campaign's configured calling hours — same
+        // "stop cleanly, don't retry in a loop" treatment as the
+        // no-leads case, just a different underlying reason.
+        setHasLeads(false);
+        setError(err.message);
       } else {
         setError(err.message);
       }

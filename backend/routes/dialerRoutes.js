@@ -418,6 +418,9 @@ router.post("/dialer/next-lead", requireAuth, async (req, res) => {
 
     return res.json({ success: true, lead });
   } catch (error) {
+    if (error.code === "OUTSIDE_CALLING_HOURS") {
+      return res.status(403).json({ success: false, message: error.message, code: "OUTSIDE_CALLING_HOURS" });
+    }
     console.error("POST /api/dialer/next-lead failed:", error);
     return res.status(500).json({ success: false, message: "Failed to fetch next lead." });
   }

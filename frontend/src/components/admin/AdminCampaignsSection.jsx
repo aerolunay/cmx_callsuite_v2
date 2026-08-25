@@ -305,6 +305,20 @@ export default function AdminCampaignsSection() {
                     <select value={dialMethod} onChange={(e) => setDialMethod(e.target.value)}>
                       <option value="MANUAL">Manual Dial</option>
                       <option value="AUTO">Auto Dial</option>
+                      {/* Predictive Dialing — UI placeholder only, per
+                          explicit request. Deliberately NOT selectable
+                          yet (disabled) until the real engine (ratio/
+                          pacing across multiple agents, dialing ahead
+                          of availability) is actually built — a
+                          separate, larger piece of work than the
+                          simple per-agent "auto-advance" that AUTO
+                          currently means. Shown here now so admins can
+                          see it's coming, without being able to
+                          accidentally select something that doesn't
+                          exist yet. */}
+                      <option value="PREDICTIVE" disabled>
+                        Predictive Dialing (coming soon)
+                      </option>
                     </select>
                   </>
                 )}

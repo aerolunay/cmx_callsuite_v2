@@ -1,6 +1,7 @@
 "use strict";
 
 const crypto = require("crypto");
+const { DateTime } = require("luxon");
 
 const db = require("../config/db");
 const ami = require("../config/ami");
@@ -176,7 +177,69 @@ field on the lead) but NOT specifically confirmed to exist on this
 install — if it errors, check the real column name/existence first.
 ==================================================
 */
+/*
+==================================================
+isWithinCallingHours — Phase 2, piece 1
+==================================================
+Real America/New_York day-of-week + time-of-day check against a
+campaign's saved autodial rules. calling_days accepts the same two
+formats already used elsewhere in this app for business hours
+("mon-fri" range, or "mon,wed,fri" list) — day range expanded inline
+here rather than importing a shared helper, since this is the only
+backend consumer of that format (the frontend's day-array<->string
+helpers live in AdminCampaignsSection.jsx/AdminLeadsSection.jsx, not
+reusable from here without real duplication either way).
+==================================================
+*/
+const DAY_ORDER = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+
+function isWithinCallingHours({ calling_days, calling_start_time, calling_end_time }) {
+  const now = DateTime.now().setZone("America/New_York");
+  const currentDay = DAY_ORDER[now.weekday % 7]; // Luxon: 1=Mon..7=Sun; %7 maps Sun(7)->0
+  const currentMinutes = now.hour * 60 + now.minute;
+
+  let allowedDays;
+  if (calling_days.includes("-") && !calling_days.includes(",")) {
+    const [start, end] = calling_days.split("-");
+    const startIdx = DAY_ORDER.indexOf(start);
+    const endIdx = DAY_ORDER.indexOf(end);
+    allowedDays =
+      startIdx !== -1 && endIdx !== -1 && startIdx <= endIdx ? DAY_ORDER.slice(startIdx, endIdx + 1) : [calling_days];
+  } else {
+    allowedDays = calling_days.split(",").map((d) => d.trim());
+  }
+  if (!allowedDays.includes(currentDay)) return false;
+
+  const [startH, startM] = calling_start_time.split(":").map(Number);
+  const [endH, endM] = calling_end_time.split(":").map(Number);
+  const startMinutes = startH * 60 + startM;
+  const endMinutes = endH * 60 + endM;
+
+  return currentMinutes >= startMinutes && currentMinutes < endMinutes;
+}
+
 async function getNextLead(campaignId) {
+  // Phase 2, piece 1 — calling hours enforcement. Real rules stored
+  // in cmx_dialer.campaign_autodial_rules (Admin -> Leads/Auto-Dial)
+  // now actually checked, not just saved. If no rules row exists yet
+  // for this campaign, defaults match the same 09:00-18:00 mon-fri
+  // fallback used everywhere else calling hours are referenced in
+  // this app. Applies to BOTH manual "Dial Next Number" and automatic
+  // Auto Dial — a campaign outside its own configured hours should
+  // never dial, regardless of which path triggered it.
+  const [ruleRows] = await db.execute(
+    `SELECT calling_days, calling_start_time, calling_end_time
+     FROM cmx_dialer.campaign_autodial_rules WHERE campaign_id = ?`,
+    [campaignId]
+  );
+  const rules = ruleRows[0] || { calling_days: "mon-fri", calling_start_time: "09:00", calling_end_time: "18:00" };
+
+  if (!isWithinCallingHours(rules)) {
+    const err = new Error("Outside this campaign's configured calling hours.");
+    err.code = "OUTSIDE_CALLING_HOURS";
+    throw err;
+  }
+
   // Same terminal-status + DNC exclusions as the fallback query below
   // — a hopper entry can go stale (still 'READY' in vicidial_hopper
   // even after its lead was later disposed with a terminal outcome,
