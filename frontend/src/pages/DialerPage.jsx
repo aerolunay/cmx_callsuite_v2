@@ -304,6 +304,45 @@ export default function DialerPage() {
     }
   }
 
+  // AUTO-DIAL TRIGGER — per explicit request: campaigns set to Auto
+  // Dial (campaign.dial_method === "RATIO", see campaignRoutes.js's
+  // AUTO -> RATIO mapping) should dial automatically the moment the
+  // agent is READY, rather than requiring a manual "Dial Next Number"
+  // click. Deliberately reuses the EXACT same condition that already
+  // governs whether that button renders at all (READY, no active
+  // call, hasLeads) — see the JSX below — so this can never fire in a
+  // state where the button itself wouldn't have been clickable.
+  //
+  // This is NOT the full auto-dial engine (no ratio/pacing across
+  // multiple agents, no dialing ahead of agent availability) — it's
+  // the simpler "auto-advance instead of manual click" behavior this
+  // specific request describes. Calling hours / max-attempt caps from
+  // the Autodial Rules admin section aren't enforced here yet either —
+  // those still require the actual engine (a separate, future build)
+  // to read and apply them; this only removes the manual button click.
+  //
+  // autoDialInFlightRef guards against any brief double-fire from
+  // React re-running this effect while handleDialNext's own async work
+  // is still settling — busy alone isn't quite enough since state
+  // updates aren't synchronous.
+  const autoDialInFlightRef = useRef(false);
+
+  useEffect(() => {
+    const isAutoDialCampaign = campaign?.dial_method === "RATIO";
+    if (!isAutoDialCampaign) return;
+    if (agentStatus?.status !== "READY") return;
+    if (call) return;
+    if (!hasLeads) return;
+    if (busy) return;
+    if (autoDialInFlightRef.current) return;
+
+    autoDialInFlightRef.current = true;
+    handleDialNext().finally(() => {
+      autoDialInFlightRef.current = false;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [campaign, agentStatus, call, hasLeads, busy]);
+
   // Callback: reuses the same startCall path as "Dial Next Number" but
   // skips getNextLead entirely — the row from Call Logs already has
   // everything needed. Outbound-sourced rows carry a real lead_id
@@ -794,7 +833,7 @@ export default function DialerPage() {
           </div>
         )}
 
-            {agentStatus?.status === "READY" && !call && hasLeads && (
+            {agentStatus?.status === "READY" && !call && hasLeads && campaign?.dial_method !== "RATIO" && (
               <div className="card">
                 <button
                   className="primary"
@@ -804,6 +843,12 @@ export default function DialerPage() {
                 >
                   {busy ? "Dialing…" : "Dial Next Number"}
                 </button>
+              </div>
+            )}
+
+            {agentStatus?.status === "READY" && !call && hasLeads && campaign?.dial_method === "RATIO" && (
+              <div className="card">
+                <span className="badge">{busy ? "Dialing…" : "Auto Dial Active"}</span>
               </div>
             )}
 

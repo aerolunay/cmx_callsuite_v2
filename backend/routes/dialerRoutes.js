@@ -218,7 +218,7 @@ router.get("/campaigns", requireAuth, async (req, res) => {
   try {
     const [rows] = await db.execute(
       `
-        SELECT campaign_id, campaign_name, campaign_cid
+        SELECT campaign_id, campaign_name, campaign_cid, dial_method
         FROM vicidial_campaigns
         WHERE active = 'Y'
         ORDER BY campaign_name ASC
@@ -258,7 +258,7 @@ router.get("/campaigns/mine", requireAuth, async (req, res) => {
     const { appUserId } = req.session.agent;
     const [rows] = await db.execute(
       `
-        SELECT c.campaign_id, c.campaign_name, c.campaign_cid
+        SELECT c.campaign_id, c.campaign_name, c.campaign_cid, c.dial_method
         FROM asterisk.vicidial_campaigns c
         JOIN cmx_dialer.agent_campaign_assignments aca ON aca.campaign_id = c.campaign_id
         WHERE aca.app_user_id = ? AND aca.active = 1 AND c.active = 'Y'
