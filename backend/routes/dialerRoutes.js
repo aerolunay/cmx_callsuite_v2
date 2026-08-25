@@ -119,11 +119,21 @@ pass rather than guessed at.
 function resolveActiveRoom(appUserId) {
   const outboundCall = dialerService.getRawActiveCallForAgent(appUserId);
   if (outboundCall) {
-    return { room: outboundCall.room, agentChannel: outboundCall.agentChannel, customerChannel: outboundCall.customerChannel };
+    return {
+      room: outboundCall.room,
+      agentChannel: outboundCall.agentChannel,
+      customerChannel: outboundCall.customerChannel,
+      rawCall: outboundCall,
+    };
   }
   const inboundCall = inboundCallService.getInboundCallForAgent(appUserId);
   if (inboundCall) {
-    return { room: inboundCall.room, agentChannel: inboundCall.agentChannel, customerChannel: inboundCall.customerChannel };
+    return {
+      room: inboundCall.room,
+      agentChannel: inboundCall.agentChannel,
+      customerChannel: inboundCall.customerChannel,
+      rawCall: inboundCall,
+    };
   }
   return null;
 }
@@ -193,14 +203,40 @@ router.post("/dialer/transfer-blind", requireAuth, async (req, res) => {
       });
     }
 
+    // REAL BUG FIX, confirmed via a real test call: the customer's
+    // line was dropping the instant Transfer completed, and the
+    // target ended up alone hearing hold music. Root cause —
+    // inboundCallService.js's own Hangup listener unconditionally ends
+    // the ENTIRE call the moment call.agentChannel hangs up:
+    //   if (evt.channel === call.customerChannel || evt.channel === call.agentChannel) {
+    //     endInboundCall(call.room);
+    //   }
+    // Hanging up the ORIGINAL agent's channel below to complete the
+    // handoff was exactly what that listener is watching for — it had
+    // no way to know this was an intentional transfer rather than the
+    // agent ending the call outright, so it tore down the customer's
+    // leg too, right as the target was still settling into the room.
+    //
+    // Fixed by updating the call's OWN tracked agentChannel to the
+    // TARGET's channel BEFORE hanging up the old one. active.rawCall
+    // is the actual live object stored in dialerService's/
+    // inboundCallService's own Map (returned by reference, not a
+    // copy) — mutating it here immediately updates what that Hangup
+    // listener checks against, so by the time the old channel actually
+    // hangs up, it no longer matches call.agentChannel at all.
+    const oldAgentChannel = active.agentChannel;
+    if (active.rawCall) {
+      active.rawCall.agentChannel = result.channel;
+    }
+
     // Target answered and joined the room — now drop the agent's OWN
-    // leg, completing the handoff. If this hangup itself fails, the
-    // target is still correctly in the room with the customer; the
+    // (OLD) leg, completing the handoff. If this hangup itself fails,
+    // the target is still correctly in the room with the customer; the
     // agent is just stuck there too rather than the transfer having
     // silently not happened at all.
-    if (active.agentChannel) {
+    if (oldAgentChannel) {
       try {
-        await ami.hangupChannel(active.agentChannel);
+        await ami.hangupChannel(oldAgentChannel);
       } catch (hangupErr) {
         console.error("[dialerRoutes] Transfer succeeded but failed to hang up agent leg:", hangupErr.message);
       }
