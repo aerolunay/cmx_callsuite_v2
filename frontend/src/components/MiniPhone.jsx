@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useJsSipPhone } from "../hooks/useJsSipPhone";
-import TransferExtensionModal from "../modals/TransferExtensionModal";
+import InternalTransferModal from "../modals/InternalTransferModal";
 
 /*
 ==================================================
@@ -144,36 +144,40 @@ export function MiniPhone({
   const [dialNumber, setDialNumber] = useState("");
   const [isMuted, setIsMuted] = useState(false);
 
-  // UPDATED — per explicit request: Conference and Transfer used to
-  // each have their own separate input+checkbox+button row. Now one
-  // shared number/extension field and one shared "Ext" checkbox feed
-  // BOTH actions — the two buttons just act on whatever's currently
-  // typed, rather than each button owning its own separate typed
-  // value. transferAction tracks which of the two is actually in
-  // flight, so only the button that was clicked shows "…ing" while
-  // the other stays put, and so a failure from one doesn't get
-  // mistakenly attributed to the other.
+  // UPDATED — per explicit request: the shared manual field lost its
+  // "Ext" checkbox entirely. Extension-targeting now lives EXCLUSIVELY
+  // in the Internal Transfer picker below (which supports both
+  // Transfer AND Conference to a picked agent) — this field is
+  // phone-number-only for both buttons now.
   const [targetInput, setTargetInput] = useState("");
-  const [targetIsExtension, setTargetIsExtension] = useState(true);
   const [targetBusyAction, setTargetBusyAction] = useState(null); // null | "conference" | "transfer"
   const [targetError, setTargetError] = useState("");
 
   // Per explicit request — separate from the shared number field
-  // entirely: a dedicated "Transfer to Extension" button opens a
-  // picker modal listing real agents on the same campaign, instead of
-  // requiring the extension to be typed blind.
-  const [showExtensionPicker, setShowExtensionPicker] = useState(false);
+  // entirely: "Internal Transfer" opens a picker listing real agents
+  // on the same campaign, then lets the agent choose Transfer OR
+  // Conference for whichever one they select.
+  const [showInternalTransferModal, setShowInternalTransferModal] = useState(false);
 
   async function handlePickedExtensionTransfer(extension) {
-    setShowExtensionPicker(false);
     setTargetError("");
-    setTargetBusyAction("transfer");
     try {
       await onTransferBlind(extension, true);
+      setShowInternalTransferModal(false);
     } catch (err) {
       setTargetError(err.message);
-    } finally {
-      setTargetBusyAction(null);
+      throw err; // let the modal know it failed too, so its own busy state clears correctly
+    }
+  }
+
+  async function handlePickedExtensionConference(extension) {
+    setTargetError("");
+    try {
+      await onConferenceAdd(extension, true);
+      setShowInternalTransferModal(false);
+    } catch (err) {
+      setTargetError(err.message);
+      throw err;
     }
   }
 
@@ -260,7 +264,7 @@ export function MiniPhone({
     setTargetError("");
     setTargetBusyAction("conference");
     try {
-      await onConferenceAdd(targetInput.trim(), targetIsExtension);
+      await onConferenceAdd(targetInput.trim(), false);
       setTargetInput("");
     } catch (err) {
       setTargetError(err.message);
@@ -274,7 +278,7 @@ export function MiniPhone({
     setTargetError("");
     setTargetBusyAction("transfer");
     try {
-      await onTransferBlind(targetInput.trim(), targetIsExtension);
+      await onTransferBlind(targetInput.trim(), false);
       setTargetInput("");
     } catch (err) {
       setTargetError(err.message);
@@ -356,20 +360,11 @@ export function MiniPhone({
       <div className="phone-extra-row">
         <input
           type="text"
-          placeholder="Extension or number"
+          placeholder="Phone number"
           value={targetInput}
           onChange={(e) => setTargetInput(e.target.value)}
           disabled={!isActive || targetBusyAction !== null}
         />
-        <label className="phone-extra-checkbox">
-          <input
-            type="checkbox"
-            checked={targetIsExtension}
-            onChange={(e) => setTargetIsExtension(e.target.checked)}
-            disabled={!isActive || targetBusyAction !== null}
-          />
-          Ext
-        </label>
         <button
           type="button"
           className="button-secondary"
@@ -390,23 +385,24 @@ export function MiniPhone({
       {targetError && <div className="error phone-extra-error">{targetError}</div>}
 
       {/* Separate from the number field entirely, per explicit
-          request — opens a picker instead of requiring a typed
-          extension. */}
+          request — opens a picker to choose an agent, then either
+          Transfer or Conference them in. */}
       <button
         type="button"
         className="button-secondary"
         style={{ marginTop: 8 }}
-        onClick={() => setShowExtensionPicker(true)}
+        onClick={() => setShowInternalTransferModal(true)}
         disabled={!isActive || targetBusyAction !== null || !campaignId}
       >
-        Transfer to Extension…
+        Internal Transfer
       </button>
 
-      {showExtensionPicker && (
-        <TransferExtensionModal
+      {showInternalTransferModal && (
+        <InternalTransferModal
           campaignId={campaignId}
-          onClose={() => setShowExtensionPicker(false)}
-          onSelect={handlePickedExtensionTransfer}
+          onClose={() => setShowInternalTransferModal(false)}
+          onTransfer={handlePickedExtensionTransfer}
+          onConference={handlePickedExtensionConference}
         />
       )}
     </div>
