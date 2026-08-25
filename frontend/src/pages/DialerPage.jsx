@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, Navigate } from "react-router-dom";
 import Header from "../components/Header";
 import ContactDetailsCard from "../components/ContactDetailsCard";
 import CallLogTable from "../components/CallLogTable";
@@ -569,6 +569,18 @@ export default function DialerPage() {
   }
 
   const statusLabel = agentStatus ? STATUS_LABELS[agentStatus.status] : "—";
+
+  // UPDATED — Dialer Page is now restricted to agent/supervisor/
+  // training_quality per the finished access-level matrix.
+  // account_manager/wfm/admin no longer land here at all, even if
+  // they happen to have a phone extension bound — those three roles
+  // don't include Dialer Page access per the spec as given. Placed
+  // after all hooks above (React rules — hooks must run unconditionally
+  // every render) but before the phone-extension check below, same
+  // pattern as LiveStatusDashboard.jsx's own role guard.
+  if (agent && !["agent", "supervisor", "training_quality"].includes(agent.accessLevel)) {
+    return <Navigate to="/" replace />;
+  }
 
   if (!agent.extension) {
     return (

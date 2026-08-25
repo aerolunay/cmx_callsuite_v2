@@ -52,6 +52,17 @@ export default function AdminUsersSection() {
     loadAll();
   }, []);
 
+  // Clears any stale campaign selection the moment WFM/Admin is picked
+  // — those two roles get implicit all-campaign access (see
+  // accessControlService.js), so a leftover checked box here would be
+  // meaningless data written to agent_campaign_assignments for no
+  // reason. Harmless no-op for every other access level.
+  useEffect(() => {
+    if (["wfm", "admin"].includes(accessLevel)) {
+      setSelectedCampaigns([]);
+    }
+  }, [accessLevel]);
+
   function toggleCampaign(campaignId) {
     setSelectedCampaigns((prev) =>
       prev.includes(campaignId) ? prev.filter((c) => c !== campaignId) : [...prev, campaignId]
@@ -164,6 +175,9 @@ export default function AdminUsersSection() {
                 <select value={accessLevel} onChange={(e) => setAccessLevel(e.target.value)}>
                   <option value="agent">Agent</option>
                   <option value="supervisor">Supervisor</option>
+                  <option value="training_quality">Training &amp; Quality</option>
+                  <option value="account_manager">Account Manager</option>
+                  <option value="wfm">WFM</option>
                   <option value="admin">Admin</option>
                 </select>
 
@@ -183,17 +197,29 @@ export default function AdminUsersSection() {
                   </p>
                 )}
 
-                <label className="comments-label">Campaign Access</label>
-                {campaigns.map((c) => (
-                  <label key={c.campaign_id} className="disposition-row">
-                    <input
-                      type="checkbox"
-                      checked={selectedCampaigns.includes(c.campaign_id)}
-                      onChange={() => toggleCampaign(c.campaign_id)}
-                    />
-                    {c.campaign_name} ({c.campaign_id})
-                  </label>
-                ))}
+                {/* WFM and Admin get implicit access to ALL campaigns
+                    (see accessControlService.js's
+                    UNRESTRICTED_CAMPAIGN_ROLES) — per explicit request,
+                    no need to check individual campaigns to bind when
+                    either of those is selected, so this section hides
+                    itself entirely rather than showing a checkbox list
+                    that wouldn't do anything meaningful for these two
+                    roles. */}
+                {!["wfm", "admin"].includes(accessLevel) && (
+                  <>
+                    <label className="comments-label">Campaign Access</label>
+                    {campaigns.map((c) => (
+                      <label key={c.campaign_id} className="disposition-row">
+                        <input
+                          type="checkbox"
+                          checked={selectedCampaigns.includes(c.campaign_id)}
+                          onChange={() => toggleCampaign(c.campaign_id)}
+                        />
+                        {c.campaign_name} ({c.campaign_id})
+                      </label>
+                    ))}
+                  </>
+                )}
 
                 <label className="comments-label">Priority</label>
                 <select value={priority} onChange={(e) => setPriority(e.target.value)}>

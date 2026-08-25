@@ -47,7 +47,7 @@ export default function AdminPage() {
   const { agent } = useAuth();
   const [activeSection, setActiveSection] = useState("users");
 
-  if (agent && agent.accessLevel !== "admin") {
+  if (agent && agent.accessLevel !== "admin" && agent.accessLevel !== "wfm") {
     return <Navigate to="/" replace />;
   }
 

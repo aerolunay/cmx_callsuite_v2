@@ -9,19 +9,19 @@ import RecordingPlaybackModal from "../modals/RecordingPlaybackModal";
 ==================================================
 RECORDINGS PAGE — standalone, NOT part of Admin
 ==================================================
-Deliberately its own top-level page/route, per explicit request —
-Supervisors (and, once built, Training & Quality/Account Manager) need
-Recordings access without being granted access to the full Admin page
-and everything else it exposes (Users, Phone Login, Campaigns, Trunk
-Setup).
+Deliberately its own top-level page/route — Supervisors, Training &
+Quality, and Account Manager need Recordings access without being
+granted the full Admin page and everything else it exposes (Users,
+Phone Login, Campaigns, Trunk Setup). WFM deliberately does NOT get
+Recordings, per the finished access-level matrix.
 
-Access gate: admin OR supervisor for now. This will need revisiting
-once the full access-level overhaul happens (Training & Quality,
-Account Manager, WFM roles) — those roles should also reach this page,
-campaign-scoped to their own assignments rather than seeing
-everything. Not built yet; this page currently shows everything
-without any campaign-based filtering of WHICH recordings a supervisor
-can see, matching admin's own unrestricted view for now.
+Campaign scoping: admin gets the full unscoped campaign list and can
+browse "All Campaigns." supervisor/training_quality/account_manager
+get ONLY their own assigned campaigns (getMyCampaigns(), NOT
+getAdminCampaigns() — that endpoint is admin/wfm-only and would 403
+for these roles) and must always pick one specific campaign — the
+backend's requireCampaignAccess rejects an empty/unassigned campaignId
+from these roles regardless of what this page sends.
 
 Content (filters, table, playback) is identical to what was originally
 built as AdminUsersSection's sibling, components/admin/
@@ -30,6 +30,8 @@ AdminPage.jsx and is effectively dead code now; safe to delete if you'd
 rather not carry it, or leave it as an unused reference.
 ==================================================
 */
+const RECORDINGS_ROLES = ["supervisor", "training_quality", "account_manager", "admin"];
+
 export default function RecordingsPage() {
   const { agent } = useAuth();
 
@@ -47,11 +49,24 @@ export default function RecordingsPage() {
   const [modalRecording, setModalRecording] = useState(null);
   const [modalUrl, setModalUrl] = useState(null);
 
+  const isUnrestrictedCampaignAccess = agent?.accessLevel === "admin";
+
   function loadCampaigns() {
-    api
-      .getAdminCampaigns()
-      .then((data) => setCampaigns(data.campaigns || []))
-      .catch(() => {}); // non-fatal — the campaign filter dropdown just stays empty
+    if (isUnrestrictedCampaignAccess) {
+      api
+        .getAdminCampaigns()
+        .then((data) => setCampaigns(data.campaigns || []))
+        .catch(() => {});
+    } else {
+      api
+        .getMyCampaigns()
+        .then((data) => {
+          const list = data.campaigns || [];
+          setCampaigns(list);
+          if (list.length > 0) setCampaignId((prev) => prev || list[0].campaign_id);
+        })
+        .catch(() => {});
+    }
   }
 
   function loadRecordings() {
@@ -71,13 +86,22 @@ export default function RecordingsPage() {
   }
 
   useEffect(() => {
-    if (!agent || (agent.accessLevel !== "admin" && agent.accessLevel !== "supervisor")) return;
+    if (!agent || !RECORDINGS_ROLES.includes(agent.accessLevel)) return;
     loadCampaigns();
-    loadRecordings();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agent]);
 
-  if (agent && agent.accessLevel !== "admin" && agent.accessLevel !== "supervisor") {
+  useEffect(() => {
+    if (!agent || !RECORDINGS_ROLES.includes(agent.accessLevel)) return;
+    // Scoped roles must have a real campaignId selected before this can
+    // run — avoids firing a request that's certain to 400 while the
+    // auto-select from loadCampaigns() above is still in flight.
+    if (!isUnrestrictedCampaignAccess && !campaignId) return;
+    loadRecordings();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agent, campaignId]);
+
+  if (agent && !RECORDINGS_ROLES.includes(agent.accessLevel)) {
     return <Navigate to="/" replace />;
   }
 
@@ -89,8 +113,11 @@ export default function RecordingsPage() {
   function handleClearFilters() {
     setStartDate("");
     setEndDate("");
-    setCampaignId("");
     setAgentName("");
+    // Scoped roles can't clear campaignId to empty — that's not a
+    // valid selection for them (the backend requires a real one) —
+    // so this only actually resets it for admin's unrestricted view.
+    if (isUnrestrictedCampaignAccess) setCampaignId("");
     setTimeout(loadRecordings, 0);
   }
 
@@ -139,7 +166,7 @@ export default function RecordingsPage() {
             <div>
               <label className="comments-label">Campaign</label>
               <select value={campaignId} onChange={(e) => setCampaignId(e.target.value)}>
-                <option value="">All Campaigns</option>
+                {isUnrestrictedCampaignAccess && <option value="">All Campaigns</option>}
                 {campaigns.map((c) => (
                   <option key={c.campaign_id} value={c.campaign_id}>
                     {c.campaign_name} ({c.campaign_id})

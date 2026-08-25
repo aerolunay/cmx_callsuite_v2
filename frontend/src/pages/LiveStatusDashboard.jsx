@@ -113,10 +113,32 @@ export default function LiveStatusDashboard() {
     return () => observer.disconnect();
   }, []);
 
+  // UPDATED — widened from admin-only to the full Live Dashboard role
+  // set. admin/wfm get the full unscoped campaign list (can pick "All
+  // Campaigns" via a blank selection); every other allowed role
+  // (supervisor/training_quality/account_manager) gets ONLY their own
+  // assigned campaigns via getMyCampaigns() — matches the backend's
+  // own requireCampaignAccess enforcement, which REQUIRES a real
+  // campaignId from these roles and rejects anything they're not
+  // assigned to. Auto-selects their first assigned campaign so the
+  // dashboard has something to show immediately rather than sitting on
+  // an invalid blank/"All" selection they're not allowed to use.
+  const isUnrestrictedCampaignAccess = agent?.accessLevel === "admin" || agent?.accessLevel === "wfm";
+
   useEffect(() => {
-    if (agent?.accessLevel === "admin") {
+    if (isUnrestrictedCampaignAccess) {
       api.getCampaigns().then((data) => setCampaigns(data.campaigns)).catch(() => {});
+    } else if (agent) {
+      api
+        .getMyCampaigns()
+        .then((data) => {
+          const list = data.campaigns || [];
+          setCampaigns(list);
+          if (list.length > 0) setCampaignId((prev) => prev || list[0].campaign_id);
+        })
+        .catch(() => {});
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agent]);
 
   function load() {
@@ -180,7 +202,13 @@ export default function LiveStatusDashboard() {
   // SPECIFIC agent) was out of scope for this pass. 5s is "close to
   // real-time" for a supervisor-facing dashboard, not truly instant.
   useEffect(() => {
-    if (agent?.accessLevel !== "admin") return;
+    const LIVE_DASHBOARD_ROLES = ["supervisor", "training_quality", "account_manager", "wfm", "admin"];
+    if (!LIVE_DASHBOARD_ROLES.includes(agent?.accessLevel)) return;
+    // Scoped roles MUST have a real campaignId — the backend rejects
+    // an empty one for them. Wait for the campaign-fetch effect above
+    // to auto-select one rather than firing a request that's certain
+    // to 400.
+    if (!isUnrestrictedCampaignAccess && !campaignId) return;
     setLoading(true);
     load();
     const interval = setInterval(load, REFRESH_INTERVAL_MS);
@@ -188,7 +216,7 @@ export default function LiveStatusDashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agent, campaignId]);
 
-  if (agent && agent.accessLevel !== "admin") {
+  if (agent && !["supervisor", "training_quality", "account_manager", "wfm", "admin"].includes(agent.accessLevel)) {
     return <Navigate to="/" replace />;
   }
 
@@ -260,7 +288,7 @@ export default function LiveStatusDashboard() {
         <div className="card" style={{ marginBottom: 20 }}>
           <label className="comments-label">Campaign</label>
           <select value={campaignId} onChange={(e) => setCampaignId(e.target.value)}>
-            <option value="">— All Campaigns —</option>
+            {isUnrestrictedCampaignAccess && <option value="">— All Campaigns —</option>}
             {campaigns.map((c) => (
               <option key={c.campaign_id} value={c.campaign_id}>
                 {c.campaign_name} ({c.campaign_id})

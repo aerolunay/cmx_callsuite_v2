@@ -12,14 +12,19 @@ const ws = require("../config/ws");
 const ami = require("../config/ami");
 const { transporter } = require("../config/mailer");
 const { buildWelcomeEmail } = require("../services/emailTemplates");
+const { requireRoles, requireCampaignAccess } = require("../services/accessControlService");
 
 const router = express.Router();
 
+// UPDATED — WFM now also gets full Admin page access, per the
+// access-level matrix (Users/Phone Login/Campaigns/Trunk Setup CRUD
+// all stay behind this same check; WFM and Admin are the only two
+// roles with unrestricted, all-campaign access to any of it).
 function requireAdmin(req, res, next) {
   if (!req.session || !req.session.authenticated || !req.session.agent) {
     return res.status(401).json({ success: false, message: "Authentication required." });
   }
-  if (req.session.agent.accessLevel !== "admin") {
+  if (req.session.agent.accessLevel !== "admin" && req.session.agent.accessLevel !== "wfm") {
     return res.status(403).json({ success: false, message: "Admin access required." });
   }
   return next();
@@ -120,7 +125,7 @@ router.post("/users", requireAdmin, async (req, res) => {
     return res.status(400).json({ success: false, message: "email, fullName, and accessLevel are required." });
   }
 
-  if (!["agent", "supervisor", "admin"].includes(accessLevel)) {
+  if (!["agent", "supervisor", "training_quality", "account_manager", "wfm", "admin"].includes(accessLevel)) {
     return res.status(400).json({ success: false, message: "accessLevel must be agent, supervisor, or admin." });
   }
 
@@ -233,7 +238,7 @@ router.post("/users/full", requireAdmin, async (req, res) => {
   if (!email || !fullName || !accessLevel) {
     return res.status(400).json({ success: false, message: "email, fullName, and accessLevel are required." });
   }
-  if (!["agent", "supervisor", "admin"].includes(accessLevel)) {
+  if (!["agent", "supervisor", "training_quality", "account_manager", "wfm", "admin"].includes(accessLevel)) {
     return res.status(400).json({ success: false, message: "accessLevel must be agent, supervisor, or admin." });
   }
   if (!vicidialUsername) {
@@ -909,7 +914,11 @@ under any specific campaign filter). "All Campaigns" (no campaignId)
 shows every active agent regardless of assignment.
 ==================================================
 */
-router.get("/live-status", requireAdmin, async (req, res) => {
+router.get(
+  "/live-status",
+  requireRoles("supervisor", "training_quality", "account_manager", "wfm", "admin"),
+  requireCampaignAccess,
+  async (req, res) => {
   try {
     const { campaignId } = req.query;
 
@@ -1052,7 +1061,7 @@ router.put("/users/:appUserId", requireAdmin, async (req, res) => {
     return res.status(400).json({ success: false, message: "email, fullName, and accessLevel are required." });
   }
 
-  if (!["agent", "supervisor", "admin"].includes(accessLevel)) {
+  if (!["agent", "supervisor", "training_quality", "account_manager", "wfm", "admin"].includes(accessLevel)) {
     return res.status(400).json({ success: false, message: "accessLevel must be agent, supervisor, or admin." });
   }
 
@@ -1262,7 +1271,11 @@ QUEUE STATUS
 GET /api/admin/queue-status?campaignId=optional
 ==================================================
 */
-router.get("/queue-status", requireAdmin, async (req, res) => {
+router.get(
+  "/queue-status",
+  requireRoles("supervisor", "training_quality", "account_manager", "wfm", "admin"),
+  requireCampaignAccess,
+  async (req, res) => {
   try {
     const { campaignId } = req.query;
     let queues = inboundCallService.getQueueStatus();
@@ -1285,7 +1298,11 @@ ABANDONED CALLS
 GET /api/admin/abandoned-calls?campaignId=optional
 ==================================================
 */
-router.get("/abandoned-calls", requireAdmin, async (req, res) => {
+router.get(
+  "/abandoned-calls",
+  requireRoles("supervisor", "training_quality", "account_manager", "wfm", "admin"),
+  requireCampaignAccess,
+  async (req, res) => {
   try {
     const { campaignId } = req.query;
     const calls = await inboundCallService.getAbandonedCallsToday(campaignId || null);
@@ -1303,7 +1320,11 @@ TOTAL CALLS (Live Status Dashboard's "Total Calls" widget)
 GET /api/admin/total-calls?campaignId=optional
 ==================================================
 */
-router.get("/total-calls", requireAdmin, async (req, res) => {
+router.get(
+  "/total-calls",
+  requireRoles("supervisor", "training_quality", "account_manager", "wfm", "admin"),
+  requireCampaignAccess,
+  async (req, res) => {
   try {
     const { campaignId } = req.query;
     const { start, end } = await statsService.getEasternDayBoundsForServerClock();
@@ -1384,7 +1405,11 @@ REPORTING SUMMARY (Inbound / Outbound KPI cards)
 GET /api/admin/reporting-summary?campaignId=optional
 ==================================================
 */
-router.get("/reporting-summary", requireAdmin, async (req, res) => {
+router.get(
+  "/reporting-summary",
+  requireRoles("supervisor", "training_quality", "account_manager", "wfm", "admin"),
+  requireCampaignAccess,
+  async (req, res) => {
   try {
     const { campaignId } = req.query;
     const summary = await statsService.getReportingSummary(campaignId || null);
@@ -1413,7 +1438,11 @@ in from production too (backend/services/statsService.js) — this route
 alone won't work without that corresponding function existing.
 ==================================================
 */
-router.get("/reports/campaign-agent-breakdown", requireAdmin, async (req, res) => {
+router.get(
+  "/reports/campaign-agent-breakdown",
+  requireRoles("supervisor", "account_manager", "wfm", "admin"),
+  requireCampaignAccess,
+  async (req, res) => {
   try {
     const { startDate, endDate, campaignId } = req.query;
     if (!startDate || !endDate) {

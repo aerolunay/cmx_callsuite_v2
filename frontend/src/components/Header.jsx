@@ -36,27 +36,41 @@ export default function Header({ agentStatus }) {
 
       {agent && (
         <div className="header-right">
-          {agent.accessLevel === "admin" && (
-            <>
-              <Link to="/live-status" className="header-admin-link">
-                Live Status
-              </Link>
-              <Link to="/reports" className="header-admin-link">
-                Reports
-              </Link>
-              <Link to="/admin" className="header-admin-link">
-                Admin
-              </Link>
-            </>
+          {/*
+            ==================================================
+            NAV MATRIX — per the finished access-level spec
+            ==================================================
+            Live Status : supervisor, training_quality, account_manager, wfm, admin
+            Reports     : supervisor, account_manager, wfm, admin (NOT training_quality)
+            Recordings  : supervisor, training_quality, account_manager, admin (NOT wfm)
+            Admin       : wfm, admin
+
+            Dialer has no Header link at all — reached via the landing
+            page's own "Start working a campaign" flow, unchanged by
+            this matrix. account_manager/wfm/admin are blocked from
+            /dialer itself at the page level (see DialerPage.jsx's own
+            guard) even though nothing here needs to hide a link for
+            it specifically.
+            ==================================================
+          */}
+          {["supervisor", "training_quality", "account_manager", "wfm", "admin"].includes(agent.accessLevel) && (
+            <Link to="/live-status" className="header-admin-link">
+              Live Status
+            </Link>
           )}
-          {/* Recordings — deliberately its own condition, not folded
-              into the admin-only block above, since Supervisors need
-              this without the rest of what admin-only unlocks. Will
-              need widening once Training & Quality/Account Manager
-              roles exist. */}
-          {(agent.accessLevel === "admin" || agent.accessLevel === "supervisor") && (
+          {["supervisor", "account_manager", "wfm", "admin"].includes(agent.accessLevel) && (
+            <Link to="/reports" className="header-admin-link">
+              Reports
+            </Link>
+          )}
+          {["supervisor", "training_quality", "account_manager", "admin"].includes(agent.accessLevel) && (
             <Link to="/recordings" className="header-admin-link">
               Recordings
+            </Link>
+          )}
+          {["wfm", "admin"].includes(agent.accessLevel) && (
+            <Link to="/admin" className="header-admin-link">
+              Admin
             </Link>
           )}
           <div className="header-user">

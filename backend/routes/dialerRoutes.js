@@ -11,6 +11,7 @@ const inboundCallService = require("../services/inboundCallService");
 const crossAppHandoffService = require("../services/crossAppHandoffService");
 const recordingUploadService = require("../services/recordingUploadService");
 const conferenceService = require("../services/conferenceService");
+const { requireRoles, requireCampaignAccess, getAssignedCampaignIds, UNRESTRICTED_CAMPAIGN_ROLES } = require("../services/accessControlService");
 
 const router = express.Router();
 
@@ -27,26 +28,19 @@ function requireAuth(req, res, next) {
 
 /*
 ==================================================
-requireAdminOrSupervisor
-==================================================
-Gates the Recordings routes below — Recordings is deliberately its own
-top-level page (see RecordingsPage.jsx), NOT part of Admin, per
-explicit request: Supervisors need this without being granted the full
-Admin page and everything else it exposes. Will need widening once
-Training & Quality/Account Manager roles exist (they need this too,
-per the access-level spec) — not built yet, so only admin/supervisor
-for now.
+Recordings access — now uses the shared accessControlService
+(requireRoles + requireCampaignAccess) instead of the one-off
+requireAdminOrSupervisor this used to be. Widened per the finished
+access-level matrix: supervisor, training_quality, account_manager,
+admin — deliberately NOT wfm, per the spec as given (WFM gets Live
+Dashboard/Reports/Admin, not Recordings). See RECORDINGS_ROLES below,
+also used directly by the playback-url route's own manual campaign
+check further down (that route can't use requireCampaignAccess as-is,
+since it takes a :callId path param, not a ?campaignId query param —
+the campaign it belongs to has to be looked up from the DB first).
 ==================================================
 */
-function requireAdminOrSupervisor(req, res, next) {
-  if (!req.session || !req.session.authenticated || !req.session.agent) {
-    return res.status(401).json({ success: false, message: "Authentication required." });
-  }
-  if (req.session.agent.accessLevel !== "admin" && req.session.agent.accessLevel !== "supervisor") {
-    return res.status(403).json({ success: false, message: "Admin or Supervisor access required." });
-  }
-  return next();
-}
+const RECORDINGS_ROLES = ["supervisor", "training_quality", "account_manager", "admin"];
 
 // Shared registration password for every PJSIP phone endpoint — same
 // value adminRoutes.js writes into every wizard-generated endpoint's
@@ -847,7 +841,7 @@ mostly expire unused. The frontend calls the second route below,
 on-demand, only when an admin actually clicks Play on a specific row.
 ==================================================
 */
-router.get("/recordings", requireAdminOrSupervisor, async (req, res) => {
+router.get("/recordings", requireRoles(...RECORDINGS_ROLES), requireCampaignAccess, async (req, res) => {
   try {
     const { startDate, endDate, campaignId, agentName } = req.query;
 
@@ -923,15 +917,21 @@ of which table it came from) since the caller doesn't know/care which
 direction it was.
 ==================================================
 */
-router.get("/recordings/:callId/playback-url", requireAdminOrSupervisor, async (req, res) => {
+router.get("/recordings/:callId/playback-url", requireRoles(...RECORDINGS_ROLES), async (req, res) => {
   try {
     const { callId } = req.params;
 
+    // Now also selects campaign_id — needed for the ownership check
+    // below. Can't use requireCampaignAccess middleware here the way
+    // the list route does: this route takes a :callId path param, not
+    // a ?campaignId query param, so which campaign this specific call
+    // belongs to has to come from the DB lookup itself, not the
+    // request.
     const [rows] = await db.execute(
       `
-        SELECT recording_key FROM cmx_dialer.dialer_call_log WHERE call_id = ? AND recording_key IS NOT NULL
+        SELECT recording_key, campaign_id FROM cmx_dialer.dialer_call_log WHERE call_id = ? AND recording_key IS NOT NULL
         UNION ALL
-        SELECT recording_key FROM cmx_dialer.inbound_call_log WHERE call_id = ? AND recording_key IS NOT NULL
+        SELECT recording_key, campaign_id FROM cmx_dialer.inbound_call_log WHERE call_id = ? AND recording_key IS NOT NULL
         LIMIT 1
       `,
       [callId, callId]
@@ -939,6 +939,14 @@ router.get("/recordings/:callId/playback-url", requireAdminOrSupervisor, async (
 
     if (!rows.length) {
       return res.status(404).json({ success: false, message: "No recording found for this call." });
+    }
+
+    const { accessLevel, appUserId } = req.session.agent;
+    if (!UNRESTRICTED_CAMPAIGN_ROLES.includes(accessLevel)) {
+      const assignedIds = await getAssignedCampaignIds(appUserId);
+      if (!assignedIds.includes(rows[0].campaign_id)) {
+        return res.status(403).json({ success: false, message: "You are not assigned to that campaign." });
+      }
     }
 
     const url = await recordingUploadService.getPlaybackUrl(rows[0].recording_key);

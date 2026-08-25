@@ -34,14 +34,34 @@ export default function ReportsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
+  // Reports roles: supervisor, account_manager, wfm, admin — NOT
+  // training_quality (Reports isn't part of that role's access per the
+  // finished matrix). admin/wfm get the full unscoped campaign list;
+  // supervisor/account_manager get only their own assignments.
+  const REPORTS_ROLES = ["supervisor", "account_manager", "wfm", "admin"];
+  const isUnrestrictedCampaignAccess = agent?.accessLevel === "admin" || agent?.accessLevel === "wfm";
+
   useEffect(() => {
-    if (agent?.accessLevel === "admin") {
+    if (isUnrestrictedCampaignAccess) {
       api.getCampaigns().then((data) => setCampaigns(data.campaigns)).catch(() => {});
+    } else if (agent) {
+      api
+        .getMyCampaigns()
+        .then((data) => {
+          const list = data.campaigns || [];
+          setCampaigns(list);
+          if (list.length > 0) setCampaignId((prev) => prev || list[0].campaign_id);
+        })
+        .catch(() => {});
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agent]);
 
   function load() {
     if (!startDate || !endDate) return;
+    // Scoped roles must have a real campaignId before this can run at
+    // all — the backend rejects an empty one for them.
+    if (!isUnrestrictedCampaignAccess && !campaignId) return;
     setLoading(true);
     setError("");
     api
@@ -52,13 +72,13 @@ export default function ReportsPage() {
   }
 
   useEffect(() => {
-    if (agent?.accessLevel === "admin") {
+    if (REPORTS_ROLES.includes(agent?.accessLevel)) {
       load();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agent, campaignId, startDate, endDate]);
 
-  if (agent && agent.accessLevel !== "admin") {
+  if (agent && !REPORTS_ROLES.includes(agent.accessLevel)) {
     return <Navigate to="/" replace />;
   }
 
@@ -108,7 +128,7 @@ export default function ReportsPage() {
           <div>
             <label className="comments-label">Campaign</label>
             <select value={campaignId} onChange={(e) => setCampaignId(e.target.value)}>
-              <option value="">— All Campaigns —</option>
+              {isUnrestrictedCampaignAccess && <option value="">— All Campaigns —</option>}
               {campaigns.map((c) => (
                 <option key={c.campaign_id} value={c.campaign_id}>
                   {c.campaign_name} ({c.campaign_id})
