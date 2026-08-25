@@ -499,7 +499,7 @@ export default function DialerPage() {
   // inbound-sourced Callback rows, which have no real lead either).
   async function handleManualDial(phoneNumber) {
     if (agentStatus?.status !== "READY") {
-      setError("You must be Ready to place a call.");
+      setError("You must be on Ready to place a call.");
       return;
     }
     if (call || inboundCall) {

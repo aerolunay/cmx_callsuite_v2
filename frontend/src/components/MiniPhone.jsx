@@ -370,7 +370,7 @@ export function MiniPhone({
             ? "Softphone must be registered before dialing."
             : hasActiveCall
               ? "You're already on a call."
-              : "You must be Ready to place a call."}
+              : "You must be on Ready to place a call."}
         </p>
       )}
 
