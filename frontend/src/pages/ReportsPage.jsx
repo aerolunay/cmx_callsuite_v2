@@ -133,9 +133,15 @@ export default function ReportsPage() {
       { label: "Direction", value: (row) => (row.direction === "inbound" ? "Inbound" : "Outbound") },
       { label: "Agent", value: (row) => row.agent_name || row.agent_user || "" },
       { label: "Phone Number", value: "phone_number" },
+      { label: "Contact First Name", value: "first_name" },
+      { label: "Contact Last Name", value: "last_name" },
       { label: "Call Started", value: "call_started_at" },
       { label: "Call Ended", value: "call_ended_at" },
       { label: "Disposition", value: "disposition" },
+      { label: "Talk Time (s)", value: "talk_seconds" },
+      { label: "Hold Time (s)", value: "hold_seconds" },
+      { label: "ACW Time (s)", value: "acw_seconds" },
+      { label: "AHT (s)", value: "aht_seconds" },
       { label: "Wait Seconds", value: "wait_seconds" },
       { label: "Comments", value: "comments" },
     ];
@@ -319,8 +325,12 @@ export default function ReportsPage() {
                     <th>Direction</th>
                     <th>Agent</th>
                     <th>Phone Number</th>
+                    <th>Contact Name</th>
                     <th>Disposition</th>
-                    <th>Wait (s)</th>
+                    <th>Talk</th>
+                    <th>Hold</th>
+                    <th>ACW</th>
+                    <th>AHT</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -331,8 +341,12 @@ export default function ReportsPage() {
                       <td>{c.direction === "inbound" ? "Inbound" : "Outbound"}</td>
                       <td>{c.agent_name || c.agent_user || "—"}</td>
                       <td>{c.phone_number || "—"}</td>
+                      <td>{[c.first_name, c.last_name].filter(Boolean).join(" ") || "—"}</td>
                       <td>{c.disposition || "—"}</td>
-                      <td>{c.wait_seconds ?? "—"}</td>
+                      <td>{fmtSeconds(c.talk_seconds)}</td>
+                      <td>{fmtSeconds(c.hold_seconds)}</td>
+                      <td>{fmtSeconds(c.acw_seconds)}</td>
+                      <td>{fmtSeconds(c.aht_seconds)}</td>
                     </tr>
                   ))}
                 </tbody>

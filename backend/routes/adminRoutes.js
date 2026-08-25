@@ -1472,6 +1472,22 @@ combining dialer_call_log (outbound) and inbound_call_log (inbound)
 via UNION ALL, same pattern already used for GET /recordings and
 GET /total-calls.
 
+UPDATED — per explicit follow-up request, each row now also includes:
+- Contact first/last name (straight from the call-log tables — both
+  already have these columns).
+- Talk time, hold time, ACW time, and handle time ("AHT" per the
+  request's own wording, even though it's a per-CALL value here, not
+  an average — labeled that way in the CSV/table to match what was
+  asked for) — these do NOT exist as columns on either call-log table
+  at all. They're derived from cmx_dialer.agent_status_log, the SAME
+  source and SAME segment-summing logic already used (and already
+  bug-fixed once) in computeDirectionStats above — status IN
+  ('IN_CALL','ON_HOLD','AFTER_CALL_WORK'), grouped by related_call_id,
+  summed per call. Reusing that exact definition here rather than
+  inventing a second, potentially-inconsistent one — this app already
+  had a real, confirmed bug once from two different AHT definitions
+  disagreeing with each other.
+
 Same role gate + requireCampaignAccess as the aggregated report —
 "the data to be downloaded must also be filtered based on the user's
 assigned campaigns, except WFM and Admin" is enforced by
@@ -1512,11 +1528,12 @@ router.get(
       const [rows] = await db.execute(
         `
           SELECT combined.call_id, combined.campaign_id, combined.agent_user, au.full_name AS agent_name,
-                 combined.phone_number, combined.call_started_at, combined.call_ended_at,
+                 combined.phone_number, combined.first_name, combined.last_name,
+                 combined.call_started_at, combined.call_ended_at,
                  combined.direction, combined.disposition, combined.comments, combined.wait_seconds
           FROM (
             SELECT
-              d.call_id, d.campaign_id, d.agent_user, d.phone_number,
+              d.call_id, d.campaign_id, d.agent_user, d.phone_number, d.first_name, d.last_name,
               d.call_started_at, d.call_ended_at, 'outbound' AS direction,
               d.disposition, d.comments, NULL AS wait_seconds
             FROM cmx_dialer.dialer_call_log d
@@ -1524,7 +1541,7 @@ router.get(
             UNION ALL
 
             SELECT
-              i.call_id, i.campaign_id, i.agent_user, i.caller_id_number AS phone_number,
+              i.call_id, i.campaign_id, i.agent_user, i.caller_id_number AS phone_number, i.first_name, i.last_name,
               i.call_started_at, i.call_ended_at, 'inbound' AS direction,
               i.disposition, i.comments, i.wait_seconds
             FROM cmx_dialer.inbound_call_log i
@@ -1536,7 +1553,56 @@ router.get(
         params
       );
 
-      return res.json({ success: true, calls: rows });
+      // Per-call talk/hold/ACW — same segment-aggregation query as
+      // computeDirectionStats, just not scoped to one direction/agent
+      // at a time since this report already combines both directions
+      // in one pass. Bounded by the same date range (and campaign, via
+      // related_campaign_id) as the raw call rows above, so this never
+      // pulls segments for calls outside what's actually being shown.
+      const segParams = [start, end];
+      let segCampaignFilter = "";
+      if (campaignId) {
+        segCampaignFilter = "AND related_campaign_id = ?";
+        segParams.push(campaignId);
+      }
+      const [segRows] = await db.execute(
+        `
+          SELECT related_call_id, status, SUM(duration_seconds) AS seg_seconds
+          FROM cmx_dialer.agent_status_log
+          WHERE status IN ('IN_CALL', 'ON_HOLD', 'AFTER_CALL_WORK')
+            AND ended_at IS NOT NULL
+            AND related_call_id IS NOT NULL
+            AND started_at BETWEEN ? AND ?
+            ${segCampaignFilter}
+          GROUP BY related_call_id, status
+        `,
+        segParams
+      );
+
+      const segByCallId = new Map();
+      for (const r of segRows) {
+        // Same STRING-vs-NUMBER coercion fix already applied in
+        // computeDirectionStats — mysql2 returns SUM() as a string.
+        const segSeconds = Number(r.seg_seconds) || 0;
+        const entry = segByCallId.get(r.related_call_id) || { talk: 0, hold: 0, acw: 0 };
+        if (r.status === "IN_CALL") entry.talk += segSeconds;
+        else if (r.status === "ON_HOLD") entry.hold += segSeconds;
+        else if (r.status === "AFTER_CALL_WORK") entry.acw += segSeconds;
+        segByCallId.set(r.related_call_id, entry);
+      }
+
+      const calls = rows.map((row) => {
+        const seg = segByCallId.get(row.call_id) || { talk: 0, hold: 0, acw: 0 };
+        return {
+          ...row,
+          talk_seconds: seg.talk,
+          hold_seconds: seg.hold,
+          acw_seconds: seg.acw,
+          aht_seconds: seg.talk + seg.hold + seg.acw,
+        };
+      });
+
+      return res.json({ success: true, calls });
     } catch (error) {
       console.error("GET /api/admin/reports/raw-calls failed:", error);
       return res.status(500).json({ success: false, message: error.message || "Failed to load raw call data." });
