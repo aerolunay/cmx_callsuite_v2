@@ -298,7 +298,23 @@ export default function DialerPage() {
       );
       setCall({ callId: callData.callId, room: callData.room, status: "ringing_agent", callType: "REGULAR" });
     } catch (err) {
-      setError(err.message);
+      // REAL BUG FIX: when the lead pool is genuinely exhausted, the
+      // backend correctly returns 404 ("No eligible leads found for
+      // this campaign right now") — but nothing here used to update
+      // `hasLeads`, so the auto-dial effect (which gates on hasLeads)
+      // kept seeing it as still true and immediately retried the exact
+      // same failing call, forever, in a tight loop — confirmed live:
+      // hundreds of identical 404s per second flooding the console.
+      // Now explicitly detects this case (status 404) and flips
+      // hasLeads to false, which the auto-dial effect's own guard
+      // (`if (!hasLeads) return;`) then correctly respects — stopping
+      // the loop and showing a calm, expected message instead of a
+      // scary red error banner.
+      if (err.status === 404) {
+        setHasLeads(false);
+      } else {
+        setError(err.message);
+      }
     } finally {
       setBusy(false);
     }
@@ -849,6 +865,16 @@ export default function DialerPage() {
             {agentStatus?.status === "READY" && !call && hasLeads && campaign?.dial_method === "RATIO" && (
               <div className="card">
                 <span className="badge">{busy ? "Dialing…" : "Auto Dial Active"}</span>
+              </div>
+            )}
+
+            {/* Shown once the lead pool is confirmed exhausted (a real
+                404 from /dialer/next-lead, not a transient error) —
+                without this, the button/badge above would just vanish
+                with no explanation once hasLeads flips to false. */}
+            {agentStatus?.status === "READY" && !call && !hasLeads && (
+              <div className="card">
+                <span className="badge">No leads to dial — the lead list for this campaign is complete.</span>
               </div>
             )}
 
