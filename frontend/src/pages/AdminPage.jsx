@@ -5,6 +5,7 @@ import { useAuth } from "../context/AuthContext";
 import AdminUsersSection from "../components/admin/AdminUsersSection";
 import AdminVicidialUsersSection from "../components/admin/AdminVicidialUsersSection";
 import AdminCampaignsSection from "../components/admin/AdminCampaignsSection";
+import AdminLeadsSection from "../components/admin/AdminLeadsSection";
 
 /*
 ==================================================
@@ -40,6 +41,7 @@ const SECTIONS = [
   { key: "users", label: "Users" },
   { key: "vicidial-users", label: "Phone Login" },
   { key: "campaigns", label: "Campaigns" },
+  { key: "leads", label: "Leads / Auto-Dial" },
   { key: "trunks", label: "DID / Trunk Setup" },
 ];
 
@@ -75,6 +77,7 @@ export default function AdminPage() {
             {activeSection === "users" && <AdminUsersSection />}
             {activeSection === "vicidial-users" && <AdminVicidialUsersSection />}
             {activeSection === "campaigns" && <AdminCampaignsSection />}
+            {activeSection === "leads" && <AdminLeadsSection />}
 
             {activeSection === "trunks" && (
               <div className="card">

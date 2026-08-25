@@ -19,6 +19,7 @@ const authRoutes = require("./routes/authRoutes");
 const dialerRoutes = require("./routes/dialerRoutes");
 const adminRoutes = require("./routes/adminRoutes");
 const campaignRoutes = require("./routes/campaignRoutes");
+const leadRoutes = require("./routes/leadRoutes");
 const internalRoutes = require("./routes/internalRoutes");
 
 const app = express();
@@ -129,6 +130,7 @@ app.use("/api/auth", authRoutes);
 app.use("/api", dialerRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/admin/campaigns", campaignRoutes);
+app.use("/api/admin", leadRoutes);
 
 // Not session-authenticated — called by Asterisk's dialplan via
 // CURL(), protected by INTERNAL_API_SECRET instead. See

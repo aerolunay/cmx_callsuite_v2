@@ -98,11 +98,16 @@ const upload = multer({
   limits: { fileSize: 25 * 1024 * 1024 }, // 25MB — generous for a short voice prompt
 });
 
+// REAL BUG FIX: this local copy was never updated when WFM got full
+// Admin page access — only adminRoutes.js's own separate requireAdmin
+// was fixed for that. Since Campaigns is part of the Admin page, WFM
+// couldn't actually manage campaigns despite the access-level spec
+// saying they should be able to.
 function requireAdmin(req, res, next) {
   if (!req.session || !req.session.authenticated || !req.session.agent) {
     return res.status(401).json({ success: false, message: "Authentication required." });
   }
-  if (req.session.agent.accessLevel !== "admin") {
+  if (req.session.agent.accessLevel !== "admin" && req.session.agent.accessLevel !== "wfm") {
     return res.status(403).json({ success: false, message: "Admin access required." });
   }
   return next();
@@ -285,7 +290,18 @@ needed later.
 */
 router.get("/", requireAdmin, async (req, res) => {
   try {
-    const { includeInactive } = req.query;
+    const { includeInactive, type } = req.query;
+    // type=OUTBOUND — added for the Lead Upload feature, per explicit
+    // request to exclude Blended campaigns from that assignment
+    // dropdown. Filters on cmx_dialer.campaign_settings.campaign_type,
+    // NOT a native ViciDial column — see that table's own comment for
+    // why this exists as a separate, explicit field rather than
+    // overloading campaign_allow_inbound.
+    const filters = [];
+    if (includeInactive !== "true") filters.push("c.active = 'Y'");
+    if (type) filters.push("s.campaign_type = ?");
+    const params = type ? [type] : [];
+
     const [rows] = await db.execute(
       `
         SELECT
@@ -296,9 +312,10 @@ router.get("/", requireAdmin, async (req, res) => {
         FROM asterisk.vicidial_campaigns c
         LEFT JOIN asterisk.vicidial_inbound_dids d ON d.campaign_id = c.campaign_id
         LEFT JOIN cmx_dialer.campaign_settings s ON s.campaign_id = c.campaign_id
-        ${includeInactive === "true" ? "" : "WHERE c.active = 'Y'"}
+        ${filters.length ? `WHERE ${filters.join(" AND ")}` : ""}
         ORDER BY c.campaign_id ASC
-      `
+      `,
+      params
     );
     return res.json({ success: true, campaigns: rows });
   } catch (error) {

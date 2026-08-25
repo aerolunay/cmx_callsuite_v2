@@ -172,7 +172,7 @@ export const api = {
   // include the two audio file uploads — request() in this file
   // already knows to skip forcing a JSON Content-Type when the body
   // is a FormData instance.
-  getAdminCampaigns: () => request("/admin/campaigns"),
+  getAdminCampaigns: (queryString) => request(`/admin/campaigns${queryString ? `?${queryString}` : ""}`),
   createCampaign: (formData) => request("/admin/campaigns", { method: "POST", body: formData }),
   updateCampaign: (campaignId, formData) =>
     request(`/admin/campaigns/${encodeURIComponent(campaignId)}`, { method: "PUT", body: formData }),
@@ -188,4 +188,20 @@ export const api = {
   getRecordings: (queryString) => request(`/recordings${queryString ? `?${queryString}` : ""}`),
   getRecordingPlaybackUrl: (callId) =>
     request(`/recordings/${encodeURIComponent(callId)}/playback-url`),
+
+  // Outbound Auto-Dial, Phase 1 — lead upload, DNC management, and
+  // per-campaign autodial rules. Template downloads are plain GET
+  // endpoints that return a file with Content-Disposition: attachment
+  // — the component just links straight to these URLs rather than
+  // routing through this fetch wrapper, so the browser handles the
+  // download natively.
+  uploadLeads: (formData) => request("/admin/leads/upload", { method: "POST", body: formData }),
+  getDncList: () => request("/admin/dnc"),
+  uploadDnc: (formData) => request("/admin/dnc/upload", { method: "POST", body: formData }),
+  getAutodialRules: (campaignId) => request(`/admin/campaigns/${encodeURIComponent(campaignId)}/autodial-rules`),
+  updateAutodialRules: (campaignId, rules) =>
+    request(`/admin/campaigns/${encodeURIComponent(campaignId)}/autodial-rules`, {
+      method: "PUT",
+      body: JSON.stringify(rules),
+    }),
 };

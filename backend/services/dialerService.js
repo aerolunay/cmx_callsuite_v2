@@ -177,6 +177,13 @@ install — if it errors, check the real column name/existence first.
 ==================================================
 */
 async function getNextLead(campaignId) {
+  // Same terminal-status + DNC exclusions as the fallback query below
+  // — a hopper entry can go stale (still 'READY' in vicidial_hopper
+  // even after its lead was later disposed with a terminal outcome,
+  // or added to DNC by a separate process) since nothing currently
+  // guarantees the hopper is kept in sync with vicidial_list.status in
+  // real time. Defense-in-depth, not just relying on the fallback path
+  // alone.
   const [hopperRows] = await db.execute(
     `
       SELECT h.lead_id, h.hopper_id, l.phone_number, l.list_id,
@@ -187,6 +194,8 @@ async function getNextLead(campaignId) {
       FROM vicidial_hopper h
       JOIN vicidial_list l ON l.lead_id = h.lead_id
       WHERE h.campaign_id = ? AND h.status = 'READY'
+        AND l.status NOT IN ('DNC', 'NI', 'DC', 'PU', 'CALLBK')
+        AND NOT EXISTS (SELECT 1 FROM vicidial_dnc d WHERE d.phone_number = l.phone_number)
       ORDER BY h.priority ASC, h.hopper_id ASC
       LIMIT 1
     `,
@@ -206,6 +215,22 @@ async function getNextLead(campaignId) {
   // install's actual schema/config yet. Verify vicidial_lists really has
   // a campaign_id column matching this campaign before trusting this path
   // — if it doesn't, this fallback will return zero rows silently.
+  // REAL BUG FIX: this used to filter `status NOT IN ('DNC', 'DONE')` —
+  // but per DISPOSITION_TO_VICIDIAL_STATUS below, NO disposition ever
+  // actually writes the literal status 'DONE'. Only DO_NOT_CALL maps
+  // to 'DNC' (correctly excluded); CALL_ENDED ('PU'), NOT_INTERESTED
+  // ('NI'), WRONG_NUMBER ('DC'), and CALLBACK ('CALLBK') were ALL
+  // still fully eligible for re-dial despite being terminal outcomes —
+  // confirmed by reading the actual mapping, not assumed. Now excludes
+  // every real status code a terminal disposition can produce.
+  // CALLBACK ('CALLBK') is included here per explicit request — a
+  // scheduled callback is handled through its own separate mechanism,
+  // not by leaving the lead eligible for ordinary auto-dial re-pulls.
+  //
+  // Also excludes any phone_number present in asterisk.vicidial_dnc —
+  // the native, system-wide DNC list — so a manually-uploaded DNC
+  // entry blocks a lead here even if its own status was never
+  // otherwise marked DNC.
   const [listRows] = await db.execute(
     `
       SELECT l.lead_id, l.phone_number, l.list_id,
@@ -217,7 +242,8 @@ async function getNextLead(campaignId) {
       JOIN vicidial_lists vl ON vl.list_id = l.list_id
       WHERE vl.campaign_id = ?
         AND l.called_since_last_reset = 'N'
-        AND l.status NOT IN ('DNC', 'DONE')
+        AND l.status NOT IN ('DNC', 'NI', 'DC', 'PU', 'CALLBK')
+        AND NOT EXISTS (SELECT 1 FROM vicidial_dnc d WHERE d.phone_number = l.phone_number)
       ORDER BY l.lead_id ASC
       LIMIT 1
     `,
@@ -803,6 +829,16 @@ async function saveDisposition({
       `,
       [vicidialStatus, leadId]
     );
+
+    // Per explicit request — every call disposed as DO_NOT_CALL gets
+    // added to the native, system-wide asterisk.vicidial_dnc list
+    // immediately, not just marked DNC on this one lead row. That
+    // table's sole column is phone_number (confirmed via DESCRIBE,
+    // not assumed) — INSERT IGNORE since it's the table's own PK, so
+    // a number already on the list is a harmless no-op, not an error.
+    if (disposition === "DO_NOT_CALL") {
+      await connection.execute(`INSERT IGNORE INTO vicidial_dnc (phone_number) VALUES (?)`, [phoneNumber]);
+    }
 
     await connection.commit();
   } catch (err) {
