@@ -429,6 +429,7 @@ export default function DialerPage() {
   useEffect(() => {
     const isAutoDialCampaign = campaign?.dial_method === "RATIO";
     if (!isAutoDialCampaign) return;
+    if (campaign?.campaign_type === "BLENDED") return; // Blended campaigns never have leads by design
     if (agentStatus?.status !== "READY") return;
     if (call) return;
     if (!hasLeads) return;
@@ -932,34 +933,58 @@ export default function DialerPage() {
           </div>
         )}
 
-            {agentStatus?.status === "READY" && !call && hasLeads && campaign?.dial_method !== "RATIO" && (
-              <div className="card">
-                <button
-                  className="primary"
-                  style={{ width: "auto", padding: "10px 24px" }}
-                  onClick={handleDialNext}
-                  disabled={busy}
-                >
-                  {busy ? "Dialing…" : "Dial Next Number"}
-                </button>
-              </div>
-            )}
+            {/* Blended campaigns (e.g. CMXBSMSC) never have leads by
+                design — they're inbound + Callback only, per explicit
+                confirmation. Excluding campaign_type === "BLENDED"
+                here so this whole area (button/badge/no-leads message)
+                stays hidden for them entirely, rather than showing a
+                technically-true-but-meaningless "No leads to dial"
+                message on a campaign that was never supposed to have
+                any. */}
+            {(() => {
+              const isBlendedCampaign = campaign?.campaign_type === "BLENDED";
+              return (
+                <>
+                  {agentStatus?.status === "READY" &&
+                    !call &&
+                    hasLeads &&
+                    !isBlendedCampaign &&
+                    campaign?.dial_method !== "RATIO" && (
+                      <div className="card">
+                        <button
+                          className="primary"
+                          style={{ width: "auto", padding: "10px 24px" }}
+                          onClick={handleDialNext}
+                          disabled={busy}
+                        >
+                          {busy ? "Dialing…" : "Dial Next Number"}
+                        </button>
+                      </div>
+                    )}
 
-            {agentStatus?.status === "READY" && !call && hasLeads && campaign?.dial_method === "RATIO" && (
-              <div className="card">
-                <span className="badge">{busy ? "Dialing…" : "Auto Dial Active"}</span>
-              </div>
-            )}
+                  {agentStatus?.status === "READY" &&
+                    !call &&
+                    hasLeads &&
+                    !isBlendedCampaign &&
+                    campaign?.dial_method === "RATIO" && (
+                      <div className="card">
+                        <span className="badge">{busy ? "Dialing…" : "Auto Dial Active"}</span>
+                      </div>
+                    )}
 
-            {/* Shown once the lead pool is confirmed exhausted (a real
-                404 from /dialer/next-lead, not a transient error) —
-                without this, the button/badge above would just vanish
-                with no explanation once hasLeads flips to false. */}
-            {agentStatus?.status === "READY" && !call && !hasLeads && (
-              <div className="card">
-                <span className="badge">No leads to dial — the lead list for this campaign is complete.</span>
-              </div>
-            )}
+                  {/* Shown once the lead pool is confirmed exhausted (a
+                      real 404 from /dialer/next-lead, not a transient
+                      error) — without this, the button/badge above
+                      would just vanish with no explanation once
+                      hasLeads flips to false. */}
+                  {agentStatus?.status === "READY" && !call && !hasLeads && !isBlendedCampaign && (
+                    <div className="card">
+                      <span className="badge">No leads to dial — the lead list for this campaign is complete.</span>
+                    </div>
+                  )}
+                </>
+              );
+            })()}
 
             {/* Mobile-only placement: contact details right after the
                 dial button, matching the previous single-column order.
