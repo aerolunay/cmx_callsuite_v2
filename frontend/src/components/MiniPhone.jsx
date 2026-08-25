@@ -152,6 +152,22 @@ export function MiniPhone({
   const [transferBusy, setTransferBusy] = useState(false);
   const [transferError, setTransferError] = useState("");
 
+  // REAL BUG FIX, per explicit request: addError/transferError never
+  // got cleared once set — confirmed live, a failed (or even a
+  // successful-but-misreported, see conferenceService.js's own fix)
+  // Conference/Transfer attempt left its error message showing
+  // indefinitely, even once the agent moved on to a brand new call
+  // entirely. hasActiveCall transitions false->true exactly when a
+  // new call actually starts, so clearing both here on that
+  // transition means old messages never bleed into a new, unrelated
+  // call.
+  useEffect(() => {
+    if (hasActiveCall) {
+      setAddError("");
+      setTransferError("");
+    }
+  }, [hasActiveCall]);
+
   useEffect(() => {
     if (
       phone.callState === phone.CALL_STATES.INCOMING &&

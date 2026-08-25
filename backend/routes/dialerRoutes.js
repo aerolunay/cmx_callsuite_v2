@@ -119,11 +119,11 @@ pass rather than guessed at.
 function resolveActiveRoom(appUserId) {
   const outboundCall = dialerService.getRawActiveCallForAgent(appUserId);
   if (outboundCall) {
-    return { room: outboundCall.room, agentChannel: outboundCall.agentChannel };
+    return { room: outboundCall.room, agentChannel: outboundCall.agentChannel, customerChannel: outboundCall.customerChannel };
   }
   const inboundCall = inboundCallService.getInboundCallForAgent(appUserId);
   if (inboundCall) {
-    return { room: inboundCall.room, agentChannel: inboundCall.agentChannel };
+    return { room: inboundCall.room, agentChannel: inboundCall.agentChannel, customerChannel: inboundCall.customerChannel };
   }
   return null;
 }
@@ -140,11 +140,13 @@ router.post("/dialer/conference-add", requireAuth, async (req, res) => {
       return res.status(409).json({ success: false, message: "You're not currently on a call." });
     }
 
+    const excludeChannels = [active.agentChannel, active.customerChannel].filter(Boolean);
     const result = await conferenceService.addParticipant(
       active.room,
       target,
       Boolean(isExtension),
-      "Conference"
+      "Conference",
+      excludeChannels
     );
 
     if (!result.success) {
@@ -174,11 +176,13 @@ router.post("/dialer/transfer-blind", requireAuth, async (req, res) => {
       return res.status(409).json({ success: false, message: "You're not currently on a call." });
     }
 
+    const excludeChannels = [active.agentChannel, active.customerChannel].filter(Boolean);
     const result = await conferenceService.addParticipant(
       active.room,
       target,
       Boolean(isExtension),
-      "Transfer"
+      "Transfer",
+      excludeChannels
     );
 
     if (!result.success) {
