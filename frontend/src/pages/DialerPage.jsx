@@ -499,7 +499,7 @@ export default function DialerPage() {
   // inbound-sourced Callback rows, which have no real lead either).
   async function handleManualDial(phoneNumber) {
     if (agentStatus?.status !== "READY") {
-      setError("You must be on Ready to place a call.");
+      setError("You must be Ready to place a call.");
       return;
     }
     if (call || inboundCall) {
@@ -549,6 +549,14 @@ export default function DialerPage() {
 
   function handleCancelLineTwo() {
     return api.cancelLineTwo();
+  }
+
+  function handleSwitchLine(line) {
+    return api.switchLine(line);
+  }
+
+  function handleGetLineTwoStatus() {
+    return api.getLineTwoStatus();
   }
 
   async function handleToggleHold() {
@@ -839,6 +847,8 @@ export default function DialerPage() {
               onStartLineTwo={handleStartLineTwo}
               onCompleteLineTwo={handleCompleteLineTwo}
               onCancelLineTwo={handleCancelLineTwo}
+              onSwitchLine={handleSwitchLine}
+              onGetLineTwoStatus={handleGetLineTwoStatus}
             />
 
         {inboundCall && (
