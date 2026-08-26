@@ -138,6 +138,8 @@ export function MiniPhone({
   onCancelLineTwo,
   onSwitchLine,
   onGetLineTwoStatus,
+  onHoldLineTwo,
+  onUnholdLineTwo,
 }) {
   const phone = useJsSipPhone();
   const autoAnsweredCallRef = useRef(null); // guards against re-answering the same ring on every re-render
@@ -145,24 +147,34 @@ export function MiniPhone({
   const [dialNumber, setDialNumber] = useState("");
   const [isMuted, setIsMuted] = useState(false);
 
-  // REBUILT — per explicit request, a real 3CX-style Line 1/Line 2
-  // toggle. Line 2 must be genuinely STARTED (dialing has begun)
-  // before it can be switched to at all — before that, there's just
-  // one line. Once started, the agent can freely toggle which line
-  // their own audio is on (activeLine), and can Transfer/Conference
-  // at ANY point — while Line 2 is still ringing (cold) or after
-  // it's answered and they've talked privately first (warm); both
-  // are the exact same action, just called at a different moment.
+  // REBUILT (again) — per explicit request, now a genuine two-panel
+  // phone widget matching a real 3CX-style two-line layout, not just
+  // a supplementary section below the main dial pad. Hold and Switch
+  // are now two SEPARATE agent actions (matching the described real
+  // workflow: hold Line 1, THEN switch to Line 2, THEN dial) —
+  // previously switching also silently held/unheld things itself.
   //
-  // lineTwoStatus mirrors the backend's own state: null (no Line 2 at
-  // all) | { active, status: "ringing"|"connected"|"failed",
-  // failureReason }. Polled periodically WHILE ringing — nothing else
-  // currently pushes this to the client in real time, and the agent
-  // needs to know if Line 2 goes unanswered so they can retry.
+  // viewingLine (LOCAL UI state, 1 or 2) tracks which PANEL is
+  // currently shown — DISTINCT from activeLine (the backend's own
+  // truth of which room the agent's actual audio is routed to).
+  // These two only diverge in one specific case: Line 2 hasn't been
+  // dialed yet, so the agent can be VIEWING its empty "enter a
+  // number" panel while their audio is still, correctly, on Line 1 —
+  // nothing backend-side to do until they actually dial. The moment
+  // Line 2 exists, switching tabs always means a real backend switch,
+  // and the two stay in sync.
+  //
+  // lineTwoStatus mirrors the backend's own state: null (Line 2 never
+  // started) | { active, status: "ringing"|"connected"|"failed",
+  // failureReason, activeLine, line1OnHold, line2OnHold,
+  // line2HasConnected }. Refreshed after every Line 2 action (not just
+  // polled) so the reciprocal hold-based tab enable/disable logic
+  // always reflects the real current state.
   const [targetInput, setTargetInput] = useState("");
   const [targetError, setTargetError] = useState("");
   const [lineTwoStatus, setLineTwoStatus] = useState(null);
   const [activeLine, setActiveLine] = useState(1);
+  const [viewingLine, setViewingLine] = useState(1);
   const [lineTwoBusy, setLineTwoBusy] = useState(false);
 
   const [showInternalTransferModal, setShowInternalTransferModal] = useState(false);
@@ -203,14 +215,25 @@ export function MiniPhone({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lineTwoStatus?.active, lineTwoStatus?.status]);
 
+  async function refreshLineTwoStatus() {
+    try {
+      const data = await onGetLineTwoStatus();
+      setLineTwoStatus(data);
+      setActiveLine(data.activeLine || 1);
+      return data;
+    } catch {
+      return null;
+    }
+  }
+
   async function handleStartLineTwo() {
     if (!targetInput.trim()) return;
     setTargetError("");
     setLineTwoBusy(true);
     try {
       await onStartLineTwo(targetInput.trim(), false);
-      setLineTwoStatus({ active: true, status: "ringing" });
-      setActiveLine(2);
+      await refreshLineTwoStatus();
+      setViewingLine(2);
       setTargetInput("");
     } catch (err) {
       setTargetError(err.message);
@@ -224,8 +247,8 @@ export function MiniPhone({
     setLineTwoBusy(true);
     try {
       await onStartLineTwo(extension, true);
-      setLineTwoStatus({ active: true, status: "ringing" });
-      setActiveLine(2);
+      await refreshLineTwoStatus();
+      setViewingLine(2);
       setShowInternalTransferModal(false);
     } catch (err) {
       setTargetError(err.message);
@@ -242,6 +265,7 @@ export function MiniPhone({
       await onCompleteLineTwo(action);
       setLineTwoStatus(null);
       setActiveLine(1);
+      setViewingLine(1);
     } catch (err) {
       if (err.reason === "customer_disconnected") {
         // The original customer already hung up while on hold —
@@ -252,6 +276,7 @@ export function MiniPhone({
         // surface what happened.
         setLineTwoStatus(null);
         setActiveLine(1);
+        setViewingLine(1);
         setTargetError(err.message);
       } else {
         setTargetError(err.message);
@@ -268,6 +293,7 @@ export function MiniPhone({
       await onCancelLineTwo();
       setLineTwoStatus(null);
       setActiveLine(1);
+      setViewingLine(1);
     } catch (err) {
       setTargetError(err.message);
     } finally {
@@ -275,19 +301,92 @@ export function MiniPhone({
     }
   }
 
-  async function handleSwitchLineClick(line) {
-    if (line === activeLine) return;
+  // Clicking a tab is either a pure local view change (Line 2 hasn't
+  // been dialed yet — nothing for the backend to do) or a real
+  // backend switch (Line 2 already exists, audio needs to actually
+  // move). See the state comment above for why these two cases exist.
+  async function handleLine1TabClick() {
+    if (line1TabDisabled) return;
+    if (!lineTwoStatus?.active || activeLine === 1) {
+      setViewingLine(1);
+      return;
+    }
     setTargetError("");
     setLineTwoBusy(true);
     try {
-      await onSwitchLine(line);
-      setActiveLine(line);
+      await onSwitchLine(1);
+      setActiveLine(1);
+      setViewingLine(1);
     } catch (err) {
       setTargetError(err.message);
     } finally {
       setLineTwoBusy(false);
     }
   }
+
+  async function handleLine2TabClick() {
+    if (line2TabDisabled) return;
+    if (!lineTwoStatus?.active || activeLine === 2) {
+      setViewingLine(2);
+      return;
+    }
+    setTargetError("");
+    setLineTwoBusy(true);
+    try {
+      await onSwitchLine(2);
+      setActiveLine(2);
+      setViewingLine(2);
+    } catch (err) {
+      setTargetError(err.message);
+    } finally {
+      setLineTwoBusy(false);
+    }
+  }
+
+  async function handleHoldLineTwoClick() {
+    setTargetError("");
+    setLineTwoBusy(true);
+    try {
+      await onHoldLineTwo();
+      await refreshLineTwoStatus();
+    } catch (err) {
+      setTargetError(err.message);
+    } finally {
+      setLineTwoBusy(false);
+    }
+  }
+
+  async function handleUnholdLineTwoClick() {
+    setTargetError("");
+    setLineTwoBusy(true);
+    try {
+      await onUnholdLineTwo();
+      await refreshLineTwoStatus();
+    } catch (err) {
+      setTargetError(err.message);
+    } finally {
+      setLineTwoBusy(false);
+    }
+  }
+
+  function handleHangUpLineTwoClick() {
+    // "Hang Up" on Line 2's OWN panel means "I'm done with Line 2
+    // specifically" — disconnect just that party and return to
+    // Line 1, NOT end the agent's entire call. That's exactly what
+    // Cancel already does.
+    handleCancelLineTwoClick();
+  }
+
+  // Reciprocal enable/disable, per explicit request: to switch TO a
+  // line, the line you're currently on must be held first (unless
+  // Line 2 hasn't connected to anyone yet, in which case there's
+  // nothing live to require holding).
+  const line1TabDisabled =
+    viewingLine === 1 ||
+    lineTwoBusy ||
+    (activeLine === 2 && lineTwoStatus?.line2HasConnected && !lineTwoStatus?.line2OnHold);
+
+  const line2TabDisabled = viewingLine === 2 || lineTwoBusy || (activeLine === 1 && !onHold);
 
   // REAL BUG FIX, per explicit request: this error never got cleared
   // once set — confirmed live, a failed (or even a
@@ -331,6 +430,7 @@ export function MiniPhone({
       setTargetError("");
       setLineTwoStatus(null);
       setActiveLine(1);
+      setViewingLine(1);
     }
   }, [phone.callState]);
 
@@ -380,191 +480,244 @@ export function MiniPhone({
         {statusLabel(phone, agentStatus)}
       </div>
 
-      <input
-        type="tel"
-        className="phone-display-input"
-        placeholder="Enter a number"
-        value={dialNumber}
-        onChange={handleDialNumberChange}
-        disabled={!isIdle}
-      />
-
-      <div className="phone-actions">
+      {/* Line 1 / Line 2 tabs — ALWAYS visible, per explicit request,
+          not just once Line 2 has been dialed. Line 2 starts disabled
+          and only enables once Line 1 is held; switching back
+          requires the SAME of Line 2 once it's actually connected to
+          someone — a real reciprocal two-line phone, not just a
+          supplementary section. */}
+      <div className="phone-line-tabs">
         <button
           type="button"
-          className="phone-btn phone-btn-call"
-          onClick={isIncoming ? phone.answer : handleCall}
-          disabled={isIncoming ? false : !canDial || !dialNumber.trim()}
-          title={isIncoming ? "Answer" : "Call"}
+          className={viewingLine === 1 ? "phone-line-tab phone-line-tab-active" : "phone-line-tab"}
+          onClick={handleLine1TabClick}
+          disabled={line1TabDisabled}
         >
-          {isIncoming ? "Answer" : "Call"}
+          Line 1
         </button>
         <button
           type="button"
-          className="phone-btn phone-btn-mute"
-          onClick={handleToggleMute}
-          disabled={!isActive}
-          title={isMuted ? "Unmute" : "Mute"}
+          className={viewingLine === 2 ? "phone-line-tab phone-line-tab-active" : "phone-line-tab"}
+          onClick={handleLine2TabClick}
+          disabled={line2TabDisabled}
         >
-          {isMuted ? "Unmute" : "Mute"}
-        </button>
-        <button
-          type="button"
-          className="phone-btn phone-btn-mute"
-          onClick={onToggleHold}
-          disabled={!canHold}
-          title={onHold ? "Unhold" : "Hold"}
-        >
-          {onHold ? "Unhold" : "Hold"}
-        </button>
-        <button
-          type="button"
-          className="phone-btn phone-btn-end"
-          onClick={handleHangUpClick}
-          // Hang Up is disabled while a Line 2 action is actually in
-          // flight (starting, completing, or canceling) — re-enabled
-          // the instant it resolves, whether success or failure.
-          disabled={(!isIncoming && !isActive) || lineTwoBusy}
-          title={
-            lineTwoBusy
-              ? "Please wait for the Line 2 action to finish"
-              : isIncoming
-                ? "Decline"
-                : "Hang Up"
-          }
-        >
-          {isIncoming ? "Decline" : "Hang Up"}
+          Line 2{lineTwoStatus?.status === "ringing" ? " (ringing…)" : ""}
         </button>
       </div>
 
-      {!canDial && isIdle && (
-        <p className="phone-hint">
-          {!phone.registered
-            ? "Softphone must be registered before dialing."
-            : hasActiveCall
-              ? "You're already on a call."
-              : "You must be Ready to place a call."}
-        </p>
-      )}
-
-      {/* LINE 2 — real attended transfer, per explicit request. While
-          not active: dial a target privately (Line 1 goes on hold,
-          hears nothing) via the number field or the Internal Transfer
-          picker. Once dialing begins — NOT gated on an actual answer,
-          per explicit request — Line 1/Line 2 toggle tabs appear
-          alongside Transfer (complete the handoff, hang up),
-          Conference (bring everyone together, stay on), and Cancel
-          (hang up Line 2, go back to Line 1 only). Cold transfer =
-          clicking Transfer while still ringing; warm = waiting for an
-          answer and talking privately first — literally the same
-          action, just called at a different moment. */}
-      {!lineTwoStatus?.active ? (
+      {viewingLine === 1 ? (
         <>
-          <div className="phone-extra-row">
-            <input
-              type="text"
-              placeholder="Phone number"
-              value={targetInput}
-              onChange={(e) => setTargetInput(e.target.value)}
-              disabled={!isActive || lineTwoBusy}
-            />
+          <input
+            type="tel"
+            className="phone-display-input"
+            placeholder="Enter a number"
+            value={dialNumber}
+            onChange={handleDialNumberChange}
+            disabled={!isIdle}
+          />
+
+          <div className="phone-actions">
             <button
               type="button"
-              className="button-secondary"
-              onClick={handleStartLineTwo}
-              disabled={!isActive || lineTwoBusy || !targetInput.trim()}
+              className="phone-btn phone-btn-call"
+              onClick={isIncoming ? phone.answer : handleCall}
+              disabled={isIncoming ? false : !canDial || !dialNumber.trim()}
+              title={isIncoming ? "Answer" : "Call"}
             >
-              {lineTwoBusy ? "Calling…" : "Call Line 2"}
+              {isIncoming ? "Answer" : "Call"}
+            </button>
+            <button
+              type="button"
+              className="phone-btn phone-btn-mute"
+              onClick={handleToggleMute}
+              disabled={!isActive}
+              title={isMuted ? "Unmute" : "Mute"}
+            >
+              {isMuted ? "Unmute" : "Mute"}
+            </button>
+            <button
+              type="button"
+              className="phone-btn phone-btn-mute"
+              onClick={onToggleHold}
+              disabled={!canHold}
+              title={onHold ? "Unhold" : "Hold"}
+            >
+              {onHold ? "Unhold" : "Hold"}
+            </button>
+            <button
+              type="button"
+              className="phone-btn phone-btn-end"
+              onClick={handleHangUpClick}
+              // Hang Up is disabled while a Line 2 action is actually
+              // in flight — re-enabled the instant it resolves.
+              disabled={(!isIncoming && !isActive) || lineTwoBusy}
+              title={
+                lineTwoBusy
+                  ? "Please wait for the Line 2 action to finish"
+                  : isIncoming
+                    ? "Decline"
+                    : "Hang Up"
+              }
+            >
+              {isIncoming ? "Decline" : "Hang Up"}
             </button>
           </div>
-          {targetError && <div className="error phone-extra-error">{targetError}</div>}
 
-          {/* Separate from the number field entirely, per explicit
-              request — opens a picker to choose an agent for Line 2. */}
+          {!canDial && isIdle && (
+            <p className="phone-hint">
+              {!phone.registered
+                ? "Softphone must be registered before dialing."
+                : hasActiveCall
+                  ? "You're already on a call."
+                  : "You must be Ready to place a call."}
+            </p>
+          )}
+
+          {/* Per explicit request — Internal Transfer lives only on
+              Line 1's panel, disabled once Line 2 already has a live
+              call (can't start a second Line 2 while one exists). */}
           <button
             type="button"
             className="button-secondary"
-            style={{ marginTop: 8 }}
+            style={{ marginTop: 8, width: "100%" }}
             onClick={() => setShowInternalTransferModal(true)}
-            disabled={!isActive || lineTwoBusy || !campaignId}
+            disabled={!isActive || lineTwoBusy || !campaignId || Boolean(lineTwoStatus?.active)}
           >
             Internal Transfer
           </button>
+
+          {targetError && <div className="error phone-extra-error">{targetError}</div>}
+        </>
+      ) : !lineTwoStatus?.active ? (
+        // Line 2 tab selected, but nothing dialed yet — an empty
+        // panel matching Line 1's own layout. Purely a local view
+        // change to get here; nothing backend-side happens until Call
+        // is actually clicked.
+        <>
+          <input
+            type="tel"
+            className="phone-display-input"
+            placeholder="Enter a number"
+            value={targetInput}
+            onChange={(e) => setTargetInput(e.target.value.replace(/\D/g, ""))}
+            disabled={lineTwoBusy}
+          />
+          <div className="phone-actions">
+            <button
+              type="button"
+              className="phone-btn phone-btn-call"
+              onClick={handleStartLineTwo}
+              disabled={lineTwoBusy || !targetInput.trim()}
+            >
+              {lineTwoBusy ? "Calling…" : "Call"}
+            </button>
+            <button type="button" className="phone-btn phone-btn-mute" disabled>
+              Mute
+            </button>
+            <button type="button" className="phone-btn phone-btn-mute" disabled>
+              Hold
+            </button>
+            <button type="button" className="phone-btn phone-btn-end" disabled>
+              Hang Up
+            </button>
+          </div>
+          {targetError && <div className="error phone-extra-error">{targetError}</div>}
         </>
       ) : lineTwoStatus.status === "failed" ? (
         // Per explicit request: if Line 2 doesn't pick up, the agent
         // must be able to try dialing again — reusing the same
-        // private room rather than starting completely over (Line 1
-        // stays held throughout).
-        <div className="phone-extra-row" style={{ flexWrap: "wrap" }}>
-          <span className="error phone-extra-error" style={{ width: "100%" }}>
-            Line 2 didn't answer.
-          </span>
+        // private room, Line 1 stays held throughout.
+        <>
+          <div className="error phone-extra-error">Line 2 didn't answer.</div>
           <input
-            type="text"
-            placeholder="Phone number"
+            type="tel"
+            className="phone-display-input"
+            placeholder="Enter a number"
             value={targetInput}
-            onChange={(e) => setTargetInput(e.target.value)}
+            onChange={(e) => setTargetInput(e.target.value.replace(/\D/g, ""))}
             disabled={lineTwoBusy}
           />
-          <button
-            type="button"
-            className="button-secondary"
-            onClick={handleStartLineTwo}
-            disabled={lineTwoBusy || !targetInput.trim()}
-          >
-            {lineTwoBusy ? "Calling…" : "Try Again"}
-          </button>
-          <button type="button" className="link" onClick={handleCancelLineTwoClick} disabled={lineTwoBusy}>
-            Give up — back to Line 1 only
-          </button>
-        </div>
-      ) : (
-        <>
-          {/* Real Line 1/Line 2 toggle, per explicit request — like a
-              traditional two-line phone. Disabled while a Line 2
-              action is in flight; switching to the line you're
-              already on is a no-op. */}
-          <div className="phone-line-tabs">
+          <div className="phone-actions">
             <button
               type="button"
-              className={activeLine === 1 ? "phone-line-tab phone-line-tab-active" : "phone-line-tab"}
-              onClick={() => handleSwitchLineClick(1)}
-              disabled={lineTwoBusy || activeLine === 1}
+              className="phone-btn phone-btn-call"
+              onClick={handleStartLineTwo}
+              disabled={lineTwoBusy || !targetInput.trim()}
             >
-              Line 1
+              {lineTwoBusy ? "Calling…" : "Try Again"}
+            </button>
+            <button type="button" className="phone-btn phone-btn-mute" disabled>
+              Mute
+            </button>
+            <button type="button" className="phone-btn phone-btn-mute" disabled>
+              Hold
             </button>
             <button
               type="button"
-              className={activeLine === 2 ? "phone-line-tab phone-line-tab-active" : "phone-line-tab"}
-              onClick={() => handleSwitchLineClick(2)}
-              disabled={lineTwoBusy || activeLine === 2}
+              className="phone-btn phone-btn-end"
+              onClick={handleCancelLineTwoClick}
+              disabled={lineTwoBusy}
             >
-              Line 2 {lineTwoStatus.status === "ringing" ? "(ringing…)" : ""}
+              Give Up
+            </button>
+          </div>
+        </>
+      ) : (
+        // Line 2 is ringing or connected. Mute/Hang Up reuse the same
+        // underlying JsSIP session state as Line 1 (isActive) — it's
+        // the agent's own single audio session throughout; only WHICH
+        // ASTERISK ROOM it's server-side-redirected to changes when
+        // switching lines, not the session itself. Hold is genuinely
+        // per-line (Line 2's own target), so it's gated on Line 2
+        // actually having connected to someone.
+        <>
+          <input type="tel" className="phone-display-input" value="" disabled placeholder="" />
+          <div className="phone-actions">
+            <button type="button" className="phone-btn phone-btn-call" disabled>
+              {lineTwoStatus.status === "ringing" ? "Ringing…" : "Connected"}
+            </button>
+            <button
+              type="button"
+              className="phone-btn phone-btn-mute"
+              onClick={handleToggleMute}
+              disabled={!isActive}
+              title={isMuted ? "Unmute" : "Mute"}
+            >
+              {isMuted ? "Unmute" : "Mute"}
+            </button>
+            <button
+              type="button"
+              className="phone-btn phone-btn-mute"
+              onClick={lineTwoStatus.line2OnHold ? handleUnholdLineTwoClick : handleHoldLineTwoClick}
+              disabled={!lineTwoStatus.line2HasConnected || lineTwoBusy}
+              title={lineTwoStatus.line2OnHold ? "Unhold Line 2" : "Hold Line 2"}
+            >
+              {lineTwoStatus.line2OnHold ? "Unhold" : "Hold"}
+            </button>
+            <button
+              type="button"
+              className="phone-btn phone-btn-end"
+              onClick={handleHangUpLineTwoClick}
+              disabled={lineTwoBusy}
+              title="Hang up Line 2, return to Line 1"
+            >
+              Hang Up
             </button>
           </div>
 
-          <div className="phone-extra-row" style={{ flexWrap: "wrap" }}>
-            <button
-              type="button"
-              className="button-secondary"
-              onClick={() => handleCompleteLineTwoClick("transfer")}
-              disabled={lineTwoBusy}
-            >
-              Transfer
-            </button>
-            <button
-              type="button"
-              className="button-secondary"
-              onClick={() => handleCompleteLineTwoClick("conference")}
-              disabled={lineTwoBusy}
-            >
-              Conference
-            </button>
-            <button type="button" className="link" onClick={handleCancelLineTwoClick} disabled={lineTwoBusy}>
-              Cancel — back to Line 1
-            </button>
-          </div>
+          {/* Replaces Internal Transfer in this context, per explicit
+              request — the merge action, agent decides afterward
+              (via the normal Hang Up) whether to leave or stay on. */}
+          <button
+            type="button"
+            className="button-secondary"
+            style={{ marginTop: 8, width: "100%" }}
+            onClick={() => handleCompleteLineTwoClick("conference")}
+            disabled={lineTwoBusy}
+          >
+            Connect Line 1
+          </button>
+
           {targetError && <div className="error phone-extra-error">{targetError}</div>}
         </>
       )}

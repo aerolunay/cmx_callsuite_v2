@@ -381,6 +381,34 @@ router.get("/dialer/line-two/status", requireAuth, async (req, res) => {
   }
 });
 
+router.post("/dialer/line-two/hold", requireAuth, async (req, res) => {
+  try {
+    const active = resolveActiveRoom(req.session.agent.appUserId);
+    if (!active) {
+      return res.status(409).json({ success: false, message: "You're not currently on a call." });
+    }
+    await attendedTransferService.holdLineTwo(active);
+    return res.json({ success: true });
+  } catch (error) {
+    console.error("POST /api/dialer/line-two/hold failed:", error);
+    return res.status(500).json({ success: false, message: error.message || "Failed to hold Line 2." });
+  }
+});
+
+router.post("/dialer/line-two/unhold", requireAuth, async (req, res) => {
+  try {
+    const active = resolveActiveRoom(req.session.agent.appUserId);
+    if (!active) {
+      return res.status(409).json({ success: false, message: "You're not currently on a call." });
+    }
+    await attendedTransferService.unholdLineTwo(active);
+    return res.json({ success: true });
+  } catch (error) {
+    console.error("POST /api/dialer/line-two/unhold failed:", error);
+    return res.status(500).json({ success: false, message: error.message || "Failed to unhold Line 2." });
+  }
+});
+
 /*
 ==================================================
 CAMPAIGN LIST

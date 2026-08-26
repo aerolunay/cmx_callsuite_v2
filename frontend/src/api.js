@@ -75,6 +75,8 @@ export const api = {
   cancelLineTwo: () => request("/dialer/line-two/cancel", { method: "POST" }),
   switchLine: (line) => request("/dialer/line-two/switch", { method: "POST", body: JSON.stringify({ line }) }),
   getLineTwoStatus: () => request("/dialer/line-two/status"),
+  holdLineTwo: () => request("/dialer/line-two/hold", { method: "POST" }),
+  unholdLineTwo: () => request("/dialer/line-two/unhold", { method: "POST" }),
   setStatus: (status, campaignId) =>
     request("/dialer/status", { method: "POST", body: JSON.stringify({ status, campaignId }) }),
   hasLeads: (campaignId) => request(`/dialer/has-leads?campaignId=${encodeURIComponent(campaignId)}`),

@@ -559,6 +559,14 @@ export default function DialerPage() {
     return api.getLineTwoStatus();
   }
 
+  function handleHoldLineTwo() {
+    return api.holdLineTwo();
+  }
+
+  function handleUnholdLineTwo() {
+    return api.unholdLineTwo();
+  }
+
   async function handleToggleHold() {
     if (!call) return;
     setError("");
@@ -849,6 +857,8 @@ export default function DialerPage() {
               onCancelLineTwo={handleCancelLineTwo}
               onSwitchLine={handleSwitchLine}
               onGetLineTwoStatus={handleGetLineTwoStatus}
+              onHoldLineTwo={handleHoldLineTwo}
+              onUnholdLineTwo={handleUnholdLineTwo}
             />
 
         {inboundCall && (

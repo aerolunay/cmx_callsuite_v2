@@ -151,13 +151,24 @@ async function startLineTwo(active, target, isExtension) {
     // triggers the event it needs to suppress, not after.
     rawCall.lineTwo = { room: room2, roomSuffix: room2Suffix, targetChannel: null, status: "starting", settled: null };
 
+    // Only hold here if the agent hasn't already done so manually
+    // (per the new, separate Hold-then-Switch workflow). Tracked
+    // separately so a rollback below only ever undoes a hold THIS
+    // call itself performed — never the agent's own prior manual
+    // hold action.
+    const weHeldItOurselves = !rawCall.onHold;
+
     try {
-      await holdOriginalCustomer(callId, isInbound);
+      if (weHeldItOurselves) {
+        await holdOriginalCustomer(callId, isInbound);
+      }
       await ami.redirectChannel(agentChannel, { context: "trunkinbound", exten: `2${room2}` });
     } catch (err) {
       rawCall.lineTwo = null; // roll back the marker — setup itself failed, guards should NOT stay armed
       dialerService.releaseRoomSuffix(room2Suffix);
-      await unholdOriginalCustomer(callId, isInbound).catch(() => {});
+      if (weHeldItOurselves) {
+        await unholdOriginalCustomer(callId, isInbound).catch(() => {});
+      }
       throw err;
     }
 
@@ -206,18 +217,35 @@ async function startLineTwo(active, target, isExtension) {
 function getLineTwoStatus(active) {
   const { rawCall } = active;
   if (!rawCall.lineTwo) {
-    return { active: false, activeLine: rawCall.activeLine || 1 };
+    return { active: false, activeLine: rawCall.activeLine || 1, line1OnHold: Boolean(rawCall.onHold) };
   }
   return {
     active: true,
     activeLine: rawCall.activeLine,
     status: rawCall.lineTwo.status,
     failureReason: rawCall.lineTwo.failureReason,
+    line1OnHold: Boolean(rawCall.onHold),
+    line2OnHold: Boolean(rawCall.lineTwo.onHold),
+    line2HasConnected: Boolean(rawCall.lineTwo.targetChannel),
   };
 }
 
+/*
+==================================================
+switchToLineOne / switchToLineTwo — UPDATED, per explicit request
+==================================================
+Hold and Switch are now two separate agent actions (matching a real
+two-line phone): hold the line you're leaving FIRST (via
+holdLineOne/holdLineTwo below, or the pre-existing plain Hold for
+Line 1), THEN switch. These two functions now ONLY move the agent's
+own audio between rooms — they no longer also hold/unhold anything
+themselves. Each checks its own precondition (the OTHER line's party
+must already be on hold) rather than silently doing it as a side
+effect, and rejects clearly if that hasn't happened yet.
+==================================================
+*/
 async function switchToLineOne(active) {
-  const { room: room1, agentChannel, callId, isInbound, rawCall } = active;
+  const { room: room1, agentChannel, rawCall } = active;
   const lineTwo = rawCall.lineTwo;
   if (!lineTwo) {
     throw new Error("Line 2 is not active for this call.");
@@ -225,22 +253,20 @@ async function switchToLineOne(active) {
   if (rawCall.activeLine === 1) {
     return { success: true };
   }
-
-  if (lineTwo.targetChannel) {
-    await holdChannel(lineTwo.targetChannel).catch((err) => {
-      console.error("[attendedTransferService] Failed to hold Line 2 target when switching to Line 1:", err.message);
-    });
+  // Only enforce this once Line 2 has actually connected to someone —
+  // if it's still just ringing, there's nothing live to require
+  // holding first.
+  if (lineTwo.targetChannel && !lineTwo.onHold) {
+    throw new Error("Put Line 2 on hold before switching to Line 1.");
   }
 
   await ami.redirectChannel(agentChannel, { context: "trunkinbound", exten: `2${room1}` });
-  await unholdOriginalCustomer(callId, isInbound);
-
   rawCall.activeLine = 1;
   return { success: true };
 }
 
 async function switchToLineTwo(active) {
-  const { agentChannel, callId, isInbound, rawCall } = active;
+  const { agentChannel, rawCall } = active;
   const lineTwo = rawCall.lineTwo;
   if (!lineTwo) {
     throw new Error("Line 2 is not active for this call.");
@@ -248,17 +274,56 @@ async function switchToLineTwo(active) {
   if (rawCall.activeLine === 2) {
     return { success: true };
   }
-
-  await holdOriginalCustomer(callId, isInbound);
-  await ami.redirectChannel(agentChannel, { context: "trunkinbound", exten: `2${lineTwo.room}` });
-
-  if (lineTwo.targetChannel) {
-    await unholdChannelIntoRoom(lineTwo.targetChannel, lineTwo.room).catch((err) => {
-      console.error("[attendedTransferService] Failed to unhold Line 2 target when switching to Line 2:", err.message);
-    });
+  if (!rawCall.onHold) {
+    throw new Error("Put Line 1 on hold before switching to Line 2.");
   }
 
+  await ami.redirectChannel(agentChannel, { context: "trunkinbound", exten: `2${lineTwo.room}` });
   rawCall.activeLine = 2;
+  return { success: true };
+}
+
+/*
+==================================================
+holdLineTwo / unholdLineTwo — NEW, per explicit request
+==================================================
+Standalone hold for Line 2's party, independent of switching — the
+agent can hold Line 2 while staying put, exactly mirroring the
+pre-existing plain Hold for Line 1. Same "arm the flag before
+redirecting" pattern already proven throughout this file and in
+holdInboundCall's own onHold flag.
+==================================================
+*/
+async function holdLineTwo(active) {
+  const { rawCall } = active;
+  const lineTwo = rawCall.lineTwo;
+  if (!lineTwo) {
+    throw new Error("Line 2 is not active for this call.");
+  }
+  if (!lineTwo.targetChannel) {
+    throw new Error("Can only hold Line 2 once it has connected.");
+  }
+  if (lineTwo.onHold) {
+    throw new Error("Line 2 is already on hold.");
+  }
+
+  lineTwo.onHold = true;
+  await holdChannel(lineTwo.targetChannel);
+  return { success: true };
+}
+
+async function unholdLineTwo(active) {
+  const { rawCall } = active;
+  const lineTwo = rawCall.lineTwo;
+  if (!lineTwo) {
+    throw new Error("Line 2 is not active for this call.");
+  }
+  if (!lineTwo.onHold) {
+    throw new Error("Line 2 is not on hold.");
+  }
+
+  await unholdChannelIntoRoom(lineTwo.targetChannel, lineTwo.room);
+  lineTwo.onHold = false;
   return { success: true };
 }
 
@@ -267,6 +332,18 @@ async function completeLineTwo(active, action) {
   const lineTwo = rawCall.lineTwo;
   if (!lineTwo) {
     throw new Error("No Line 2 is currently active for this call.");
+  }
+
+  // If the agent had put Line 2 on hold before deciding to connect
+  // Line 1, the target is currently sitting in cmxhold — NOT
+  // physically in room2 — so merging Line 1's customer in right now
+  // would put them in a room the target isn't actually in. Bring
+  // them back first so all three genuinely end up together.
+  if (lineTwo.onHold && lineTwo.targetChannel) {
+    await unholdChannelIntoRoom(lineTwo.targetChannel, lineTwo.room).catch((err) => {
+      console.error("[attendedTransferService] Failed to unhold Line 2 target before completing:", err.message);
+    });
+    lineTwo.onHold = false;
   }
 
   try {
@@ -364,6 +441,8 @@ module.exports = {
   getLineTwoStatus,
   switchToLineOne,
   switchToLineTwo,
+  holdLineTwo,
+  unholdLineTwo,
   completeLineTwo,
   cancelLineTwo,
 };
