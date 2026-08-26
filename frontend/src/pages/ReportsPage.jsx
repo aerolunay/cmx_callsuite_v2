@@ -135,6 +135,8 @@ export default function ReportsPage() {
       { label: "Call Started", value: "call_started_at" },
       { label: "Call Ended", value: "call_ended_at" },
       { label: "Disposition", value: "disposition" },
+      { label: "Xfer/Conf", value: (row) => (row.xfer_conf === "Y" ? "Yes" : "No") },
+      { label: "Xfer/Conf Target", value: "xfer_conf_target" },
       { label: "Talk Time (s)", value: "talk_seconds" },
       { label: "Hold Time (s)", value: "hold_seconds" },
       { label: "ACW Time (s)", value: "acw_seconds" },
@@ -332,6 +334,7 @@ export default function ReportsPage() {
                     <th>Phone Number</th>
                     <th>Contact Name</th>
                     <th>Disposition</th>
+                    <th>Xfer/Conf</th>
                     <th>Talk</th>
                     <th>Hold</th>
                     <th>ACW</th>
@@ -348,6 +351,7 @@ export default function ReportsPage() {
                       <td>{c.phone_number || "—"}</td>
                       <td>{[c.first_name, c.last_name].filter(Boolean).join(" ") || "—"}</td>
                       <td>{c.disposition || "—"}</td>
+                      <td>{c.xfer_conf === "Y" ? `Yes — ${c.xfer_conf_target}` : "No"}</td>
                       <td>{fmtSeconds(c.talk_seconds)}</td>
                       <td>{fmtSeconds(c.hold_seconds)}</td>
                       <td>{fmtSeconds(c.acw_seconds)}</td>

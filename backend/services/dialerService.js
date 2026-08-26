@@ -395,6 +395,7 @@ function startCall({ appUserId, agentUser, agentExtension, lead, leadId, phoneNu
       extraParticipants: [],
       lineTwo: null, // see attendedTransferService.js
       activeLine: 1, // which room the agent's OWN channel currently sits in — 1 or 2
+      xferConfTarget: null, // set by attendedTransferService.js's completeLineTwo — the number/extension a Line 2 Xfer/Conf went to, read by saveDisposition below
     };
 
     activeCalls.set(callId, callState);
@@ -914,12 +915,13 @@ async function saveDisposition({
         INSERT INTO cmx_dialer.dialer_call_log
           (agent_user, campaign_id, lead_id, phone_number, first_name, last_name,
            room_number, call_id, call_type, call_started_at, call_ended_at, disposition,
-           comments, callback_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           comments, callback_at, xfer_conf, xfer_conf_target)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
         agentUser, campaignId, leadId, phoneNumber, firstName || null, lastName || null,
         room, callId, callType, startedAt, endedAt, disposition, comments.trim(), callbackAt || null,
+        call && call.xferConfTarget ? "Y" : "N", (call && call.xferConfTarget) || null,
       ]
     );
 
@@ -1007,7 +1009,9 @@ async function getCallLog(agentUser, campaignId, limit = 50) {
           last_name,
           phone_number,
           NULL AS callback_number,
-          disposition
+          disposition,
+          xfer_conf,
+          xfer_conf_target
         FROM cmx_dialer.dialer_call_log
         WHERE agent_user = ?
           AND campaign_id = ?
@@ -1026,7 +1030,9 @@ async function getCallLog(agentUser, campaignId, limit = 50) {
           last_name,
           caller_id_number AS phone_number,
           callback_number,
-          disposition
+          disposition,
+          xfer_conf,
+          xfer_conf_target
         FROM cmx_dialer.inbound_call_log
         WHERE agent_user = ?
           AND campaign_id = ?

@@ -12,6 +12,7 @@ export const DISPOSITIONS = [
   { value: "NOT_INTERESTED", label: "Not Interested" },
   { value: "DO_NOT_CALL", label: "Do Not Call (DNC)" },
   { value: "CALLBACK", label: "Callback Requested" },
+  { value: "XFER_CONF", label: "Transferred Call / Conference Call" },
 ];
 
 const LABEL_BY_VALUE = Object.fromEntries(DISPOSITIONS.map((d) => [d.value, d.label]));
@@ -41,6 +42,7 @@ export const INBOUND_DISPOSITIONS = [
   { value: "CALLER_HUNG_UP", label: "Caller Hung Up" },
   { value: "CALL_DISCONNECTED", label: "Call Disconnected" },
   { value: "GHOST_CALL", label: "Ghost Call" },
+  { value: "XFER_CONF", label: "Transferred Call / Conference Call" },
 ];
 
 /*
@@ -67,6 +69,7 @@ export const BSMSC_INBOUND_DISPOSITIONS = [
   { value: "INFO_PROVIDED", label: "Information Provided" },
   { value: "MISROUTED_CALL", label: "Misrouted Call" },
   { value: "GHOST_CALL", label: "Ghost Call" },
+  { value: "XFER_CONF", label: "Transferred Call / Conference Call" },
 ];
 
 /*

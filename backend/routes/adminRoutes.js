@@ -1539,12 +1539,13 @@ router.get(
           SELECT combined.call_id, combined.campaign_id, combined.agent_user, au.full_name AS agent_name,
                  combined.phone_number, combined.first_name, combined.last_name,
                  combined.call_started_at, combined.call_ended_at,
-                 combined.direction, combined.disposition, combined.comments, combined.wait_seconds
+                 combined.direction, combined.disposition, combined.comments, combined.wait_seconds,
+                 combined.xfer_conf, combined.xfer_conf_target
           FROM (
             SELECT
               d.call_id, d.campaign_id, d.agent_user, d.phone_number, d.first_name, d.last_name,
               d.call_started_at, d.call_ended_at, 'outbound' AS direction,
-              d.disposition, d.comments, NULL AS wait_seconds
+              d.disposition, d.comments, NULL AS wait_seconds, d.xfer_conf, d.xfer_conf_target
             FROM cmx_dialer.dialer_call_log d
 
             UNION ALL
@@ -1552,7 +1553,7 @@ router.get(
             SELECT
               i.call_id, i.campaign_id, i.agent_user, i.caller_id_number AS phone_number, i.first_name, i.last_name,
               i.call_started_at, i.call_ended_at, 'inbound' AS direction,
-              i.disposition, i.comments, i.wait_seconds
+              i.disposition, i.comments, i.wait_seconds, i.xfer_conf, i.xfer_conf_target
             FROM cmx_dialer.inbound_call_log i
           ) combined
           LEFT JOIN cmx_dialer.app_users au ON au.vicidial_user = combined.agent_user

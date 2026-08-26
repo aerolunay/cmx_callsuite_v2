@@ -76,6 +76,7 @@ export default function CallLogTable({ refreshKey, campaignId, onCallBack, canCa
               <th>Name</th>
               <th>Phone Number</th>
               <th>Disposition</th>
+              <th>Xfer/Conf</th>
               <th>Call ID</th>
             </tr>
           </thead>
@@ -102,6 +103,7 @@ export default function CallLogTable({ refreshKey, campaignId, onCallBack, canCa
                 </td>
                 <td>{row.phone_number}</td>
                 <td>{resolveDispositionLabel(row)}</td>
+                <td>{row.xfer_conf === "Y" ? `Yes — ${row.xfer_conf_target}` : "No"}</td>
                 <td className="call-id-cell" title={row.call_id || undefined}>
                   {row.call_id ? row.call_id.slice(0, 8) : `#${row.call_log_id}`}
                 </td>

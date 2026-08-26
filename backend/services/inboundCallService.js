@@ -221,6 +221,7 @@ async function allocateInboundRoom(did) {
     extraParticipants: [],
     lineTwo: null, // see attendedTransferService.js
     activeLine: 1, // which room the agent's OWN channel currently sits in — 1 or 2
+    xferConfTarget: null, // set by attendedTransferService.js's completeLineTwo — read by the inbound disposition route in dialerRoutes.js
   };
   inboundCalls.set(room, call);
 

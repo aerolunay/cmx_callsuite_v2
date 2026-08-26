@@ -1040,12 +1040,14 @@ router.post("/dialer/inbound-disposition", requireAuth, async (req, res) => {
       `
         INSERT INTO cmx_dialer.inbound_call_log
           (agent_user, campaign_id, call_id, caller_id_number, first_name, last_name, comments,
-           disposition, callback_at, callback_number, call_started_at, call_ended_at, wait_seconds)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           disposition, callback_at, callback_number, call_started_at, call_ended_at, wait_seconds,
+           xfer_conf, xfer_conf_target)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
         agentUser, inboundCampaignId, callId, callerIdNumber || null, firstName || null, lastName || null,
         comments.trim(), disposition, callbackAt || null, callbackNumber || null, startedAt, endedAt, waitSeconds,
+        current && current.xferConfTarget ? "Y" : "N", (current && current.xferConfTarget) || null,
       ]
     );
 

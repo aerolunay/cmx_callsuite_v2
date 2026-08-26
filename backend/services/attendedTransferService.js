@@ -185,6 +185,7 @@ async function startLineTwo(active, target, isExtension) {
     targetChannel: null,
     status: "ringing",
     settled: null,
+    target, // the number/extension dialed — needed by completeLineTwo for call-log tracking (see saveDisposition/inbound disposition route)
   };
   rawCall.lineTwo = lineTwoState;
   rawCall.activeLine = 2;
@@ -357,6 +358,13 @@ async function completeLineTwo(active, action) {
     rawCall.customerChannel = lineTwo.targetChannel;
     rawCall.onHold = false;
     rawCall.activeLine = 2;
+    // Per explicit request — track that this call involved a Line 2
+    // Xfer/Conf and who it went to, WITHOUT a separate disposition
+    // flow. Set directly on the call object (not lineTwo, which gets
+    // nulled below) so it survives until saveDisposition/the inbound
+    // disposition route reads it when the real call-log row is
+    // finally written.
+    rawCall.xferConfTarget = lineTwo.target;
     rawCall.lineTwo = null;
 
     if (isInbound) {
@@ -377,6 +385,9 @@ async function completeLineTwo(active, action) {
   rawCall.roomSuffix = lineTwo.roomSuffix;
   rawCall.onHold = false;
   rawCall.activeLine = 2;
+  // Same tracking as above — the normal (customer still present)
+  // success path.
+  rawCall.xferConfTarget = lineTwo.target;
   rawCall.lineTwo = null;
 
   if (isInbound) {
@@ -385,17 +396,19 @@ async function completeLineTwo(active, action) {
 
   releaseOriginalRoom(room1, isInbound);
 
-  if (action === "transfer") {
-    if (isInbound) {
-      await inboundCallService.endInboundCall(lineTwo.room).catch((err) => {
-        console.error("[attendedTransferService] endInboundCall failed after Line 2 transfer:", err.message);
-      });
-    } else {
-      await dialerService.endCall(callId).catch((err) => {
-        console.error("[attendedTransferService] endCall failed after Line 2 transfer:", err.message);
-      });
-    }
-  }
+  // REAL BUG FIX — closing a real gap before it could ever bite:
+  // this used to have a separate "transfer" branch that called
+  // endCall/endInboundCall DIRECTLY, bypassing the normal disposition
+  // flow entirely (that flow only ever fires from the regular Hang Up
+  // button — these two functions just hang up channels and mark the
+  // call ended, they never show a disposition form on their own).
+  // Since the UI now only ever sends action="conference" — Transfer
+  // and Conference are the same action from the agent's perspective,
+  // they just decide afterward via a normal Hang Up whether to leave
+  // or stay — that branch was already fully dormant. Removed outright
+  // rather than left as a landmine: no call should ever be able to
+  // end without going through the same disposition path every other
+  // call does.
 
   return { success: true };
 }
