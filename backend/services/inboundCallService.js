@@ -624,6 +624,12 @@ function registerInboundEventTracking() {
   ami.events.on("Hangup", (evt) => {
     const call = findByChannel(evt.channel);
     if (!call) return;
+    // Same reasoning as dialerService.js's own fix — defer entirely to
+    // attendedTransferService while Line 2 is active, rather than
+    // disrupting the agent's still-live private conversation the
+    // instant the original customer (or, in principle, the agent's own
+    // relocated channel) triggers a Hangup event here.
+    if (call.lineTwo) return;
     endInboundCall(call.room);
   });
 

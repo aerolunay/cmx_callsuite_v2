@@ -295,7 +295,17 @@ router.post("/dialer/line-two/complete", requireAuth, async (req, res) => {
       return res.status(409).json({ success: false, message: "You're not currently on a call." });
     }
 
-    await attendedTransferService.completeLineTwo(active, action);
+    const result = await attendedTransferService.completeLineTwo(active, action);
+
+    if (!result.success && result.reason === "customer_disconnected") {
+      return res.status(409).json({
+        success: false,
+        message:
+          "The original customer disconnected while Line 2 was in progress. You're still connected on Line 2 — you can keep talking or hang up normally.",
+        reason: "customer_disconnected",
+      });
+    }
+
     return res.json({ success: true });
   } catch (error) {
     console.error("POST /api/dialer/line-two/complete failed:", error);
@@ -310,7 +320,15 @@ router.post("/dialer/line-two/cancel", requireAuth, async (req, res) => {
       return res.status(409).json({ success: false, message: "You're not currently on a call." });
     }
 
-    await attendedTransferService.cancelLineTwo(active);
+    const result = await attendedTransferService.cancelLineTwo(active);
+
+    if (result.customerAlreadyGone) {
+      return res.json({
+        success: true,
+        message: "Line 2 was canceled. The original customer had already disconnected, so this call has ended.",
+      });
+    }
+
     return res.json({ success: true });
   } catch (error) {
     console.error("POST /api/dialer/line-two/cancel failed:", error);

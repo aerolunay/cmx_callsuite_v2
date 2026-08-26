@@ -158,7 +158,46 @@ async function completeLineTwo(active, action) {
     throw new Error("No Line 2 is currently active for this call.");
   }
 
-  await ami.redirectChannel(customerChannel, { context: "trunkinbound", exten: lineTwo.room });
+  // REAL BUG FIX, confirmed via a real test call: the customer hung
+  // up on their own while sitting on hold waiting for Line 2 — a
+  // completely plausible real-world scenario this code never
+  // accounted for. redirectChannel on an already-gone channel throws
+  // ("Channel does not exist"), which was an UNCAUGHT exception,
+  // producing a 500 and leaving the agent stuck: their own channel
+  // was still correctly in Line 2's room the whole time, but neither
+  // Transfer/Conference (this function) nor Cancel could complete
+  // cleanly afterward, since both assumed the customer would always
+  // still be there.
+  //
+  // Now: if the customer is confirmed gone, there's nothing left to
+  // bring together — clean up Line 2's target and room, and tell the
+  // caller plainly what happened, instead of throwing.
+  try {
+    await ami.redirectChannel(customerChannel, { context: "trunkinbound", exten: lineTwo.room });
+  } catch (err) {
+    console.error("[attendedTransferService] Customer channel gone when completing Line 2 (they likely hung up while on hold):", err.message);
+
+    // The customer is gone, but the agent's Line 2 conversation is
+    // still genuinely live — hanging it up too would be presumptuous
+    // (they may well want to keep talking to whoever's on Line 2).
+    // Instead, PROMOTE Line 2 into the primary tracked call: room2
+    // becomes the tracked room, the target becomes the tracked
+    // "customer" slot (so a later normal Hang Up correctly ends
+    // things for both parties), room1 (now empty) is released.
+    // Nothing about the agent's actual live conversation is touched.
+    releaseOriginalRoom(room1, isInbound);
+    rawCall.room = lineTwo.room;
+    rawCall.roomSuffix = lineTwo.roomSuffix;
+    rawCall.customerChannel = lineTwo.targetChannel;
+    rawCall.onHold = false;
+    rawCall.lineTwo = null;
+
+    if (isInbound) {
+      inboundCallService.rekeyInboundCallRoom(room1, lineTwo.room);
+    }
+
+    return { success: false, reason: "customer_disconnected" };
+  }
 
   if (action === "transfer") {
     await ami.hangupChannel(agentChannel).catch((err) => {
@@ -208,10 +247,28 @@ async function cancelLineTwo(active) {
   }
 
   await ami.redirectChannel(agentChannel, { context: "trunkinbound", exten: `2${room1}` });
-  await unholdOriginalCustomer(callId, isInbound);
 
   dialerService.releaseRoomSuffix(lineTwo.roomSuffix);
   rawCall.lineTwo = null;
+
+  try {
+    await unholdOriginalCustomer(callId, isInbound);
+  } catch (err) {
+    // REAL BUG FIX, same root cause as completeLineTwo's own fix: the
+    // customer may have hung up on their own while sitting on hold.
+    // Here (unlike completeLineTwo) the agent explicitly chose to
+    // cancel Line 2 too — so if the customer's also gone, there's
+    // genuinely nothing left at all. End the call cleanly (normal
+    // ACW/disposition path) rather than leaving the agent stuck back
+    // in an empty room with no one to talk to.
+    console.error("[attendedTransferService] Customer channel gone when canceling Line 2 (they likely hung up while on hold):", err.message);
+    if (isInbound) {
+      await inboundCallService.endInboundCall(room1).catch(() => {});
+    } else {
+      await dialerService.endCall(callId).catch(() => {});
+    }
+    return { success: true, customerAlreadyGone: true };
+  }
 
   return { success: true };
 }

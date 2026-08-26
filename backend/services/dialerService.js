@@ -672,6 +672,15 @@ function registerCallEventTracking() {
   ami.events.on("Hangup", (evt) => {
     for (const call of activeCalls.values()) {
       if (evt.channel === call.customerChannel) {
+        // REAL BUG FIX, per a real test call: while Line 2 is active,
+        // defer entirely to attendedTransferService's own
+        // completeLineTwo/cancelLineTwo — those already handle "the
+        // customer hung up while on hold" gracefully. Marking the call
+        // ended here immediately would disrupt the agent's still-live,
+        // private Line 2 conversation the instant the original
+        // customer left, before they'd even gotten a chance to decide
+        // what to do about it.
+        if (call.lineTwo) continue;
         markCallEnded(call);
       }
     }

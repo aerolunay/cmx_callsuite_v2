@@ -198,7 +198,18 @@ export function MiniPhone({
       await onCompleteLineTwo(action);
       setLineTwoActive(false);
     } catch (err) {
-      setTargetError(err.message);
+      if (err.reason === "customer_disconnected") {
+        // The original customer already hung up while on hold —
+        // Line 2's party is still genuinely connected to the agent,
+        // just no longer as "Line 2" (the backend promoted it to the
+        // primary call). Drop back to the normal single-call view
+        // rather than showing this as a plain failure, but still
+        // surface what happened.
+        setLineTwoActive(false);
+        setTargetError(err.message);
+      } else {
+        setTargetError(err.message);
+      }
     } finally {
       setLineTwoBusy(false);
     }
@@ -370,7 +381,7 @@ export function MiniPhone({
             ? "Softphone must be registered before dialing."
             : hasActiveCall
               ? "You're already on a call."
-              : "You must be on Ready to place a call."}
+              : "You must be Ready to place a call."}
         </p>
       )}
 
