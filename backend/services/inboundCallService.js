@@ -611,6 +611,17 @@ function registerInboundEventTracking() {
     const call = inboundCalls.get(evt.conference);
     if (!call) return;
 
+    // REAL BUG FIX, confirmed via a real test call: this listener was
+    // never guarded against Line 2 at all — only the separate Hangup
+    // listener below got that guard. The MOMENT Line 2 starts, the
+    // agent's own channel is intentionally redirected OUT of room1
+    // (into Line 2's private room) — which fires a real
+    // ConfbridgeLeave event for evt.channel === call.agentChannel.
+    // Without this guard, that looked exactly like the agent hanging
+    // up, ending the whole call immediately (customer disconnected,
+    // agent sent to ACW) the instant Line 2 was even attempted.
+    if (call.lineTwo) return;
+
     // If the customer is on hold, WE caused this leave (redirected them
     // to the cmxhold extension) — not a real hangup. A genuine
     // disconnect while on hold still fires a real Hangup event below,

@@ -130,15 +130,32 @@ async function startLineTwo(active, target, isExtension) {
   if (isRetry) {
     room2 = existing.room;
     room2Suffix = existing.roomSuffix;
+    // rawCall.lineTwo (the "failed" one) is already set, already
+    // arming the ConfbridgeLeave/Hangup guards below — nothing further
+    // needed here for the retry case.
   } else {
-    await holdOriginalCustomer(callId, isInbound);
-
     room2Suffix = dialerService.allocateRoomSuffix();
     room2 = dialerService.roomFromSuffix(room2Suffix);
 
+    // REAL BUG FIX, confirmed via a real test call: this used to get
+    // set only AFTER the agent's redirect (and waitForConfbridgeJoin)
+    // had already succeeded — leaving a real window where the
+    // ConfbridgeLeave/Hangup guards in inboundCallService.js weren't
+    // armed yet when the agent's own channel actually left room1 (an
+    // expected, intentional side effect of THIS redirect). Without the
+    // guard active in time, that leave looked exactly like the agent
+    // hanging up, ending the whole call immediately — customer
+    // disconnected, agent sent to ACW, right as Line 2 was only just
+    // starting. Same fix pattern already proven in holdInboundCall's
+    // own onHold flag: arm the marker BEFORE issuing the redirect that
+    // triggers the event it needs to suppress, not after.
+    rawCall.lineTwo = { room: room2, roomSuffix: room2Suffix, targetChannel: null, status: "starting", settled: null };
+
     try {
+      await holdOriginalCustomer(callId, isInbound);
       await ami.redirectChannel(agentChannel, { context: "trunkinbound", exten: `2${room2}` });
     } catch (err) {
+      rawCall.lineTwo = null; // roll back the marker — setup itself failed, guards should NOT stay armed
       dialerService.releaseRoomSuffix(room2Suffix);
       await unholdOriginalCustomer(callId, isInbound).catch(() => {});
       throw err;
