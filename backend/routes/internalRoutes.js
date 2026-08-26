@@ -4,6 +4,7 @@ const crypto = require("crypto");
 const express = require("express");
 const db = require("../config/db");
 const inboundCallService = require("../services/inboundCallService");
+const dialerService = require("../services/dialerService");
 
 const router = express.Router();
 
@@ -132,6 +133,59 @@ router.get("/campaign-has-logged-in-agent", async (req, res) => {
     // smaller failure mode than accidentally forwarding everything.
     return res.status(500).type("text/plain").send("1");
   }
+});
+
+/*
+==================================================
+GET /internal/dial-result?secret=...&room=...&dialstatus=...&amdstatus=...
+==================================================
+Called from the dialplan the moment Dial() on the customer leg
+returns, for EVERY outbound attempt — not just answered ones. See
+dialerService.js's handleAutomaticDialOutcome for the full design
+rationale (AMD Phase 1 + the data foundation for Phase 2's future
+max-attempts enforcement, per explicit request).
+
+Only three combinations of these two params actually mean anything
+here; everything else (a normal human answer) is deliberately a
+no-op — that call already bridged to the agent via the dialplan's own
+ConfBridge() line, and its disposition is handled entirely normally,
+completely unrelated to this route.
+==================================================
+*/
+router.get("/dial-result", async (req, res) => {
+  const { secret, room, dialstatus, amdstatus } = req.query;
+
+  if (!isValidSecret(secret)) {
+    console.warn("[internalRoutes] Rejected dial-result call with an invalid/missing secret.");
+    return res.status(403).type("text/plain").send("");
+  }
+  if (!room) {
+    console.warn("[internalRoutes] Rejected dial-result call with no room param.");
+    return res.status(400).type("text/plain").send("");
+  }
+
+  let outcomeType = null;
+  if (dialstatus === "ANSWER" && amdstatus === "MACHINE") {
+    outcomeType = "machine";
+  } else if (dialstatus === "BUSY") {
+    outcomeType = "busy";
+  } else if (dialstatus === "NOANSWER" || dialstatus === "CONGESTION" || dialstatus === "CHANUNAVAIL") {
+    outcomeType = "no_answer";
+  }
+  // Anything else (ANSWER + HUMAN/NOTSURE/blank, or an unrecognized
+  // DIALSTATUS this app hasn't seen before) — deliberately do nothing.
+  // A real human connection already bridged to the agent normally;
+  // an unrecognized status is safer left alone than guessed at.
+
+  if (outcomeType) {
+    try {
+      await dialerService.handleAutomaticDialOutcome(room, outcomeType);
+    } catch (err) {
+      console.error(`[internalRoutes] handleAutomaticDialOutcome failed for room ${room} (${outcomeType}):`, err.message);
+    }
+  }
+
+  return res.type("text/plain").send("");
 });
 
 module.exports = router;

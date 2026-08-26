@@ -92,6 +92,11 @@ export default function DialerPage() {
   const [callLogVersion, setCallLogVersion] = useState(0);
 
   const [error, setError] = useState("");
+  // Per explicit request — AMD/Busy/No Answer end the call
+  // automatically, with no disposition form at all (the agent never
+  // spoke to anyone). This shows a brief, dismissible notice instead,
+  // driven by the "callAutoResolved" WS message.
+  const [autoResolvedNotice, setAutoResolvedNotice] = useState("");
   const [busy, setBusy] = useState(false);
   const [hasLeads, setHasLeads] = useState(true); // optimistic default — avoids a flash of "no leads" before the check resolves
   // How many campaigns THIS agent is actually assigned to. Used purely
@@ -104,6 +109,12 @@ export default function DialerPage() {
   const [myCampaignCount, setMyCampaignCount] = useState(2);
 
   const elapsedTimerRef = useRef(null);
+
+  useEffect(() => {
+    if (!autoResolvedNotice) return;
+    const timeout = setTimeout(() => setAutoResolvedNotice(""), 6000);
+    return () => clearTimeout(timeout);
+  }, [autoResolvedNotice]);
 
   useEffect(() => {
     const stored = localStorage.getItem("cmx_dialer_campaign");
@@ -292,6 +303,30 @@ export default function DialerPage() {
         if (!prev || prev.callId !== message.callId) return prev;
         return { ...prev, status: message.status, onHold: message.onHold };
       });
+    }
+
+    // Per explicit request — AMD/Busy/No Answer end the call
+    // automatically on the backend, with no disposition form (the
+    // agent never spoke to anyone). Mirrors handleSaveDisposition's
+    // own cleanup below, since there's no form submission here to
+    // react to locally — this WS message is the ONLY signal the
+    // frontend gets that the call is over.
+    if (message.type === "callAutoResolved") {
+      setCall((prev) => (prev && prev.callId === message.callId ? null : prev));
+      setLead((prev) => (prev ? null : prev));
+      setDisposition("");
+      setComments("");
+      setCallbackAt("");
+      setSetNotReadyAfterSave(false);
+      setCallLogVersion((v) => v + 1);
+
+      const label =
+        message.outcome === "machine"
+          ? "Answering machine detected — moved to the next lead."
+          : message.outcome === "busy"
+            ? "Line was busy — moved to the next lead."
+            : "No answer — moved to the next lead.";
+      setAutoResolvedNotice(label);
     }
 
     if (message.type === "inboundCall") {
@@ -794,6 +829,7 @@ export default function DialerPage() {
         </div>
 
         {error && <div className="error">{error}</div>}
+        {autoResolvedNotice && <div className="badge">{autoResolvedNotice}</div>}
 
         <div className="dialer-layout">
           <div className="dialer-main">

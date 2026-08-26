@@ -748,6 +748,162 @@ async function endCall(callId) {
 
 /*
 ==================================================
+AMD / AUTOMATIC DIAL OUTCOME HANDLING — Phase 1 (AMD) + foundation for
+Phase 2 (max attempts), per explicit request
+==================================================
+Called from internalRoutes.js's /internal/dial-result, itself called
+directly from the dialplan's CURL() the moment Dial() on the customer
+leg returns — for EVERY outbound attempt, not just ones that reach a
+human. Three real outcomes this cares about, all of which end the
+call WITHOUT ever reaching the agent's normal disposition form (the
+form is gated on agentStatus === "AFTER_CALL_WORK" in the frontend —
+skipping straight to READY here is what keeps it from ever appearing,
+deliberately, no new status value or flag needed):
+
+  - MACHINE (DIALSTATUS=ANSWER, AMDSTATUS=MACHINE): AMD caught it and
+    hung up the customer's own leg BEFORE ever bridging to the agent,
+    per explicit request — the agent never heard anything at all.
+  - BUSY (DIALSTATUS=BUSY)
+  - NO_ANSWER (DIALSTATUS=NOANSWER/CONGESTION/CHANUNAVAIL — anything
+    else Dial() can return that isn't a real human connection)
+
+DIALSTATUS=ANSWER with AMDSTATUS=HUMAN (or blank/NOTSURE, if AMD
+itself couldn't decide) is NOT handled here at all — that's a normal,
+successful connection that already bridged to the agent via the
+dialplan's own ConfBridge() line; the ordinary disposition flow
+applies once THAT call ends, completely unchanged.
+==================================================
+*/
+
+function findCallByRoom(room) {
+  for (const call of activeCalls.values()) {
+    if (call.room === room) return call;
+  }
+  return null;
+}
+
+// ViciDial-standard status codes — matches this schema's existing
+// convention (asterisk.vicidial_list.status already uses these short
+// abbreviations elsewhere in this app).
+const AUTODIAL_OUTCOME_INFO = {
+  machine: { disposition: "MACHINE", vicidialStatus: "AM", counterColumn: "attempts_machine_today" },
+  busy: { disposition: "BUSY", vicidialStatus: "B", counterColumn: "attempts_busy_today" },
+  no_answer: { disposition: "NO_ANSWER", vicidialStatus: "NA", counterColumn: "attempts_no_answer_today" },
+};
+
+/*
+recordAutodialAttempt — per-lead, per-outcome-type counters, reset
+daily. Schema already existed from an earlier session (Phase 1 data
+setup) — this is the first thing that actually writes to it. UPSERT
+rather than SELECT-then-UPDATE: two attempts landing in the same
+instant (unlikely but not impossible with two agents on the same
+lead, or a retry racing a fresh dial) shouldn't be able to lose an
+increment to a race between reading and writing.
+*/
+async function recordAutodialAttempt(leadId, outcomeType) {
+  const { counterColumn } = AUTODIAL_OUTCOME_INFO[outcomeType];
+  const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD, server-local — matches attempts_date's own DATE type
+
+  await db.execute(
+    `
+      INSERT INTO cmx_dialer.lead_autodial_state (lead_id, ${counterColumn}, attempts_date, last_attempt_at)
+      VALUES (?, 1, ?, NOW())
+      ON DUPLICATE KEY UPDATE
+        ${counterColumn} = IF(attempts_date = ?, ${counterColumn} + 1, 1),
+        attempts_busy_today = IF(attempts_date = ?, attempts_busy_today, 0),
+        attempts_no_answer_today = IF(attempts_date = ?, attempts_no_answer_today, 0),
+        attempts_machine_today = IF(attempts_date = ?, attempts_machine_today, 0),
+        attempts_date = ?,
+        last_attempt_at = NOW()
+    `,
+    [leadId, today, today, today, today, today, today]
+  );
+}
+
+/*
+handleAutomaticDialOutcome — the actual per-call handling once a
+non-human outcome is confirmed. Ends the call entirely: hangs up the
+agent's own leg (nobody for them to talk to — the customer's leg is
+either already hung up by the dialplan itself, for MACHINE, or never
+answered at all, for BUSY/NO_ANSWER), writes the log row directly
+(bypassing the normal disposition-submission route entirely, since
+there's no form for the agent to fill out), updates the lead's
+vicidial_list status, records the attempt for Phase 2's future
+max-attempts enforcement, and returns the agent straight to READY.
+*/
+async function handleAutomaticDialOutcome(room, outcomeType) {
+  const call = findCallByRoom(room);
+  if (!call) {
+    console.warn(`[dialerService] handleAutomaticDialOutcome: no active call found for room ${room} (outcome: ${outcomeType}) — it may have already ended through another path.`);
+    return;
+  }
+
+  const info = AUTODIAL_OUTCOME_INFO[outcomeType];
+  if (!info) {
+    console.error(`[dialerService] handleAutomaticDialOutcome: unrecognized outcomeType "${outcomeType}" for room ${room}.`);
+    return;
+  }
+
+  if (call.agentChannel) {
+    await ami.hangupChannel(call.agentChannel).catch((err) => {
+      console.error(`[dialerService] Failed to hang up agent channel after ${outcomeType} outcome:`, err.message);
+    });
+  }
+
+  const endedAt = new Date();
+
+  try {
+    await db.execute(
+      `
+        INSERT INTO cmx_dialer.dialer_call_log
+          (agent_user, campaign_id, lead_id, phone_number, first_name, last_name,
+           room_number, call_id, call_type, call_started_at, call_ended_at, disposition,
+           comments, callback_at, xfer_conf, xfer_conf_target)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'N', NULL)
+      `,
+      [
+        call.agentUser, call.campaignId, call.leadId, call.phoneNumber, call.lead?.first_name || null, call.lead?.last_name || null,
+        room, call.callId, call.callType || "REGULAR", call.startedAt, endedAt, info.disposition,
+        `Automatically detected — ${outcomeType.replace("_", " ")}. No agent interaction occurred.`, null,
+      ]
+    );
+
+    await db.execute(
+      `UPDATE asterisk.vicidial_list SET status = ?, called_since_last_reset = 'Y' WHERE lead_id = ?`,
+      [info.vicidialStatus, call.leadId]
+    );
+
+    await recordAutodialAttempt(call.leadId, outcomeType);
+  } catch (err) {
+    console.error(`[dialerService] Failed to record automatic ${outcomeType} outcome for call ${call.callId}:`, err.message);
+  }
+
+  activeCalls.delete(call.callId);
+  releaseRoomSuffix(call.roomSuffix);
+
+  // Deliberately READY, not AFTER_CALL_WORK — this is what keeps the
+  // frontend's disposition form (gated on agentStatus ===
+  // "AFTER_CALL_WORK") from ever appearing for a call the agent never
+  // actually took part in.
+  try {
+    await agentStatusService.setStatus(call.appUserId, "READY", {
+      relatedCallDirection: "outbound",
+      relatedCampaignId: call.campaignId,
+      relatedCallId: call.callId,
+    });
+  } catch (err) {
+    console.error("[dialerService] Failed to return agent to READY after automatic dial outcome:", err.message);
+  }
+
+  ws.broadcastToUser(call.appUserId, {
+    type: "callAutoResolved",
+    callId: call.callId,
+    outcome: outcomeType,
+  });
+}
+
+/*
+==================================================
 holdCall / unholdCall (outbound)
 ==================================================
 Redirects the CUSTOMER's channel out of the ConfBridge room into the
@@ -1087,4 +1243,6 @@ module.exports = {
   allocateRoomSuffix,
   releaseRoomSuffix,
   roomFromSuffix,
+  findCallByRoom,
+  handleAutomaticDialOutcome,
 };
