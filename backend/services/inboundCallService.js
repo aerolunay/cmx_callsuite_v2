@@ -220,6 +220,7 @@ async function allocateInboundRoom(did) {
     // party when the original agent hangs up.
     extraParticipants: [],
     lineTwo: null, // see attendedTransferService.js
+    activeLine: 1, // which room the agent's OWN channel currently sits in — 1 or 2
   };
   inboundCalls.set(room, call);
 

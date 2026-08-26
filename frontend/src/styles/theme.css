@@ -1001,3 +1001,34 @@ other pages sharing the same base classes.
 .phone-extra-error {
   margin-top: 6px;
 }
+
+/* Line 1 / Line 2 toggle tabs, per explicit request — 3CX-style
+   two-line phone. */
+.phone-line-tabs {
+  display: flex;
+  gap: 6px;
+  margin: 10px 0;
+}
+
+.phone-line-tab {
+  flex: 1;
+  padding: 8px 12px;
+  font-size: 13px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  background: rgba(255, 255, 255, 0.08);
+  color: inherit;
+  cursor: pointer;
+}
+
+.phone-line-tab:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.phone-line-tab-active {
+  background: #ffffff;
+  border-color: #ffffff;
+  color: var(--cmx-navy, #101d3a);
+  font-weight: 600;
+}

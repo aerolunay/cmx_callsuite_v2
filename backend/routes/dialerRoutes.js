@@ -338,6 +338,51 @@ router.post("/dialer/line-two/cancel", requireAuth, async (req, res) => {
 
 /*
 ==================================================
+Line 1 / Line 2 toggle + status polling — per explicit request
+==================================================
+*/
+router.post("/dialer/line-two/switch", requireAuth, async (req, res) => {
+  try {
+    const { line } = req.body;
+    if (line !== 1 && line !== 2) {
+      return res.status(400).json({ success: false, message: "line must be 1 or 2." });
+    }
+
+    const active = resolveActiveRoom(req.session.agent.appUserId);
+    if (!active) {
+      return res.status(409).json({ success: false, message: "You're not currently on a call." });
+    }
+
+    if (line === 1) {
+      await attendedTransferService.switchToLineOne(active);
+    } else {
+      await attendedTransferService.switchToLineTwo(active);
+    }
+
+    return res.json({ success: true });
+  } catch (error) {
+    console.error("POST /api/dialer/line-two/switch failed:", error);
+    return res.status(500).json({ success: false, message: error.message || "Failed to switch lines." });
+  }
+});
+
+router.get("/dialer/line-two/status", requireAuth, async (req, res) => {
+  try {
+    const active = resolveActiveRoom(req.session.agent.appUserId);
+    if (!active) {
+      return res.status(409).json({ success: false, message: "You're not currently on a call." });
+    }
+
+    const status = attendedTransferService.getLineTwoStatus(active);
+    return res.json({ success: true, ...status });
+  } catch (error) {
+    console.error("GET /api/dialer/line-two/status failed:", error);
+    return res.status(500).json({ success: false, message: "Failed to load Line 2 status." });
+  }
+});
+
+/*
+==================================================
 CAMPAIGN LIST
 ==================================================
 */

@@ -136,6 +136,8 @@ export function MiniPhone({
   onStartLineTwo,
   onCompleteLineTwo,
   onCancelLineTwo,
+  onSwitchLine,
+  onGetLineTwoStatus,
 }) {
   const phone = useJsSipPhone();
   const autoAnsweredCallRef = useRef(null); // guards against re-answering the same ring on every re-render
@@ -143,23 +145,47 @@ export function MiniPhone({
   const [dialNumber, setDialNumber] = useState("");
   const [isMuted, setIsMuted] = useState(false);
 
-  // UPDATED — per explicit request: real attended transfer, like a
-  // traditional phone's Line 1/Line 2. The number field + Internal
-  // Transfer picker below now START Line 2 (puts the customer on
-  // hold, privately dials the target) instead of instantly adding
-  // them to the live call. Once Line 2 answers, lineTwoActive flips
-  // true and a separate decision row appears: Transfer (complete the
-  // handoff, hang up), Conference (bring everyone together, stay on),
-  // or Cancel (hang up Line 2, go back to the original customer).
+  // REBUILT — per explicit request, a real 3CX-style Line 1/Line 2
+  // toggle. Line 2 must be genuinely STARTED (dialing has begun)
+  // before it can be switched to at all — before that, there's just
+  // one line. Once started, the agent can freely toggle which line
+  // their own audio is on (activeLine), and can Transfer/Conference
+  // at ANY point — while Line 2 is still ringing (cold) or after
+  // it's answered and they've talked privately first (warm); both
+  // are the exact same action, just called at a different moment.
+  //
+  // lineTwoStatus mirrors the backend's own state: null (no Line 2 at
+  // all) | { active, status: "ringing"|"connected"|"failed",
+  // failureReason }. Polled periodically WHILE ringing — nothing else
+  // currently pushes this to the client in real time, and the agent
+  // needs to know if Line 2 goes unanswered so they can retry.
   const [targetInput, setTargetInput] = useState("");
   const [targetError, setTargetError] = useState("");
-  const [lineTwoActive, setLineTwoActive] = useState(false);
+  const [lineTwoStatus, setLineTwoStatus] = useState(null);
+  const [activeLine, setActiveLine] = useState(1);
   const [lineTwoBusy, setLineTwoBusy] = useState(false);
 
-  // Per explicit request — separate from the shared number field
-  // entirely: "Internal Transfer" opens a picker listing real agents
-  // on the same campaign.
   const [showInternalTransferModal, setShowInternalTransferModal] = useState(false);
+
+  // Poll Line 2's real status while it's still ringing — this is how
+  // the UI learns "no answer" and offers Try Again, since nothing
+  // else currently reports that in real time.
+  useEffect(() => {
+    if (!lineTwoStatus?.active || lineTwoStatus.status !== "ringing") return;
+
+    const interval = setInterval(async () => {
+      try {
+        const data = await onGetLineTwoStatus();
+        setLineTwoStatus(data);
+        setActiveLine(data.activeLine || 1);
+      } catch {
+        // Transient poll failure — try again next tick rather than
+        // treating one missed poll as a real state change.
+      }
+    }, 1500);
+
+    return () => clearInterval(interval);
+  }, [lineTwoStatus?.active, lineTwoStatus?.status, onGetLineTwoStatus]);
 
   async function handleStartLineTwo() {
     if (!targetInput.trim()) return;
@@ -167,7 +193,8 @@ export function MiniPhone({
     setLineTwoBusy(true);
     try {
       await onStartLineTwo(targetInput.trim(), false);
-      setLineTwoActive(true);
+      setLineTwoStatus({ active: true, status: "ringing" });
+      setActiveLine(2);
       setTargetInput("");
     } catch (err) {
       setTargetError(err.message);
@@ -181,7 +208,8 @@ export function MiniPhone({
     setLineTwoBusy(true);
     try {
       await onStartLineTwo(extension, true);
-      setLineTwoActive(true);
+      setLineTwoStatus({ active: true, status: "ringing" });
+      setActiveLine(2);
       setShowInternalTransferModal(false);
     } catch (err) {
       setTargetError(err.message);
@@ -196,7 +224,8 @@ export function MiniPhone({
     setLineTwoBusy(true);
     try {
       await onCompleteLineTwo(action);
-      setLineTwoActive(false);
+      setLineTwoStatus(null);
+      setActiveLine(1);
     } catch (err) {
       if (err.reason === "customer_disconnected") {
         // The original customer already hung up while on hold —
@@ -205,7 +234,8 @@ export function MiniPhone({
         // primary call). Drop back to the normal single-call view
         // rather than showing this as a plain failure, but still
         // surface what happened.
-        setLineTwoActive(false);
+        setLineTwoStatus(null);
+        setActiveLine(1);
         setTargetError(err.message);
       } else {
         setTargetError(err.message);
@@ -220,7 +250,22 @@ export function MiniPhone({
     setLineTwoBusy(true);
     try {
       await onCancelLineTwo();
-      setLineTwoActive(false);
+      setLineTwoStatus(null);
+      setActiveLine(1);
+    } catch (err) {
+      setTargetError(err.message);
+    } finally {
+      setLineTwoBusy(false);
+    }
+  }
+
+  async function handleSwitchLineClick(line) {
+    if (line === activeLine) return;
+    setTargetError("");
+    setLineTwoBusy(true);
+    try {
+      await onSwitchLine(line);
+      setActiveLine(line);
     } catch (err) {
       setTargetError(err.message);
     } finally {
@@ -268,7 +313,8 @@ export function MiniPhone({
       setIsMuted(false);
       setTargetInput("");
       setTargetError("");
-      setLineTwoActive(false);
+      setLineTwoStatus(null);
+      setActiveLine(1);
     }
   }, [phone.callState]);
 
@@ -386,13 +432,17 @@ export function MiniPhone({
       )}
 
       {/* LINE 2 — real attended transfer, per explicit request. While
-          not active: dial a target privately (customer goes on hold,
+          not active: dial a target privately (Line 1 goes on hold,
           hears nothing) via the number field or the Internal Transfer
-          picker. Once Line 2 answers, this becomes a decision row:
-          Transfer (complete the handoff, hang up), Conference (bring
-          everyone together, stay on), or Cancel (hang up Line 2, go
-          back to the original customer). */}
-      {!lineTwoActive ? (
+          picker. Once dialing begins — NOT gated on an actual answer,
+          per explicit request — Line 1/Line 2 toggle tabs appear
+          alongside Transfer (complete the handoff, hang up),
+          Conference (bring everyone together, stay on), and Cancel
+          (hang up Line 2, go back to Line 1 only). Cold transfer =
+          clicking Transfer while still ringing; warm = waiting for an
+          answer and talking privately first — literally the same
+          action, just called at a different moment. */}
+      {!lineTwoStatus?.active ? (
         <>
           <div className="phone-extra-row">
             <input
@@ -425,30 +475,82 @@ export function MiniPhone({
             Internal Transfer
           </button>
         </>
-      ) : (
+      ) : lineTwoStatus.status === "failed" ? (
+        // Per explicit request: if Line 2 doesn't pick up, the agent
+        // must be able to try dialing again — reusing the same
+        // private room rather than starting completely over (Line 1
+        // stays held throughout).
         <div className="phone-extra-row" style={{ flexWrap: "wrap" }}>
-          <span className="badge">Line 2 connected — customer is on hold</span>
+          <span className="error phone-extra-error" style={{ width: "100%" }}>
+            Line 2 didn't answer.
+          </span>
+          <input
+            type="text"
+            placeholder="Phone number"
+            value={targetInput}
+            onChange={(e) => setTargetInput(e.target.value)}
+            disabled={lineTwoBusy}
+          />
           <button
             type="button"
             className="button-secondary"
-            onClick={() => handleCompleteLineTwoClick("transfer")}
-            disabled={lineTwoBusy}
+            onClick={handleStartLineTwo}
+            disabled={lineTwoBusy || !targetInput.trim()}
           >
-            Transfer
-          </button>
-          <button
-            type="button"
-            className="button-secondary"
-            onClick={() => handleCompleteLineTwoClick("conference")}
-            disabled={lineTwoBusy}
-          >
-            Conference
+            {lineTwoBusy ? "Calling…" : "Try Again"}
           </button>
           <button type="button" className="link" onClick={handleCancelLineTwoClick} disabled={lineTwoBusy}>
-            Cancel — back to customer
+            Give up — back to Line 1 only
           </button>
-          {targetError && <div className="error phone-extra-error">{targetError}</div>}
         </div>
+      ) : (
+        <>
+          {/* Real Line 1/Line 2 toggle, per explicit request — like a
+              traditional two-line phone. Disabled while a Line 2
+              action is in flight; switching to the line you're
+              already on is a no-op. */}
+          <div className="phone-line-tabs">
+            <button
+              type="button"
+              className={activeLine === 1 ? "phone-line-tab phone-line-tab-active" : "phone-line-tab"}
+              onClick={() => handleSwitchLineClick(1)}
+              disabled={lineTwoBusy || activeLine === 1}
+            >
+              Line 1
+            </button>
+            <button
+              type="button"
+              className={activeLine === 2 ? "phone-line-tab phone-line-tab-active" : "phone-line-tab"}
+              onClick={() => handleSwitchLineClick(2)}
+              disabled={lineTwoBusy || activeLine === 2}
+            >
+              Line 2 {lineTwoStatus.status === "ringing" ? "(ringing…)" : ""}
+            </button>
+          </div>
+
+          <div className="phone-extra-row" style={{ flexWrap: "wrap" }}>
+            <button
+              type="button"
+              className="button-secondary"
+              onClick={() => handleCompleteLineTwoClick("transfer")}
+              disabled={lineTwoBusy}
+            >
+              Transfer
+            </button>
+            <button
+              type="button"
+              className="button-secondary"
+              onClick={() => handleCompleteLineTwoClick("conference")}
+              disabled={lineTwoBusy}
+            >
+              Conference
+            </button>
+            <button type="button" className="link" onClick={handleCancelLineTwoClick} disabled={lineTwoBusy}>
+              Cancel — back to Line 1
+            </button>
+          </div>
+          {targetError && <div className="error phone-extra-error">{targetError}</div>}
+        </>
       )}
 
       {showInternalTransferModal && (

@@ -394,6 +394,7 @@ function startCall({ appUserId, agentUser, agentExtension, lead, leadId, phoneNu
       // them.
       extraParticipants: [],
       lineTwo: null, // see attendedTransferService.js
+      activeLine: 1, // which room the agent's OWN channel currently sits in — 1 or 2
     };
 
     activeCalls.set(callId, callState);
