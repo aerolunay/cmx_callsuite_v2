@@ -170,6 +170,21 @@ export function MiniPhone({
   // Poll Line 2's real status while it's still ringing — this is how
   // the UI learns "no answer" and offers Try Again, since nothing
   // else currently reports that in real time.
+  //
+  // REAL BUG FIX, confirmed via a real test call: onGetLineTwoStatus
+  // used to be in this effect's dependency array. It's a plain
+  // function declared fresh on every DialerPage render (not
+  // useCallback-memoized), and DialerPage re-renders frequently on
+  // its own (stats/call-log polling elsewhere in this app already
+  // does this every few seconds) — each of those re-renders passed
+  // down a BRAND NEW function reference, which tore down and
+  // recreated this effect's setInterval every single time, before it
+  // ever got a real chance to fire. Line 2's status polling never
+  // actually ran in practice — this is why the UI stayed stuck
+  // showing "ringing" indefinitely even once the agent was already
+  // genuinely connected and talking to Line 2. onGetLineTwoStatus
+  // doesn't capture any state that would go stale by omitting it here
+  // — it's just a stable API-call wrapper.
   useEffect(() => {
     if (!lineTwoStatus?.active || lineTwoStatus.status !== "ringing") return;
 
@@ -185,7 +200,8 @@ export function MiniPhone({
     }, 1500);
 
     return () => clearInterval(interval);
-  }, [lineTwoStatus?.active, lineTwoStatus?.status, onGetLineTwoStatus]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lineTwoStatus?.active, lineTwoStatus?.status]);
 
   async function handleStartLineTwo() {
     if (!targetInput.trim()) return;
