@@ -1,13 +1,14 @@
 "use strict";
 
-const path = require("path");
 const http = require("http");
 const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
 const morgan = require("morgan");
 const session = require("express-session");
-const FileStore = require("session-file-store")(session);
+const MySQLStoreFactory = require("express-mysql-session");
+const MySQLStore = MySQLStoreFactory(session);
+const mysql = require("mysql2/promise");
 
 require("dotenv").config();
 
@@ -70,19 +71,69 @@ app.use(morgan("dev"));
 ==================================================
 SESSION MIDDLEWARE
 ==================================================
+REAL BUG FIX, confirmed via direct source inspection of
+session-file-store itself: if a session file's JSON ever gets
+corrupted mid-read (a parse error), the library automatically DELETES
+the session file entirely — not a transient failure. rolling: true
+below re-saves the session on every single request to extend its
+expiry, and DialerPage.jsx fires a burst of ~8-10 near-simultaneous
+API calls on mount — meaning ~8-10 near-simultaneous WRITES to the
+exact same session file every time that page loads. File writes
+aren't atomic; two overlapping writes can corrupt the file, triggering
+that automatic deletion and permanently losing the session — this is
+what was actually producing both the ENOENT errors seen directly in
+testing tonight and the intermittent "Authentication required" bug
+specifically tied to Dialer page navigation.
+
+MySQL correctly serializes concurrent writes to the same row — no
+corruption risk the way flat-file writes have. This is the real fix,
+not a retry/tuning workaround.
+
+Deliberately a SEPARATE, dedicated pool from config/db.js's own —
+that pool's default database is whatever MYSQL_DATABASE resolves to
+(asterisk in production), but the sessions table lives in cmx_dialer,
+matching this app's own-schema convention elsewhere. express-mysql-
+session's tableName option is escaped as a single SQL identifier
+(mysql2's ?? placeholder) — a "schema.table" string would NOT resolve
+as a qualified reference, it would just be an invalid identifier — so
+a dedicated pool with database: "cmx_dialer" set directly is the
+correct way to get this right, not a qualified table name string.
+
+Table itself: see backend/sql/007_create_sessions_table.sql — schema
+matches express-mysql-session's own reference schema.sql exactly
+(verified directly against the installed package).
+
+ONE-TIME SIDE EFFECT: existing file-based sessions won't exist in this
+new table — everyone currently logged in needs to log in again once
+this deploys. Expected, not a bug.
+==================================================
 */
 
-const sessionStore = new FileStore({
-  path: path.join(__dirname, "sessions"),
-  ttl: SESSION_MAX_AGE_MS / 1000,
-  retries: 1,
-  reapInterval: 60 * 60,
+const sessionDbPool = mysql.createPool({
+  host: process.env.MYSQL_HOST,
+  port: Number(process.env.MYSQL_PORT || 3306),
+  user: process.env.MYSQL_USER,
+  password: process.env.MYSQL_PASSWORD,
+  database: "cmx_dialer",
+  waitForConnections: true,
+  connectionLimit: 3,
+  queueLimit: 0,
+});
 
-  logFn: (message) => {
-    if (String(message).toLowerCase().includes("error")) {
-      console.error(message);
-    }
+const sessionStore = new MySQLStore(
+  {
+    createDatabaseTable: false, // created explicitly via 007_create_sessions_table.sql
+    expiration: SESSION_MAX_AGE_MS,
+    schema: {
+      tableName: "sessions",
+      columnNames: { session_id: "session_id", expires: "expires", data: "data" },
+    },
   },
+  sessionDbPool
+);
+
+sessionStore.on("error", (err) => {
+  console.error("[sessionStore] MySQL session store error:", err.message);
 });
 
 app.use(

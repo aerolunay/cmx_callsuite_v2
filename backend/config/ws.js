@@ -117,9 +117,10 @@ attach(httpServer, store)
 Wires the WebSocket server onto the SAME HTTP server Express uses
 (one port, no separate WS port to open/firewall), and identifies each
 connecting client by decoding + verifying their existing session
-cookie against the same session-file-store express-session already
-uses — NOT by trusting a client-supplied user ID, which would let any
-socket claim to be any agent.
+cookie against the SAME session store express-session already uses
+(MySQL-backed as of the session-file-store replacement — see
+server.js's own comment on that) — NOT by trusting a client-supplied
+user ID, which would let any socket claim to be any agent.
 ==================================================
 */
 function attach(httpServer, store) {
