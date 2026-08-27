@@ -78,6 +78,7 @@ export default function AdminCampaignsSection() {
   const [did, setDid] = useState("");
   const [callerId, setCallerId] = useState("");
   const [campaignType, setCampaignType] = useState("OUTBOUND");
+  const [blendedFallbackCampaignId, setBlendedFallbackCampaignId] = useState("");
   const [dialMethod, setDialMethod] = useState("MANUAL");
   const [recordingEnabled, setRecordingEnabled] = useState(true);
   const [businessHoursStart, setBusinessHoursStart] = useState("09:00");
@@ -113,6 +114,7 @@ export default function AdminCampaignsSection() {
     setDid("");
     setCallerId("");
     setCampaignType("OUTBOUND");
+    setBlendedFallbackCampaignId("");
     setDialMethod("MANUAL");
     setRecordingEnabled(true);
     setBusinessHoursStart("09:00");
@@ -132,6 +134,7 @@ export default function AdminCampaignsSection() {
     setDid(c.did || "");
     setCallerId(c.campaign_cid && c.campaign_cid !== c.did ? c.campaign_cid : "");
     setCampaignType(c.campaign_type || "OUTBOUND");
+    setBlendedFallbackCampaignId(c.blended_fallback_campaign_id || "");
     setDialMethod(c.dial_method === "MANUAL" ? "MANUAL" : "AUTO");
     setRecordingEnabled(c.campaign_recording !== "NEVER");
     setBusinessHoursStart(c.business_hours_start || "09:00");
@@ -196,6 +199,7 @@ export default function AdminCampaignsSection() {
     formData.append("callerId", callerId);
     formData.append("campaignType", campaignType);
     formData.append("dialMethod", campaignType === "OUTBOUND" ? dialMethod : "MANUAL");
+    formData.append("blendedFallbackCampaignId", campaignType === "OUTBOUND" ? blendedFallbackCampaignId : "");
     formData.append("recordingEnabled", String(recordingEnabled));
     formData.append("businessHoursStart", businessHoursStart);
     formData.append("businessHoursEnd", businessHoursEnd);
@@ -319,6 +323,30 @@ export default function AdminCampaignsSection() {
                       <option value="PREDICTIVE" disabled>
                         Predictive Dialing (coming soon)
                       </option>
+                    </select>
+
+                    {/* Per explicit request, confirmed as a real gap
+                        via a live test call: outbound campaigns must
+                        never receive inbound calls to their own
+                        agents. If this campaign's DID is also used
+                        as its outbound Caller ID ("spoofed number"),
+                        a customer calling it back needs somewhere
+                        real to go — this picks which BLENDED
+                        campaign's own queue receives it instead.
+                        Leaving this blank means the DID won't answer
+                        at all if called back — the safest default. */}
+                    <label className="comments-label" style={{ marginTop: 10 }}>
+                      Inbound Callback Routes To (optional)
+                    </label>
+                    <select value={blendedFallbackCampaignId} onChange={(e) => setBlendedFallbackCampaignId(e.target.value)}>
+                      <option value="">— None (callback won't be answered) —</option>
+                      {campaigns
+                        .filter((c) => c.campaign_type === "BLENDED")
+                        .map((c) => (
+                          <option key={c.campaign_id} value={c.campaign_id}>
+                            {c.campaign_name} ({c.campaign_id})
+                          </option>
+                        ))}
                     </select>
                   </>
                 )}

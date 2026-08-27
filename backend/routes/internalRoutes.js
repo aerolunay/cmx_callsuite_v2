@@ -58,7 +58,7 @@ snippet) rather than trying to ConfBridge into an empty string.
 ==================================================
 */
 router.get("/allocate-inbound-room", async (req, res) => {
-  const { secret, did } = req.query;
+  const { secret, did, campaignId } = req.query;
 
   if (!isValidSecret(secret)) {
     console.warn("[internalRoutes] Rejected allocate-inbound-room call with an invalid/missing secret.");
@@ -71,7 +71,11 @@ router.get("/allocate-inbound-room", async (req, res) => {
   }
 
   try {
-    const room = await inboundCallService.allocateInboundRoom(did);
+    // campaignId, when present, is a fallback override for an
+    // OUTBOUND campaign's DID redirecting to a BLENDED campaign's own
+    // queue — see campaignRoutes.js's dialplan generation and
+    // 006_add_blended_fallback_campaign.sql.
+    const room = await inboundCallService.allocateInboundRoom(did, campaignId || undefined);
     return res.type("text/plain").send(room);
   } catch (err) {
     console.error(`[internalRoutes] Failed to allocate an inbound room for DID ${did}:`, err.message);

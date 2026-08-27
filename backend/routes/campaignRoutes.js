@@ -191,7 +191,40 @@ silently overwrite each other. Scoping every label to its own DID
 avoids that collision entirely.
 ==================================================
 */
-function buildCampaignDialplanBlock({ did, campaignId, welcomeGreetingFilename, afterhoursAudioFilename, businessHoursStart, businessHoursEnd, businessDays }) {
+function buildCampaignDialplanBlock({ did, campaignId, campaignType, blendedFallbackCampaignId, welcomeGreetingFilename, afterhoursAudioFilename, businessHoursStart, businessHoursEnd, businessDays }) {
+  // Per explicit request, confirmed as a real gap via a live test
+  // call: an OUTBOUND campaign's own DID was routing inbound calls
+  // straight to its own agents, which must never happen — outbound
+  // campaigns have no inbound queue of their own at all. If this DID
+  // is also used as that campaign's outbound Caller ID ("spoofed
+  // number") and a customer calls it back, blendedFallbackCampaignId
+  // (admin-configured, see AdminCampaignsSection.jsx) says which
+  // BLENDED campaign's queue should receive it instead. No fallback
+  // configured -> generate NOTHING for this DID at all, the safest
+  // default: Asterisk's own "no matching extension" behavior applies,
+  // rather than ever connecting to the outbound campaign's own agents.
+  if (campaignType === "OUTBOUND") {
+    if (!blendedFallbackCampaignId) {
+      return "";
+    }
+
+    // Deliberately minimal — no business-hours/greeting logic of its
+    // own here (this DID isn't really "a campaign's front door", it's
+    // just a redirect for an outbound Caller ID's own callbacks). The
+    // BLENDED campaign's own DID/queue already has that, for calls
+    // that reach it directly.
+    return [
+      `exten => ${did},1,NoOp(CMX Campaign ${campaignId} (OUTBOUND) inbound callback -> redirecting to blended campaign ${blendedFallbackCampaignId})`,
+      `exten => ${did},n,Answer()`,
+      `exten => ${did},n,Set(ROOM=\${CURL(${INTERNAL_API_BASE_URL}/internal/allocate-inbound-room?secret=${INTERNAL_API_SECRET}&did=${did}&campaignId=${blendedFallbackCampaignId})})`,
+      `exten => ${did},n,GotoIf($["\${ROOM}" = ""]?${did}_no_room)`,
+      `exten => ${did},n,ConfBridge(\${ROOM},vici_agent_bridge,cmx_inbound_customer)`,
+      `exten => ${did},n,Hangup()`,
+      `exten => ${did},n(${did}_no_room),Hangup()`,
+      ``,
+    ].join("\n");
+  }
+
   const openLabel = `${did}_open`;
   const afterhoursExten = `${did}_afterhours`;
   const noRoomLabel = `${did}_no_room`;
@@ -241,6 +274,8 @@ async function regenerateCampaignDialplanFile() {
       SELECT
         d.did_pattern AS did,
         d.campaign_id AS campaignId,
+        s.campaign_type AS campaignType,
+        s.blended_fallback_campaign_id AS blendedFallbackCampaignId,
         s.welcome_greeting_filename AS welcomeGreetingFilename,
         s.afterhours_audio_filename AS afterhoursAudioFilename,
         s.business_hours_start AS businessHoursStart,
@@ -262,7 +297,8 @@ async function regenerateCampaignDialplanFile() {
     "; extensions.conf — it must never define its own context header.\n\n";
 
   for (const row of rows) {
-    content += buildCampaignDialplanBlock(row) + "\n";
+    const block = buildCampaignDialplanBlock(row);
+    if (block) content += block + "\n";
   }
 
   fs.writeFileSync(CAMPAIGN_DIALPLAN_CONF_PATH, content);
@@ -308,7 +344,7 @@ router.get("/", requireAdmin, async (req, res) => {
           c.campaign_id, c.campaign_name, c.active, c.campaign_cid, c.dial_method, c.campaign_recording,
           d.did_pattern AS did, d.record_call,
           s.campaign_type, s.welcome_greeting_filename, s.afterhours_audio_filename,
-          s.business_hours_start, s.business_hours_end, s.business_days
+          s.business_hours_start, s.business_hours_end, s.business_days, s.blended_fallback_campaign_id
         FROM asterisk.vicidial_campaigns c
         LEFT JOIN asterisk.vicidial_inbound_dids d ON d.campaign_id = c.campaign_id
         LEFT JOIN cmx_dialer.campaign_settings s ON s.campaign_id = c.campaign_id
@@ -357,6 +393,7 @@ router.post(
       businessHoursStart,
       businessHoursEnd,
       businessDays,
+      blendedFallbackCampaignId,
     } = req.body;
 
     if (!campaignId || !campaignName) {
@@ -406,10 +443,10 @@ router.post(
       await connection.execute(
         `
           INSERT INTO cmx_dialer.campaign_settings
-            (campaign_id, campaign_type, business_hours_start, business_hours_end, business_days)
-          VALUES (?, ?, ?, ?, ?)
+            (campaign_id, campaign_type, business_hours_start, business_hours_end, business_days, blended_fallback_campaign_id)
+          VALUES (?, ?, ?, ?, ?, ?)
         `,
-        [campaignId, campaignType, resolvedBusinessHoursStart, resolvedBusinessHoursEnd, resolvedBusinessDays]
+        [campaignId, campaignType, resolvedBusinessHoursStart, resolvedBusinessHoursEnd, resolvedBusinessDays, blendedFallbackCampaignId || null]
       );
 
       await connection.commit();
@@ -493,6 +530,7 @@ router.put(
       businessHoursEnd,
       businessDays,
       active,
+      blendedFallbackCampaignId,
     } = req.body;
 
     if (!["OUTBOUND", "BLENDED"].includes(campaignType)) {
@@ -555,15 +593,16 @@ router.put(
       await connection.execute(
         `
           INSERT INTO cmx_dialer.campaign_settings
-            (campaign_id, campaign_type, business_hours_start, business_hours_end, business_days)
-          VALUES (?, ?, ?, ?, ?)
+            (campaign_id, campaign_type, business_hours_start, business_hours_end, business_days, blended_fallback_campaign_id)
+          VALUES (?, ?, ?, ?, ?, ?)
           ON DUPLICATE KEY UPDATE
             campaign_type = VALUES(campaign_type),
             business_hours_start = VALUES(business_hours_start),
             business_hours_end = VALUES(business_hours_end),
-            business_days = VALUES(business_days)
+            business_days = VALUES(business_days),
+            blended_fallback_campaign_id = VALUES(blended_fallback_campaign_id)
         `,
-        [campaignId, campaignType, businessHoursStart || "09:00", businessHoursEnd || "18:00", businessDays || "mon-fri"]
+        [campaignId, campaignType, businessHoursStart || "09:00", businessHoursEnd || "18:00", businessDays || "mon-fri", blendedFallbackCampaignId || null]
       );
 
       await connection.commit();

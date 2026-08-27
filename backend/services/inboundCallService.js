@@ -190,8 +190,15 @@ asterisk.vicidial_inbound_dids — internalRoutes.js turns that into a
 allocated" (see the dialplan snippet in the handoff notes).
 ==================================================
 */
-async function allocateInboundRoom(did) {
-  const campaignId = await lookupCampaignForDid(did);
+async function allocateInboundRoom(did, campaignIdOverride) {
+  // Per explicit request — outbound campaigns must never receive
+  // inbound calls to their own agents. When their DID is configured
+  // to redirect to a blended campaign instead (see campaignRoutes.js's
+  // dialplan generation), the CALLER already knows which campaign
+  // should actually receive this — skip the normal DID lookup
+  // entirely rather than resolving back to the outbound campaign's
+  // own (wrong) id.
+  const campaignId = campaignIdOverride || (await lookupCampaignForDid(did));
   if (!campaignId) {
     throw new Error(`No active campaign found for DID "${did}" in asterisk.vicidial_inbound_dids.`);
   }
