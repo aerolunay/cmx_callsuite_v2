@@ -6,7 +6,7 @@ import CallLogTable from "../components/CallLogTable";
 import StatsPanel from "../components/StatsPanel";
 import { api } from "../api";
 import { useAuth } from "../context/AuthContext";
-import { useDialerSocket } from "../hooks/useDialerSocket";
+import { useDialerSocketMessages } from "../context/DialerSocketContext";
 import { MiniPhone } from "../components/MiniPhone";
 import { DISPOSITIONS, getInboundDispositionsForCampaign } from "../constants/dispositions";
 import { formatDuration, durationColorFor } from "../utils/format";
@@ -303,7 +303,7 @@ export default function DialerPage() {
     return () => clearInterval(elapsedTimerRef.current);
   }, [agentStatus]);
 
-  useDialerSocket((message) => {
+  useDialerSocketMessages((message) => {
     if (message.type === "forceLogout") {
       const reasonText =
         message.reason === "kicked_by_admin"
@@ -771,6 +771,11 @@ export default function DialerPage() {
   }
 
   function handleChangeCampaign() {
+    // Defense-in-depth, per explicit request — mirrors the button's
+    // own disabled condition below. The button itself is the primary
+    // guard; this just prevents the same action if somehow triggered
+    // another way (e.g. dev tools) while not actually Not Ready.
+    if (isCallActive || agentStatus?.status !== "NOT_READY") return;
     localStorage.removeItem("cmx_dialer_campaign");
     navigate("/select-campaign");
   }
