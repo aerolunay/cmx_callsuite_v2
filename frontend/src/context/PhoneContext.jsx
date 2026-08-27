@@ -1,40 +1,51 @@
-import { useEffect, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import JsSIP from "jssip";
 import { api } from "../api";
 
 /*
 ==================================================
-PHASE B — JsSIP core: register as the agent's own extension, answer
-inbound RTCSessions.
+PhoneProvider — REAL BUG FIX
+==================================================
+Replaces the old useJsSipPhone hook, which registered/tore down the
+actual SIP/WebRTC connection from WITHIN MiniPhone (itself inside
+DialerPage) — connect on mount, ua.stop() on unmount. Same root issue
+as the WebSocket fix earlier tonight: supervisors/training_quality can
+navigate away from Dialer to Reports/Live Dashboard and back, and
+every round trip fully disconnected and re-registered the actual
+phone from scratch (the "Connecting..." flicker seen in testing).
 
-WHY THIS WORKS FOR BOTH INBOUND AND OUTBOUND WITHOUT BACKEND CHANGES:
-dialerService.js and inboundCallService.js both reach the agent via
-AMI Originate(Channel: PJSIP/${agent.extension}) — completely agnostic
-to what's actually registered there. Today that's a MicroSIP softphone;
-once this hook registers JsSIP under the same extension instead, both
-call directions ring the browser automatically. This hook's job is
-just: register, and answer whatever RTCSession arrives.
+This matters more than it might first look: the new
+InboundCallRedirector auto-redirects back to /dialer the moment a call
+starts ringing, specifically so the agent can answer it — but if the
+phone itself takes a few seconds to re-register after that redirect,
+the call could go unanswered or fail before the SIP connection is even
+back up, undermining the whole point of that fix.
 
-MANUAL/AD-HOC DIALING (Phase C) will add a dial(number) path here too
-— not wired into any UI yet, but the UA/session plumbing below is
-already generic enough to place outgoing calls once that's ready
-(session = phone.call(destination, options)).
+Fix: same pattern as DialerSocketContext — the actual connection lives
+once, at the top of the app (see main.jsx), and survives every in-app
+route change. MiniPhone.jsx consumes it via usePhone() instead of
+opening its own.
 
-CONFERENCE (Phase E) rides on Asterisk's ConfBridge — this hook doesn't
-need special multi-party logic, since audio mixing happens server-side;
-this file only ever manages ONE active RTCSession at a time, matching
-how ConfBridge already presents as a single bridged leg to the agent.
+STABILITY, caught deliberately this time: MiniPhone.jsx's own code
+already assumes answer/hangup/toggleMute/dial never change identity
+across renders (see its own comment on this) — true by accident in
+the old hook (declared fresh every render, but MiniPhone simply didn't
+re-render often enough to expose it). Wrapped in useCallback here so
+that assumption is actually guaranteed, not just lucky — same lesson
+as catching the non-memoized context value earlier tonight.
 ==================================================
 */
 
 const CALL_STATES = {
   IDLE: "idle",
-  INCOMING: "incoming", // ringing, not yet answered by the agent
-  ACTIVE: "active", // answered and connected
+  INCOMING: "incoming",
+  ACTIVE: "active",
   ENDED: "ended",
 };
 
-export function useJsSipPhone() {
+const PhoneContext = createContext(null);
+
+export function PhoneProvider({ children }) {
   const [registered, setRegistered] = useState(false);
   const [registrationError, setRegistrationError] = useState("");
   const [callState, setCallState] = useState(CALL_STATES.IDLE);
@@ -42,11 +53,10 @@ export function useJsSipPhone() {
 
   const uaRef = useRef(null);
   const sessionRef = useRef(null);
+  const sessionIsIncomingRef = useRef(false);
+  const registeredRef = useRef(false);
   const remoteAudioRef = useRef(null);
 
-  // Real <audio> element JsSIP attaches the remote stream to. Created
-  // once and reused — not rendered by the component tree; playback
-  // only, no UI of its own.
   useEffect(() => {
     const audioEl = document.createElement("audio");
     audioEl.autoplay = true;
@@ -78,14 +88,12 @@ export function useJsSipPhone() {
         sockets: [socket],
         uri: `sip:${extension}@${new URL(wssUrl).hostname}`,
         password,
-        // Matches the wizard-generated endpoint's own extension name —
-        // Asterisk identifies the endpoint by the auth username, same
-        // as any other PJSIP registration.
         authorization_user: extension,
         register: true,
       });
 
       ua.on("registered", () => {
+        registeredRef.current = true;
         if (!cancelled) {
           setRegistered(true);
           setRegistrationError("");
@@ -93,10 +101,12 @@ export function useJsSipPhone() {
       });
 
       ua.on("unregistered", () => {
+        registeredRef.current = false;
         if (!cancelled) setRegistered(false);
       });
 
       ua.on("registrationFailed", (e) => {
+        registeredRef.current = false;
         if (!cancelled) {
           setRegistered(false);
           setRegistrationError(e.cause || "Registration failed.");
@@ -106,26 +116,18 @@ export function useJsSipPhone() {
       ua.on("newRTCSession", (data) => {
         const session = data.session;
 
-        // Only one call at a time — matches how a single ConfBridge
-        // leg presents to the agent regardless of how many other
-        // parties are actually in the room server-side. A second
-        // incoming session while one's active gets rejected outright
-        // rather than silently dropping the first.
         if (sessionRef.current) {
           if (data.originator === "remote") session.terminate();
           return;
         }
 
         sessionRef.current = session;
+        sessionIsIncomingRef.current = data.originator === "remote";
         setRemoteIdentity(session.remote_identity?.uri?.user || "");
 
         if (data.originator === "remote") {
           setCallState(CALL_STATES.INCOMING);
         } else {
-          // Outbound (Phase C manual dial) — already "active" the
-          // moment we placed it; JsSIP's own 'progress'/'confirmed'
-          // events don't need a separate ringing state here since the
-          // agent initiated it deliberately.
           setCallState(CALL_STATES.ACTIVE);
         }
 
@@ -159,6 +161,9 @@ export function useJsSipPhone() {
 
     init();
 
+    // Only runs on an actual full page unload/reload or the whole
+    // React tree unmounting — not on ordinary in-app route changes,
+    // since this provider lives above the router in main.jsx.
     return () => {
       cancelled = true;
       if (uaRef.current) {
@@ -168,21 +173,21 @@ export function useJsSipPhone() {
     };
   }, []);
 
-  function answer() {
-    if (sessionRef.current && callState === CALL_STATES.INCOMING) {
+  const answer = useCallback(() => {
+    if (sessionRef.current && sessionIsIncomingRef.current) {
       sessionRef.current.answer({
         mediaConstraints: { audio: true, video: false },
       });
     }
-  }
+  }, []);
 
-  function hangup() {
+  const hangup = useCallback(() => {
     if (sessionRef.current) {
       sessionRef.current.terminate();
     }
-  }
+  }, []);
 
-  function toggleMute() {
+  const toggleMute = useCallback(() => {
     if (!sessionRef.current) return false;
     const isMuted = sessionRef.current.isMuted().audio;
     if (isMuted) {
@@ -191,26 +196,37 @@ export function useJsSipPhone() {
       sessionRef.current.mute({ audio: true });
     }
     return !isMuted;
-  }
+  }, []);
 
-  // Phase C hook point — not wired to any UI yet. Kept here so the
-  // manual-dial work later is additive, not a rewrite of this hook.
-  function dial(destination) {
-    if (!uaRef.current || !registered || sessionRef.current) return;
+  const dial = useCallback((destination) => {
+    if (!uaRef.current || !registeredRef.current || sessionRef.current) return;
     uaRef.current.call(destination, {
       mediaConstraints: { audio: true, video: false },
     });
-  }
+  }, []);
 
-  return {
-    registered,
-    registrationError,
-    callState,
-    remoteIdentity,
-    answer,
-    hangup,
-    toggleMute,
-    dial,
-    CALL_STATES,
-  };
+  const contextValue = useMemo(
+    () => ({
+      registered,
+      registrationError,
+      callState,
+      remoteIdentity,
+      answer,
+      hangup,
+      toggleMute,
+      dial,
+      CALL_STATES,
+    }),
+    [registered, registrationError, callState, remoteIdentity, answer, hangup, toggleMute, dial]
+  );
+
+  return <PhoneContext.Provider value={contextValue}>{children}</PhoneContext.Provider>;
+}
+
+export function usePhone() {
+  const ctx = useContext(PhoneContext);
+  if (!ctx) {
+    throw new Error("usePhone must be used within a PhoneProvider");
+  }
+  return ctx;
 }

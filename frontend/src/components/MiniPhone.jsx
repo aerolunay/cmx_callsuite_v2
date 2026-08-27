@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useJsSipPhone } from "../hooks/useJsSipPhone";
+import { usePhone } from "../context/PhoneContext";
 import InternalTransferModal from "../modals/InternalTransferModal";
 
 /*
@@ -8,8 +8,10 @@ MiniPhone — self-contained softphone widget, styled to read like a
 physical phone (status line, number display, circular action buttons)
 without an actual dial-pad keypad.
 
-Owns the useJsSipPhone hook entirely; DialerPage never touches JsSIP
-directly. DialerPage supplies:
+Consumes the app-wide PhoneContext (see context/PhoneContext.jsx —
+the actual JsSIP connection lives there now, not here, so it survives
+navigating away from and back to this page); DialerPage never touches
+JsSIP directly. DialerPage supplies:
   - agentStatus: gates auto-answer (see isAutoAnswerStatus below)
   - hasActiveCall: whether the APP's own tracked call/inboundCall is
     live right now — the authoritative "on a call" signal, distinct
@@ -141,7 +143,7 @@ export function MiniPhone({
   onHoldLineTwo,
   onUnholdLineTwo,
 }) {
-  const phone = useJsSipPhone();
+  const phone = usePhone();
   const autoAnsweredCallRef = useRef(null); // guards against re-answering the same ring on every re-render
 
   const [dialNumber, setDialNumber] = useState("");
@@ -414,9 +416,12 @@ export function MiniPhone({
     if (phone.callState !== phone.CALL_STATES.INCOMING) {
       autoAnsweredCallRef.current = null;
     }
-    // phone's functions are stable across renders (see useJsSipPhone —
-    // answer/hangup/toggleMute/dial don't change identity), so only
-    // the actual state values need to be dependencies here.
+    // phone's functions are stable across renders — actually
+    // guaranteed now via useCallback in PhoneContext.jsx (previously
+    // just assumed, since the old hook redeclared them every render
+    // but MiniPhone simply didn't re-render often enough to expose
+    // it) — so only the actual state values need to be dependencies
+    // here.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phone.callState, agentStatus, phone.remoteIdentity]);
 
