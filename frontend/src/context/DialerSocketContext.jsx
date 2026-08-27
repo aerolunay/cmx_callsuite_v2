@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useRef } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef } from "react";
 
 /*
 ==================================================
@@ -82,12 +82,24 @@ export function DialerSocketProvider({ children }) {
     };
   }, []);
 
-  function subscribe(listener) {
+  // REAL BUG FIX, caught before shipping — same class of issue as the
+  // earlier hasLeads polling bug tonight: subscribe was a plain
+  // function declared fresh every render, and { subscribe } was a new
+  // object literal every render too — meaning every consumer's own
+  // useEffect([ctx]) would tear down and resubscribe on every single
+  // re-render of this provider (which happens often, since it sits
+  // near the top of the whole app). useRef gives subscribe a stable
+  // identity across renders; useMemo with an empty dependency array
+  // means the context VALUE object itself never changes reference
+  // either, so consumers genuinely only subscribe once.
+  const subscribeRef = useRef((listener) => {
     listenersRef.current.add(listener);
     return () => listenersRef.current.delete(listener);
-  }
+  });
 
-  return <DialerSocketContext.Provider value={{ subscribe }}>{children}</DialerSocketContext.Provider>;
+  const contextValue = useMemo(() => ({ subscribe: subscribeRef.current }), []);
+
+  return <DialerSocketContext.Provider value={contextValue}>{children}</DialerSocketContext.Provider>;
 }
 
 /*

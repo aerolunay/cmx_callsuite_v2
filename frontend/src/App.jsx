@@ -8,10 +8,19 @@ import LiveStatusDashboard from "./pages/LiveStatusDashboard";
 import ReportsPage from "./pages/ReportsPage";
 import RecordingsPage from "./pages/RecordingsPage";
 import ProtectedRoute from "./components/ProtectedRoute";
+import InboundCallRedirector from "./components/InboundCallRedirector";
 
 export default function App() {
   return (
-    <Routes>
+    <>
+      {/* Per explicit request — auto-redirects to /dialer the instant
+          a call starts ringing for this agent, regardless of which
+          page they're currently on. Needs to be inside the Router
+          (for useNavigate/useLocation) but not tied to any single
+          route, so it sits alongside <Routes> rather than inside any
+          one of them. */}
+      <InboundCallRedirector />
+      <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route
         path="/"
@@ -70,5 +79,6 @@ export default function App() {
         }
       />
     </Routes>
+    </>
   );
 }
