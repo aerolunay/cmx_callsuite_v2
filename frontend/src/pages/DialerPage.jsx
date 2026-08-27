@@ -134,14 +134,43 @@ export default function DialerPage() {
 
   // Hide "Dial Next Number" entirely for campaigns with no leads at
   // all (e.g. CMXBSMSC, which is inbound-only and relies on the
-  // Callback feature instead) — checked once campaign is known.
+  // Callback feature instead). Also re-checks every time the agent
+  // goes READY, not just once when the campaign first loads — REAL
+  // BUG FIX: this used to only run on campaign change, so once
+  // hasLeads flipped to false (a real "no leads found" during
+  // dialing), the only way back was refreshing the page or switching
+  // campaigns and back — even after new leads were added or old ones
+  // reset. Re-running it right as the agent becomes able to dial
+  // again makes this self-healing with no manual refresh needed.
   useEffect(() => {
     if (!campaign) return;
+    if (agentStatus?.status !== "READY") return;
     api
       .hasLeads(campaign.campaign_id)
       .then((data) => setHasLeads(data.hasLead))
       .catch(() => setHasLeads(true)); // fail open — don't hide the button just because this check errored
-  }, [campaign]);
+  }, [campaign, agentStatus?.status]);
+
+  // Per explicit request — agents shouldn't need to switch auxes
+  // (toggle their own status) at all to recover once leads are
+  // replenished. While hasLeads is false, keep quietly re-checking in
+  // the background every 20s; stops on its own the moment it comes
+  // back true (this effect re-runs and its own cleanup clears the
+  // interval, since hasLeads is in the dependency array). No interval
+  // runs at all once hasLeads is true — nothing to recover from.
+  useEffect(() => {
+    if (!campaign) return;
+    if (hasLeads) return;
+
+    const interval = setInterval(() => {
+      api
+        .hasLeads(campaign.campaign_id)
+        .then((data) => setHasLeads(data.hasLead))
+        .catch(() => {}); // transient poll failure — just try again next tick
+    }, 20000);
+
+    return () => clearInterval(interval);
+  }, [campaign, hasLeads]);
 
   // Restore an in-progress call after a page refresh or the app being
   // fully closed and reopened. The backend (dialerService.js's
