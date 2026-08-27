@@ -166,6 +166,52 @@ async function markCallEnded(call) {
 
 /*
 ==================================================
+discardNeverConnectedCall — REAL BUG FIX, confirmed live: startCall()'s
+own failure paths (agent's softphone not registered, Originate itself
+rejected, the agent never joins within the 30s timeout, or the
+customer leg fails to set up even after the agent DID join) were all
+calling markCallEnded() — which sets the agent to AFTER_CALL_WORK,
+the status the frontend's disposition form is gated on. But start-call
+itself REJECTS in every one of these cases, meaning the frontend never
+received a callId/lead to populate its own call/lead state with in the
+first place. Net effect: the agent's backend status flips to ACW, but
+there's no call/lead for the disposition form's own gating condition
+to find — stuck in ACW with literally nothing on screen to act on,
+confirmed via a real test where the only way out was manually purging
+the agent's status_log row and hard-refreshing.
+
+None of these cases represent a call that actually happened — nobody
+ever spoke to a customer, so there's nothing to disposition at all.
+This returns the agent straight to READY instead, same principle as
+handleAutomaticDialOutcome's own AMD/busy/no-answer handling earlier
+tonight — deliberately skipping AFTER_CALL_WORK is what keeps the
+(gated on it, not on call.status) disposition form from ever
+appearing for something the agent never actually experienced.
+==================================================
+*/
+async function discardNeverConnectedCall(call) {
+  if (call._customerOriginateResponseListener) {
+    ami.events.removeListener("OriginateResponse", call._customerOriginateResponseListener);
+    call._customerOriginateResponseListener = null;
+  }
+
+  if (call.afterCallWorkTriggered) return; // already handled via some other path
+  call.afterCallWorkTriggered = true;
+
+  activeCalls.delete(call.callId);
+
+  try {
+    await agentStatusService.setStatus(call.appUserId, "READY", {
+      relatedCallDirection: "outbound",
+      relatedCampaignId: call.campaignId,
+    });
+  } catch (err) {
+    console.error("[dialerService] Failed to return agent to READY after a call that never connected:", err.message);
+  }
+}
+
+/*
+==================================================
 getNextLead
 ==================================================
 Per spec: try vicidial_hopper first; if empty, fall back to querying
@@ -478,7 +524,7 @@ function startCall({ appUserId, agentUser, agentExtension, lead, leadId, phoneNu
 
         resolve({ callId, room });
       } catch (err) {
-        await markCallEnded(callState);
+        await discardNeverConnectedCall(callState);
         releaseRoomSuffix(suffix);
         reject(err);
       }
@@ -493,7 +539,7 @@ function startCall({ appUserId, agentUser, agentExtension, lead, leadId, phoneNu
       settled = true;
       ami.events.removeListener("ConfbridgeJoin", onConfbridgeJoin);
       ami.events.removeListener("OriginateResponse", onOriginateResponse);
-      markCallEnded(callState);
+      discardNeverConnectedCall(callState);
       releaseRoomSuffix(suffix);
       reject(new Error(`Timed out waiting for agent to join room ${room}.`));
     }, 30000);
@@ -517,7 +563,7 @@ function startCall({ appUserId, agentUser, agentExtension, lead, leadId, phoneNu
       clearTimeout(joinTimeout);
       ami.events.removeListener("ConfbridgeJoin", onConfbridgeJoin);
       ami.events.removeListener("OriginateResponse", onOriginateResponse);
-      markCallEnded(callState);
+      discardNeverConnectedCall(callState);
       releaseRoomSuffix(suffix);
       reject(new Error(
         `Asterisk failed to originate the agent leg to ${agentExtension} (reason ${evt.reason}). ` +
@@ -542,7 +588,7 @@ function startCall({ appUserId, agentUser, agentExtension, lead, leadId, phoneNu
       clearTimeout(joinTimeout);
       ami.events.removeListener("ConfbridgeJoin", onConfbridgeJoin);
       ami.events.removeListener("OriginateResponse", onOriginateResponse);
-      markCallEnded(callState);
+      discardNeverConnectedCall(callState);
       releaseRoomSuffix(suffix);
       reject(err);
     });
