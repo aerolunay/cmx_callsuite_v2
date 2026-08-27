@@ -833,7 +833,20 @@ export default function DialerPage() {
                 className="link"
                 style={{ padding: 0 }}
                 onClick={handleChangeCampaign}
-                disabled={isCallActive}
+                // Per explicit request — only allow switching campaigns
+                // while specifically Not Ready, not just "no active
+                // call." Ready/on-hold/ACW/break-type statuses are all
+                // still "in service" states; switching mid-shift risks
+                // exactly the class of stale-campaign-assignment bug
+                // fixed earlier tonight (an agent's related_campaign_id
+                // needs to correctly reflect which campaign they're
+                // ACTIVELY working, not just what they were last on).
+                disabled={isCallActive || agentStatus?.status !== "NOT_READY"}
+                title={
+                  agentStatus?.status !== "NOT_READY"
+                    ? "Set your status to Not Ready before switching campaigns"
+                    : undefined
+                }
               >
                 Change campaign
               </button>
