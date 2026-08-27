@@ -647,6 +647,14 @@ router.get("/dialer/has-leads", requireAuth, async (req, res) => {
     const lead = await dialerService.getNextLead(campaignId);
     return res.json({ success: true, hasLead: Boolean(lead) });
   } catch (error) {
+    if (error.code === "OUTSIDE_CALLING_HOURS") {
+      // Not a real error — this endpoint is a plain existence check,
+      // reusing getNextLead()'s own logic (including its calling-hours
+      // enforcement) rather than duplicating it. Outside calling
+      // hours correctly means "no, don't show as dialable right now,"
+      // same as genuinely having zero leads — not a 500.
+      return res.json({ success: true, hasLead: false, code: "OUTSIDE_CALLING_HOURS" });
+    }
     console.error("GET /api/dialer/has-leads failed:", error);
     return res.status(500).json({ success: false, message: "Failed to check for leads." });
   }
