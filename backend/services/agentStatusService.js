@@ -248,9 +248,10 @@ async function getAnyReadyAgentWithExtension(campaignId, excludeAppUserIds = [])
       JOIN cmx_dialer.agent_campaign_assignments aca
         ON aca.app_user_id = asl.app_user_id AND aca.active = 1 AND aca.campaign_id = ?
       WHERE asl.status = 'READY' AND asl.ended_at IS NULL
+        AND asl.related_campaign_id = ?
       ORDER BY asl.status_log_id ASC
     `,
-    [campaignId]
+    [campaignId, campaignId]
   );
 
   // Build the full FIFO-ordered pool of genuinely eligible candidates

@@ -120,8 +120,9 @@ router.get("/campaign-has-logged-in-agent", async (req, res) => {
         JOIN cmx_dialer.agent_campaign_assignments aca
           ON aca.app_user_id = asl.app_user_id AND aca.active = 1
         WHERE aca.campaign_id = ? AND asl.ended_at IS NULL
+          AND asl.related_campaign_id = ?
       `,
-      [campaignId]
+      [campaignId, campaignId]
     );
     const hasLoggedInAgent = rows[0].n > 0;
     return res.type("text/plain").send(hasLoggedInAgent ? "1" : "0");
