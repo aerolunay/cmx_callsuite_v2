@@ -9,10 +9,26 @@ const db = require("../config/db");
 const { transporter } = require("../config/mailer");
 const { buildOtpEmail } = require("../services/emailTemplates");
 const agentStatusService = require("../services/agentStatusService");
+const { version: BACKEND_VERSION } = require("../package.json");
 
 const router = express.Router();
 
 const OTP_EXPIRY_MINUTES = Number(process.env.OTP_EXPIRY_MINUTES || 10);
+
+/*
+==================================================
+GET /api/auth/version
+==================================================
+Per explicit request — shown on the login page (before anyone's
+authenticated, hence no requireAuth here) and in the header. Reads the
+backend's own version straight from its package.json, so it always
+reflects whatever's actually running — no separate value to keep in
+sync by hand.
+==================================================
+*/
+router.get("/version", (req, res) => {
+  return res.json({ success: true, version: BACKEND_VERSION });
+});
 const OTP_LENGTH = 6;
 const MAX_OTP_ATTEMPTS = 5; // guesses per code before it's invalidated
 

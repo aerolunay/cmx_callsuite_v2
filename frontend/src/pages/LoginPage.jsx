@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api";
 import { useAuth } from "../context/AuthContext";
+import { useAppVersion } from "../hooks/useAppVersion";
 import Setup2FAModal from "../modals/Setup2FAModal";
 import logo from "../assets/cmxlogo.png";
 
@@ -25,6 +26,7 @@ function formatCountdown(totalSeconds) {
 }
 
 export default function LoginPage() {
+  const appVersion = useAppVersion();
   const [step, setStep] = useState(STEP_EMAIL);
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
@@ -175,7 +177,7 @@ export default function LoginPage() {
         <div className="logo-row">
           <img src={logo} alt="CallMax" />
         </div>
-        <h1>CMX Dialer</h1>
+        <h1>CMX Call Suite</h1>
         <p className="subtitle">Sign in with your registered email</p>
 
         {error && <div className="error">{error}</div>}
@@ -274,6 +276,8 @@ export default function LoginPage() {
             </button>
           </form>
         )}
+
+        {appVersion && <div className="auth-version">version: {appVersion}</div>}
       </div>
 
       {showTotpPrompt && (

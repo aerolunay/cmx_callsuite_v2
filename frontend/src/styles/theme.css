@@ -37,12 +37,24 @@ body {
   align-items: center;
   justify-content: space-between;
   padding: 0 24px;
-  height: 64px;
+  height: 72px; /* was 64px — widened to fit the new version line below the logo without cramping it */
+}
+
+.header-logo {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .header-logo img {
   height: 42px;
   display: block;
+}
+
+.header-version {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.55);
+  white-space: nowrap;
 }
 
 .header-right {
@@ -127,6 +139,13 @@ body {
 
 .auth-card .logo-row img {
   height: 32px;
+}
+
+.auth-version {
+  margin-top: 18px;
+  font-size: 11px;
+  color: #a3aab8;
+  text-align: center;
 }
 
 .auth-card h1 {
@@ -613,7 +632,7 @@ other pages sharing the same base classes.
   display: block;
 }
 
-@media (min-width: 900px) {
+@media (min-width: 700px) {
   .dialer-layout {
     grid-template-columns: 1fr 2fr;
     gap: 20px;
@@ -949,6 +968,19 @@ other pages sharing the same base classes.
 
 .phone-btn-mute:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.25);
+}
+
+/* Per explicit request — Mute/Hold need a visibly distinct color
+   while actively engaged, for both Line 1 and Line 2 independently.
+   Applied via an extra "phone-btn-active" class alongside
+   phone-btn-mute, rather than replacing it — same base sizing/shape,
+   just a different background. */
+.phone-btn-mute.phone-btn-active:not(:disabled) {
+  background: var(--cmx-warning);
+}
+
+.phone-btn-mute.phone-btn-active:hover:not(:disabled) {
+  background: #9c4a0c;
 }
 
 .phone-hint {

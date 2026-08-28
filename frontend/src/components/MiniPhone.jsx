@@ -533,7 +533,7 @@ export function MiniPhone({
             </button>
             <button
               type="button"
-              className="phone-btn phone-btn-mute"
+              className={`phone-btn phone-btn-mute${isMuted ? " phone-btn-active" : ""}`}
               onClick={handleToggleMute}
               disabled={!isActive}
               title={isMuted ? "Unmute" : "Mute"}
@@ -542,7 +542,7 @@ export function MiniPhone({
             </button>
             <button
               type="button"
-              className="phone-btn phone-btn-mute"
+              className={`phone-btn phone-btn-mute${onHold ? " phone-btn-active" : ""}`}
               onClick={onToggleHold}
               disabled={!canHold}
               title={onHold ? "Unhold" : "Hold"}
@@ -683,7 +683,7 @@ export function MiniPhone({
             </button>
             <button
               type="button"
-              className="phone-btn phone-btn-mute"
+              className={`phone-btn phone-btn-mute${isMuted ? " phone-btn-active" : ""}`}
               onClick={handleToggleMute}
               disabled={!isActive}
               title={isMuted ? "Unmute" : "Mute"}
@@ -692,7 +692,7 @@ export function MiniPhone({
             </button>
             <button
               type="button"
-              className="phone-btn phone-btn-mute"
+              className={`phone-btn phone-btn-mute${lineTwoStatus.line2OnHold ? " phone-btn-active" : ""}`}
               onClick={lineTwoStatus.line2OnHold ? handleUnholdLineTwoClick : handleHoldLineTwoClick}
               disabled={!lineTwoStatus.line2HasConnected || lineTwoBusy}
               title={lineTwoStatus.line2OnHold ? "Unhold Line 2" : "Hold Line 2"}

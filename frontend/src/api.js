@@ -37,6 +37,7 @@ async function request(path, options = {}) {
 export const api = {
   // Auth
   checkUser: (email) => request("/auth/check-user", { method: "POST", body: JSON.stringify({ email }) }),
+  getVersion: () => request("/auth/version"),
   requestOtp: (email) =>
     request("/auth/request-otp", { method: "POST", body: JSON.stringify({ email }) }),
   verifyOtp: (email, code) =>

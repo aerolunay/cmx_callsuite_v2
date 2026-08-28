@@ -1,6 +1,6 @@
 {
   "name": "cmx-dialer-backend",
-  "version": "1.0.0",
+  "version": "2.11.9",
   "private": true,
   "description": "CMX Dialer backend — ViciDial agent interface replacement using direct AMI integration.",
   "main": "server.js",
