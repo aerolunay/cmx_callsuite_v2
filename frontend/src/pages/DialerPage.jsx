@@ -10,6 +10,7 @@ import { useDialerSocketMessages } from "../context/DialerSocketContext";
 import { MiniPhone } from "../components/MiniPhone";
 import { getOutboundDispositionsForCampaign, getInboundDispositionsForCampaign } from "../constants/dispositions";
 import { formatDuration, durationColorFor } from "../utils/format";
+import { playConnectedBeep } from "../utils/audio";
 
 
 // Agent-selectable statuses. IN_CALL and AFTER_CALL_WORK are set only
@@ -373,6 +374,17 @@ export default function DialerPage() {
           setInboundDisposition("");
           setInboundCallbackAt("");
         }
+
+        // Per explicit request — a short, agent-only beep the moment
+        // the call actually connects. Checked against the PREVIOUS
+        // status specifically, not just "is it agent_connected now",
+        // so this fires exactly once at the real transition — not on
+        // every subsequent WS message that happens to arrive while
+        // already connected (e.g. an onHold toggle).
+        if (prev?.status !== "agent_connected" && message.status === "agent_connected") {
+          playConnectedBeep();
+        }
+
         return {
           callId: message.callId,
           status: message.status,
