@@ -713,7 +713,12 @@ router.post("/dialer/start-call", requireAuth, async (req, res) => {
     }
 
     const [campaignRows] = await db.execute(
-      `SELECT campaign_cid FROM vicidial_campaigns WHERE campaign_id = ? AND active = 'Y'`,
+      `
+        SELECT c.campaign_cid, s.campaign_type
+        FROM asterisk.vicidial_campaigns c
+        LEFT JOIN cmx_dialer.campaign_settings s ON s.campaign_id = c.campaign_id
+        WHERE c.campaign_id = ? AND c.active = 'Y'
+      `,
       [campaignId]
     );
 
@@ -721,8 +726,18 @@ router.post("/dialer/start-call", requireAuth, async (req, res) => {
       return res.status(404).json({ success: false, message: "Campaign not found or inactive." });
     }
 
-    const { campaign_cid: campaignCid } = campaignRows[0];
+    const { campaign_cid: campaignCid, campaign_type: campaignType } = campaignRows[0];
     const { appUserId, username: agentUser, extension: agentExtension } = req.session.agent;
+
+    // Per explicit request — AMD must only run on OUTBOUND campaigns
+    // dialing a real lead from the hopper. Two things exclude it:
+    // BLENDED campaigns entirely, and manual dial specifically — the
+    // frontend's own manual-dial path (DialerPage.jsx) sends
+    // leadId=0 as its sentinel value precisely because there's no
+    // real lead row backing it (see handleManualDial), so that's the
+    // correct, existing signal to check here rather than inventing a
+    // new one.
+    const shouldRunAmd = campaignType === "OUTBOUND" && Number(leadId) !== 0;
 
     if (!agentExtension) {
       return res.status(409).json({
@@ -775,6 +790,7 @@ router.post("/dialer/start-call", requireAuth, async (req, res) => {
       campaignCid,
       campaignId,
       callType,
+      shouldRunAmd,
     });
 
     return res.json({ success: true, ...result });

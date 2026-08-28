@@ -397,7 +397,7 @@ function normalizePhoneNumber(phoneNumber) {
   return digits;
 }
 
-function startCall({ appUserId, agentUser, agentExtension, lead, leadId, phoneNumber, campaignCid, campaignId, callType = "REGULAR" }) {
+function startCall({ appUserId, agentUser, agentExtension, lead, leadId, phoneNumber, campaignCid, campaignId, callType = "REGULAR", shouldRunAmd = true }) {
   phoneNumber = normalizePhoneNumber(phoneNumber);
   return new Promise(async (resolve, reject) => {
     let suffix;
@@ -487,6 +487,16 @@ function startCall({ appUserId, agentUser, agentExtension, lead, leadId, phoneNu
           Priority: 1,
           CallerID: `"CMX Outbound" <${campaignCid}>`,
           Async: "true",
+          // Per explicit request — AMD must only run for OUTBOUND
+          // campaigns dialing a real lead, never for BLENDED campaigns
+          // or a manually-typed number. shouldRunAmd is computed once
+          // in dialerRoutes.js (the one call site) and threaded all
+          // the way through as a real parameter rather than
+          // re-derived here. See extensions.conf's _1NXXNXXXXXX /
+          // _NXXNXXXXXX patterns — they check this exact variable
+          // before deciding whether to include U(amd-check) in the
+          // Dial() options string at all.
+          Variable: `SKIP_AMD=${shouldRunAmd ? "0" : "1"}`,
         });
 
         callState.status = "ringing_customer";
