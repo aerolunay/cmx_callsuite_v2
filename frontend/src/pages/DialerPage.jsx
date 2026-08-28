@@ -8,7 +8,7 @@ import { api } from "../api";
 import { useAuth } from "../context/AuthContext";
 import { useDialerSocketMessages } from "../context/DialerSocketContext";
 import { MiniPhone } from "../components/MiniPhone";
-import { DISPOSITIONS, getInboundDispositionsForCampaign } from "../constants/dispositions";
+import { getOutboundDispositionsForCampaign, getInboundDispositionsForCampaign } from "../constants/dispositions";
 import { formatDuration, durationColorFor } from "../utils/format";
 
 
@@ -1183,7 +1183,7 @@ export default function DialerPage() {
               <div className="card">
                 <h3>Disposition</h3>
                 <form onSubmit={handleSaveDisposition}>
-                  {DISPOSITIONS.map((d) => (
+                  {getOutboundDispositionsForCampaign(campaign?.campaign_id).map((d) => (
                     <label key={d.value} className="disposition-row">
                       <input
                         type="radio"

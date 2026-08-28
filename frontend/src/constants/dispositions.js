@@ -15,7 +15,44 @@ export const DISPOSITIONS = [
   { value: "XFER_CONF", label: "Transferred Call / Conference Call" },
 ];
 
-const LABEL_BY_VALUE = Object.fromEntries(DISPOSITIONS.map((d) => [d.value, d.label]));
+/*
+==================================================
+BSMSC_OUTBOUND_DISPOSITIONS
+==================================================
+Per explicit request — adds "Screening Completed" ALONGSIDE the
+generic outbound list (not a replacement, unlike BSMSC's own inbound
+override below). Reuses the same value "SCREENING_COMPLETED" as
+BSMSC_INBOUND_DISPOSITIONS's own entry — same reasoning as that list's
+own comment: keeps the underlying value consistent across
+inbound/outbound for anywhere disposition values get aggregated later.
+==================================================
+*/
+export const BSMSC_OUTBOUND_DISPOSITIONS = [
+  { value: "SCREENING_COMPLETED", label: "Screening Completed" },
+  ...DISPOSITIONS,
+];
+
+/*
+==================================================
+getOutboundDispositionsForCampaign
+==================================================
+Mirrors getInboundDispositionsForCampaign's own pattern below — single
+place this campaign-scoping decision lives, so DialerPage.jsx calls
+this instead of referencing DISPOSITIONS directly.
+==================================================
+*/
+export function getOutboundDispositionsForCampaign(campaignId) {
+  if (campaignId === "CMXBSMSC") return BSMSC_OUTBOUND_DISPOSITIONS;
+  return DISPOSITIONS;
+}
+
+// Merges BOTH outbound lists — same reasoning as inbound's own
+// INBOUND_LABEL_BY_VALUE below: a stored disposition value in the
+// database could have come from either list, so a lookup-by-value
+// needs to resolve correctly regardless of which one it came from.
+// (BSMSC_OUTBOUND_DISPOSITIONS already contains everything in
+// DISPOSITIONS plus the one new entry, so this alone covers both.)
+const LABEL_BY_VALUE = Object.fromEntries(BSMSC_OUTBOUND_DISPOSITIONS.map((d) => [d.value, d.label]));
 
 export function dispositionLabel(value) {
   return LABEL_BY_VALUE[value] || value;
