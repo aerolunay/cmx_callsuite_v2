@@ -1222,23 +1222,18 @@ async function saveDisposition({
   // a product assumption, not confirmed with anyone. The alternative
   // would be returning them to whatever they were in before the call
   // (e.g. NOT_READY), which ViciDial itself doesn't do by default
-  // either, so READY seemed the safer default to start with.
-  try {
-    // REAL BUG FIX, confirmed live: this used to call setStatus with no
-    // options at all, meaning the vast majority of "finish a call,
-    // submit disposition, go back to Ready" transitions — the normal,
-    // everyday path — recorded related_campaign_id = NULL. Since
-    // getAnyReadyAgentWithExtension's own cross-campaign fix (earlier
-    // tonight) requires related_campaign_id to match the inbound
-    // call's campaign, an agent who went Ready this way could NEVER be
-    // matched for any campaign's inbound call at all — confirmed live
-    // with only one agent logged in, no inbound call ever reached
-    // them. campaignId is already a parameter here; just needed to
-    // actually be passed through.
-    await agentStatusService.setStatus(appUserId, "READY", { relatedCampaignId: campaignId });
-  } catch (err) {
-    console.error("[dialerService] Failed to set READY status after disposition:", err.message);
-  }
+  // either — but that transition (and the actual campaign tag) is
+  // handled entirely by the route handler below, not here.
+  //
+  // REAL BUG FIX, confirmed live: this used to ALSO call setStatus
+  // here, independently of the route handler (dialerRoutes.js) doing
+  // the exact same thing right after this function returned — meaning
+  // every disposition save created TWO status rows within the same
+  // request, milliseconds apart. The route's own call is the original,
+  // authoritative one (it's what supports the "set me Not Ready after
+  // this" checkbox, which this function has no knowledge of at all),
+  // so removed the duplicate here rather than the other way around.
+  // See dialerRoutes.js's own comment on this for the full story.
 
   return { disposition, vicidialStatus };
 }

@@ -966,8 +966,24 @@ router.post("/dialer/disposition/:callId", requireAuth, async (req, res) => {
     // touched agent status at all, unlike inbound's finalizeInboundCall
     // which always auto-set READY. Fixed here to match, and to support
     // the "set me Not Ready after this" checkbox.
+    //
+    // REAL BUG FIX, confirmed live: this call didn't pass
+    // relatedCampaignId at all. dialerService.js's own saveDisposition
+    // ALSO independently called setStatus("READY", {relatedCampaignId})
+    // right before this ran — meaning every disposition save created
+    // TWO status rows within the same request, milliseconds apart: one
+    // correctly tagged, immediately overwritten by this one without a
+    // tag. Net effect: the agent's real, final status row always ended
+    // up with related_campaign_id = NULL, making them permanently
+    // unmatchable for that campaign's inbound calls despite showing
+    // Ready. Fixed by making THIS call (the original, authoritative
+    // one — it's what supports setNotReady) correctly tag the
+    // campaign, and removing the now-redundant duplicate from
+    // saveDisposition() itself (see that function's own comment).
     try {
-      await agentStatusService.setStatus(appUserId, setNotReady ? "NOT_READY" : "READY");
+      await agentStatusService.setStatus(appUserId, setNotReady ? "NOT_READY" : "READY", {
+        relatedCampaignId: campaignId,
+      });
     } catch (statusErr) {
       console.error("Failed to update agent status after disposition:", statusErr.message);
     }
