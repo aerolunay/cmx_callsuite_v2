@@ -11,6 +11,7 @@ import { MiniPhone } from "../components/MiniPhone";
 import { getOutboundDispositionsForCampaign, getInboundDispositionsForCampaign } from "../constants/dispositions";
 import { formatDuration, durationColorFor } from "../utils/format";
 import { playConnectedBeep } from "../utils/audio";
+import { useFlashingTitle } from "../hooks/useFlashingTitle";
 
 
 // Agent-selectable statuses. IN_CALL and AFTER_CALL_WORK are set only
@@ -74,6 +75,7 @@ export default function DialerPage() {
   const [lead, setLead] = useState(null);
   const [call, setCall] = useState(null); // { callId, room, status }
   const [inboundCall, setInboundCall] = useState(null); // { status, room, callerIdNumber }
+  useFlashingTitle(inboundCall?.status === "ringing_agent");
   const [inboundFirstName, setInboundFirstName] = useState("");
   const [inboundLastName, setInboundLastName] = useState("");
   const [inboundComments, setInboundComments] = useState("");
