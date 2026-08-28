@@ -671,6 +671,40 @@ Confirmed from the real test call transcript:
 ==================================================
 */
 function registerCallEventTracking() {
+  // REAL BUG FIX, per explicit request — confirmed live: when the
+  // CUSTOMER hangs up first, the ConfbridgeLeave/Hangup listeners
+  // below used to call bare markCallEnded(call) — which updates
+  // status/broadcasts/sets AFTER_CALL_WORK, but never actually hangs
+  // up the agent's own channel or releases the room. The agent's own
+  // comment above this function already knew the agent's channel
+  // "does NOT close it automatically... this is why endCall() below
+  // explicitly hangs up the agent leg too" — but that fix only ever
+  // lived in the AGENT-initiated endCall() path, never here. Net
+  // effect: agent's UI correctly showed "call ended" / the
+  // disposition form, but their own SIP leg stayed live in the
+  // ConfBridge until they manually clicked Hang Up — exactly the
+  // reported symptom.
+  //
+  // Mirrors endCall()'s own hasExtraParticipants guard exactly: if a
+  // Conference/Transfer third party is still in the room, the agent
+  // should stay connected to them, not get forcibly hung up just
+  // because the ORIGINAL customer happened to leave first.
+  async function finalizeCustomerInitiatedEnd(call) {
+    const hasExtraParticipants = call.extraParticipants && call.extraParticipants.length > 0;
+
+    if (!hasExtraParticipants && call.agentChannel) {
+      await ami.hangupChannel(call.agentChannel).catch((err) => {
+        console.error(`[dialerService] Failed to hang up agent channel ${call.agentChannel}:`, err.message);
+      });
+    }
+
+    await markCallEnded(call);
+
+    if (!hasExtraParticipants) {
+      releaseRoomSuffix(call.roomSuffix);
+    }
+  }
+
   ami.events.on("ConfbridgeJoin", async (evt) => {
     for (const call of activeCalls.values()) {
       if (evt.conference !== call.room) continue;
@@ -712,7 +746,7 @@ function registerCallEventTracking() {
       // customer to the cmxhold extension) — not a real hangup.
       if (call.onHold && evt.channel === call.customerChannel) continue;
       if (evt.channel === call.customerChannel) {
-        markCallEnded(call);
+        finalizeCustomerInitiatedEnd(call);
       }
     }
   });
@@ -729,7 +763,7 @@ function registerCallEventTracking() {
         // customer left, before they'd even gotten a chance to decide
         // what to do about it.
         if (call.lineTwo) continue;
-        markCallEnded(call);
+        finalizeCustomerInitiatedEnd(call);
       }
     }
   });
