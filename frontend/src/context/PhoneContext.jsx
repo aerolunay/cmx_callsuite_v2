@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import JsSIP from "jssip";
 import { api } from "../api";
+import { useAuth } from "./AuthContext";
 
 /*
 ==================================================
@@ -46,6 +47,9 @@ const CALL_STATES = {
 const PhoneContext = createContext(null);
 
 export function PhoneProvider({ children }) {
+  const { agent } = useAuth();
+  const isLoggedIn = Boolean(agent);
+
   const [registered, setRegistered] = useState(false);
   const [registrationError, setRegistrationError] = useState("");
   const [callState, setCallState] = useState(CALL_STATES.IDLE);
@@ -68,6 +72,30 @@ export function PhoneProvider({ children }) {
   }, []);
 
   useEffect(() => {
+    // REAL BUG FIX, confirmed live: an agent who fully logged out (no
+    // browser tab open at all, per their own confirmation) still had
+    // their SIP endpoint show as Reachable after an Asterisk restart.
+    // Root cause: this effect used to run once on mount with an empty
+    // dependency array — connecting the instant the app loaded and
+    // only disconnecting on a real page unload/full tree unmount. But
+    // logging out (within this SPA) just destroys the server-side
+    // session and navigates to /login WITHIN THE SAME running React
+    // instance — it does NOT unmount PhoneProvider at all, since it
+    // sits above the router in main.jsx. The already-established
+    // JsSIP connection had no reason to know the session was gone and
+    // just kept running indefinitely. Now explicitly gated on
+    // AuthContext's own login state, so logging out actually tears
+    // the connection down (ua.stop() below), and logging back in
+    // (even as a different agent, same tab) correctly re-establishes
+    // it fresh.
+    if (!isLoggedIn) {
+      setRegistered(false);
+      setRegistrationError("");
+      setCallState(CALL_STATES.IDLE);
+      setRemoteIdentity("");
+      return;
+    }
+
     let cancelled = false;
 
     async function init() {
@@ -161,9 +189,11 @@ export function PhoneProvider({ children }) {
 
     init();
 
-    // Only runs on an actual full page unload/reload or the whole
-    // React tree unmounting — not on ordinary in-app route changes,
-    // since this provider lives above the router in main.jsx.
+    // Runs on logout (isLoggedIn flips to false, re-running this
+    // effect) as well as an actual full page unload/reload or the
+    // whole React tree unmounting — not on ordinary in-app route
+    // changes while still logged in, since isLoggedIn doesn't change
+    // then and this effect doesn't re-run at all.
     return () => {
       cancelled = true;
       if (uaRef.current) {
@@ -171,7 +201,7 @@ export function PhoneProvider({ children }) {
         uaRef.current = null;
       }
     };
-  }, []);
+  }, [isLoggedIn]);
 
   const answer = useCallback(() => {
     if (sessionRef.current && sessionIsIncomingRef.current) {
