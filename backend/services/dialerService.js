@@ -1224,7 +1224,18 @@ async function saveDisposition({
   // (e.g. NOT_READY), which ViciDial itself doesn't do by default
   // either, so READY seemed the safer default to start with.
   try {
-    await agentStatusService.setStatus(appUserId, "READY");
+    // REAL BUG FIX, confirmed live: this used to call setStatus with no
+    // options at all, meaning the vast majority of "finish a call,
+    // submit disposition, go back to Ready" transitions — the normal,
+    // everyday path — recorded related_campaign_id = NULL. Since
+    // getAnyReadyAgentWithExtension's own cross-campaign fix (earlier
+    // tonight) requires related_campaign_id to match the inbound
+    // call's campaign, an agent who went Ready this way could NEVER be
+    // matched for any campaign's inbound call at all — confirmed live
+    // with only one agent logged in, no inbound call ever reached
+    // them. campaignId is already a parameter here; just needed to
+    // actually be passed through.
+    await agentStatusService.setStatus(appUserId, "READY", { relatedCampaignId: campaignId });
   } catch (err) {
     console.error("[dialerService] Failed to set READY status after disposition:", err.message);
   }

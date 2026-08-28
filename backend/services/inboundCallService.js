@@ -492,7 +492,9 @@ async function endInboundCall(room) {
 
     if (appUserId && previousStatus === "ringing_agent") {
       try {
-        await agentStatusService.setStatus(appUserId, "READY");
+        // Same fix as dialerService.js's own saveDisposition — call is
+        // already in scope here, just needed to actually pass it.
+        await agentStatusService.setStatus(appUserId, "READY", { relatedCampaignId: call.campaignId });
       } catch (err) {
         console.error("[inboundCallService] Failed to return ringing agent to READY after abandonment:", err.message);
       }
@@ -695,7 +697,15 @@ async function finalizeInboundCall(callId, appUserId, setNotReady = false) {
     const suffix = call.room.slice(ROOM_PREFIX.length);
     releaseRoomSuffix(suffix);
   }
-  return agentStatusService.setStatus(appUserId, setNotReady ? "NOT_READY" : "READY");
+  // Same fix as dialerService.js's own saveDisposition and the
+  // abandonment-recovery path above — this is the MAIN, everyday
+  // inbound disposition-save path, so this was the single biggest
+  // contributor to the "no inbound call ever reaches a Ready agent"
+  // bug. call may be null if it was already gone by the time this
+  // ran, hence the optional chaining.
+  return agentStatusService.setStatus(appUserId, setNotReady ? "NOT_READY" : "READY", {
+    relatedCampaignId: call?.campaignId,
+  });
 }
 
 /*
