@@ -127,6 +127,21 @@ function addParticipant(room, target, isExtension, callerIdLabel, excludeChannel
           Priority: 1,
           CallerID: `"${callerIdLabel}" <${callerIdNumber}>`,
           Async: "true",
+          // REAL BUG FIX, confirmed live via a real test call: this
+          // routes through the SAME _1NXXNXXXXXX/_NXXNXXXXXX dialplan
+          // patterns as a regular outbound lead call, which include
+          // AMD unless told otherwise via this exact variable. AMD
+          // ran, misdetected a live human as a machine (a real risk
+          // any time AMD runs at all — a talkative person within the
+          // detection window looks exactly like one), and hung up
+          // automatically a few seconds in. addParticipant() backs
+          // Line 2, Conference, and Blind Transfer — all three are
+          // ALWAYS a live agent manually dialing a specific person,
+          // never an automated lead call, so AMD must never run here
+          // at all, unconditionally — no campaign/lead check needed
+          // the way the regular outbound path requires, since this
+          // path is by definition never that.
+          Variable: "SKIP_AMD=1",
         };
 
     ami.originate(originateParams).catch(() => {
