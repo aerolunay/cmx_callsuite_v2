@@ -153,19 +153,44 @@ async function setStatus(appUserId, status, options = {}) {
 
   const { relatedCallDirection = null, relatedCampaignId = null, relatedCallId = null } = options;
 
-  await db.execute(
-    `
-      UPDATE cmx_dialer.agent_status_log
-      SET ended_at = NOW(), duration_seconds = TIMESTAMPDIFF(SECOND, started_at, NOW())
-      WHERE app_user_id = ? AND ended_at IS NULL
-    `,
-    [appUserId]
-  );
+  // REAL BUG FIX, confirmed live via a real foreign-key violation
+  // (an agent's app_users row was deleted while their session was
+  // still active — the insert below failed every time afterward,
+  // even though the earlier UPDATE had already committed and closed
+  // their previous status row). These two statements used to run as
+  // separate, independently-committed calls — if the insert failed
+  // for ANY reason, the close was already permanent, leaving the
+  // agent with literally zero status rows and invisible to every
+  // query that depends on one existing (Live Dashboard,
+  // getAnyReadyAgentWithExtension, etc.). Now atomic: either both
+  // succeed, or neither does — a failed insert correctly rolls back
+  // the close too, leaving their last known status intact instead of
+  // nothing at all.
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
 
-  await db.execute(
-    `INSERT INTO cmx_dialer.agent_status_log (app_user_id, status, related_call_direction, related_campaign_id, related_call_id, started_at) VALUES (?, ?, ?, ?, ?, NOW())`,
-    [appUserId, status, relatedCallDirection, relatedCampaignId, relatedCallId]
-  );
+    await connection.execute(
+      `
+        UPDATE cmx_dialer.agent_status_log
+        SET ended_at = NOW(), duration_seconds = TIMESTAMPDIFF(SECOND, started_at, NOW())
+        WHERE app_user_id = ? AND ended_at IS NULL
+      `,
+      [appUserId]
+    );
+
+    await connection.execute(
+      `INSERT INTO cmx_dialer.agent_status_log (app_user_id, status, related_call_direction, related_campaign_id, related_call_id, started_at) VALUES (?, ?, ?, ?, ?, NOW())`,
+      [appUserId, status, relatedCallDirection, relatedCampaignId, relatedCallId]
+    );
+
+    await connection.commit();
+  } catch (err) {
+    await connection.rollback();
+    throw err;
+  } finally {
+    connection.release();
+  }
 
   const current = await getCurrentStatus(appUserId);
 
