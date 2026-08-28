@@ -1009,8 +1009,22 @@ router.get(
     // entirely, rather than shown with a misleading campaign. LOGGED_OUT
     // agents (no open status row at all) are unaffected by this and
     // still show normally, regardless of campaign.
+    // REAL BUG FIX, confirmed live: the filter below used to be
+    // `!r.open_status || r.open_related_campaign_id` — which excludes
+    // ANY agent whose open status lacks a related_campaign_id. But per
+    // this route's own comment above, related_campaign_id is ONLY EVER
+    // set for IN_CALL/ON_HOLD/AFTER_CALL_WORK — READY/NOT_READY/AD_HOC/
+    // LUNCH_BREAK/BIO_BREAK/ADMIN/MEETING/TRAINING never have one AT
+    // ALL, by design. Net effect: every single READY agent was being
+    // filtered out of Live Dashboard entirely, always — not the "just
+    // logged in, no campaign recorded yet" edge case this was meant to
+    // guard against, but literally every agent in that status. Fixed
+    // to only apply the "must have a campaign tag" requirement to the
+    // call-related statuses that are actually supposed to have one.
+    const isCallRelatedStatus = (status) => status === "IN_CALL" || status === "ON_HOLD" || status === "AFTER_CALL_WORK";
+
     const agents = rows
-      .filter((r) => !r.open_status || r.open_related_campaign_id)
+      .filter((r) => !r.open_status || !isCallRelatedStatus(r.open_status) || r.open_related_campaign_id)
       .map((r) => {
         if (r.open_status) {
           const isCallRelated =
