@@ -303,7 +303,7 @@ async function getNextLead(campaignId) {
       FROM vicidial_hopper h
       JOIN vicidial_list l ON l.lead_id = h.lead_id
       WHERE h.campaign_id = ? AND h.status = 'READY'
-        AND l.status NOT IN ('DNC', 'NI', 'DC', 'PU', 'CALLBK')
+        AND l.status NOT IN ('DNC', 'NI', 'DC', 'PU', 'CALLBK', 'SCRN')
         AND NOT EXISTS (SELECT 1 FROM vicidial_dnc d WHERE d.phone_number = l.phone_number)
       ORDER BY h.priority ASC, h.hopper_id ASC
       LIMIT 1
@@ -351,7 +351,7 @@ async function getNextLead(campaignId) {
       JOIN vicidial_lists vl ON vl.list_id = l.list_id
       WHERE vl.campaign_id = ?
         AND l.called_since_last_reset = 'N'
-        AND l.status NOT IN ('DNC', 'NI', 'DC', 'PU', 'CALLBK')
+        AND l.status NOT IN ('DNC', 'NI', 'DC', 'PU', 'CALLBK', 'SCRN')
         AND NOT EXISTS (SELECT 1 FROM vicidial_dnc d WHERE d.phone_number = l.phone_number)
       ORDER BY l.lead_id ASC
       LIMIT 1
@@ -1075,6 +1075,16 @@ const DISPOSITION_TO_VICIDIAL_STATUS = {
   NOT_INTERESTED: "NI", // confirmed exact match
   DO_NOT_CALL: "DNC", // confirmed exact match
   CALLBACK: "CALLBK", // confirmed exact match
+  // Per explicit request — CMXBSMSC-only outbound option. Given a real,
+  // dedicated status ("SCRN") rather than reusing PU, since this is a
+  // genuinely distinct, trackable outcome (screening finished), not
+  // just a generic "call ended." See 008_add_screening_completed_status.sql
+  // for the corresponding asterisk.vicidial_statuses row — that table
+  // was found completely empty tonight (0 rows), a separate,
+  // pre-existing gap worth addressing broadly at some point, but not
+  // required for THIS app's own logic to work (it never queries that
+  // table for validation — everything here is this hardcoded map).
+  SCREENING_COMPLETED: "SCRN",
 };
 
 async function saveDisposition({
