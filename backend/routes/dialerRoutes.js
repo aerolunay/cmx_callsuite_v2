@@ -156,12 +156,22 @@ router.post("/dialer/conference-add", requireAuth, async (req, res) => {
     }
 
     const excludeChannels = [active.agentChannel, active.customerChannel].filter(Boolean);
+
+    // Same fix as attendedTransferService.js's own Line 2 — see that
+    // function's comment for the full story on why this matters.
+    const [campaignRows] = await db.execute(
+      `SELECT campaign_cid FROM asterisk.vicidial_campaigns WHERE campaign_id = ? AND active = 'Y'`,
+      [active.rawCall?.campaignId]
+    );
+    const campaignCid = campaignRows[0]?.campaign_cid;
+
     const result = await conferenceService.addParticipant(
       active.room,
       target,
       Boolean(isExtension),
       "Conference",
-      excludeChannels
+      excludeChannels,
+      campaignCid
     );
 
     if (!result.success) {
@@ -199,12 +209,22 @@ router.post("/dialer/transfer-blind", requireAuth, async (req, res) => {
     }
 
     const excludeChannels = [active.agentChannel, active.customerChannel].filter(Boolean);
+
+    // Same fix as attendedTransferService.js's own Line 2 — see that
+    // function's comment for the full story on why this matters.
+    const [campaignRows] = await db.execute(
+      `SELECT campaign_cid FROM asterisk.vicidial_campaigns WHERE campaign_id = ? AND active = 'Y'`,
+      [active.rawCall?.campaignId]
+    );
+    const campaignCid = campaignRows[0]?.campaign_cid;
+
     const result = await conferenceService.addParticipant(
       active.room,
       target,
       Boolean(isExtension),
       "Transfer",
-      excludeChannels
+      excludeChannels,
+      campaignCid
     );
 
     if (!result.success) {

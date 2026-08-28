@@ -1,6 +1,7 @@
 "use strict";
 
 const ami = require("../config/ami");
+const db = require("../config/db");
 const dialerService = require("./dialerService");
 const inboundCallService = require("./inboundCallService");
 const conferenceService = require("./conferenceService");
@@ -190,8 +191,27 @@ async function startLineTwo(active, target, isExtension) {
   rawCall.lineTwo = lineTwoState;
   rawCall.activeLine = 2;
 
+  // REAL BUG FIX, confirmed live via a real test call: addParticipant
+  // used to fall back to using the internal ConfBridge room number
+  // itself (e.g. "9600841") as the Caller ID sent to QuestBlue —
+  // not a real, authorized DID on the account at all. QuestBlue's SBC
+  // correctly rejected it with a genuine SIP 403 Forbidden every
+  // time, surfaced misleadingly by Asterisk as "Everyone is
+  // busy/congested" — hours were spent chasing trunk concurrency and
+  // max_contacts before the actual regular-outbound Caller ID issue
+  // (same root cause, different call site) revealed what was really
+  // happening. Only matters for the isExtension=false branch (a real
+  // phone number, going out over the external trunk) — internal
+  // extensions never touch this trunk at all, but campaignCid is
+  // harmless to pass through regardless.
+  const [campaignRows] = await db.execute(
+    `SELECT campaign_cid FROM asterisk.vicidial_campaigns WHERE campaign_id = ? AND active = 'Y'`,
+    [rawCall.campaignId]
+  );
+  const campaignCid = campaignRows[0]?.campaign_cid;
+
   conferenceService
-    .addParticipant(room2, target, isExtension, "Line 2", [])
+    .addParticipant(room2, target, isExtension, "Line 2", [], campaignCid)
     .then((result) => {
       if (lineTwoState.settled === "canceled") {
         if (result.success) {

@@ -57,10 +57,23 @@ separately.
 
 const ORIGINATE_TIMEOUT_MS = 30000;
 
-function addParticipant(room, target, isExtension, callerIdLabel, excludeChannels = []) {
+function addParticipant(room, target, isExtension, callerIdLabel, excludeChannels = [], campaignCid = null) {
   return new Promise((resolve) => {
     const actionId = crypto.randomUUID();
     let settled = false;
+
+    // REAL BUG FIX, confirmed live via a real test call: this used to
+    // always use the internal ConfBridge room number itself as the
+    // Caller ID number — not a real, authorized DID on the account at
+    // all. QuestBlue's SBC correctly rejected every such call with a
+    // genuine SIP 403 Forbidden, surfaced misleadingly by Asterisk as
+    // "Everyone is busy/congested" (see attendedTransferService.js's
+    // own comment on this — same root cause as the regular-outbound
+    // Caller ID bug, different call site, much harder to spot since
+    // it looked like a trunk-concurrency issue). Falls back to room
+    // only if campaignCid genuinely isn't available — better than
+    // crashing, but every real caller should be passing this now.
+    const callerIdNumber = campaignCid || room;
 
     function finish(result) {
       if (settled) return;
@@ -103,7 +116,7 @@ function addParticipant(room, target, isExtension, callerIdLabel, excludeChannel
           Channel: `PJSIP/${target}`,
           Application: "ConfBridge",
           Data: `${room},vici_agent_bridge,vici_agent_user`,
-          CallerID: `"${callerIdLabel}" <${room}>`,
+          CallerID: `"${callerIdLabel}" <${callerIdNumber}>`,
           Async: "true",
         }
       : {
@@ -112,7 +125,7 @@ function addParticipant(room, target, isExtension, callerIdLabel, excludeChannel
           Context: "trunkinbound",
           Exten: target,
           Priority: 1,
-          CallerID: `"${callerIdLabel}" <${room}>`,
+          CallerID: `"${callerIdLabel}" <${callerIdNumber}>`,
           Async: "true",
         };
 
