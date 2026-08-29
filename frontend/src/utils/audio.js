@@ -49,21 +49,30 @@ export function playConnectedBeep(sinkId = "") {
     oscillator.type = "sine";
     oscillator.frequency.value = 880; // a clear, pleasant A5 tone — noticeable without being jarring
 
-    // Per explicit request — a single quiet beep was too subtle to
-    // reliably notice. Two short beeps in quick succession read much
-    // more clearly as "notification" than one longer tone, and the
-    // volume is doubled (0.15 -> 0.3, still well below max) —
-    // together, noticeably more attention-grabbing without becoming
-    // an alarm.
+    // Per explicit request — louder, and each beep at least 750ms
+    // long. Ramp up/down (20ms each) rather than an abrupt on/off is
+    // still needed even at this length — skipping it produces an
+    // audible click at the start and end of each tone.
+    const BEEP_DURATION = 0.75;
+    const GAP = 0.15;
+    const RAMP = 0.02;
+    const VOLUME = 0.5;
+
     const t = ctx.currentTime;
-    gain.gain.setValueAtTime(0, t);
-    gain.gain.linearRampToValueAtTime(0.3, t + 0.01);
-    gain.gain.setValueAtTime(0.3, t + 0.12);
-    gain.gain.linearRampToValueAtTime(0, t + 0.14);
-    gain.gain.setValueAtTime(0, t + 0.2);
-    gain.gain.linearRampToValueAtTime(0.3, t + 0.21);
-    gain.gain.setValueAtTime(0.3, t + 0.32);
-    gain.gain.linearRampToValueAtTime(0.001, t + 0.34);
+    const beep1Start = t;
+    const beep1End = beep1Start + BEEP_DURATION;
+    const beep2Start = beep1End + GAP;
+    const beep2End = beep2Start + BEEP_DURATION;
+
+    gain.gain.setValueAtTime(0, beep1Start);
+    gain.gain.linearRampToValueAtTime(VOLUME, beep1Start + RAMP);
+    gain.gain.setValueAtTime(VOLUME, beep1End - RAMP);
+    gain.gain.linearRampToValueAtTime(0, beep1End);
+
+    gain.gain.setValueAtTime(0, beep2Start);
+    gain.gain.linearRampToValueAtTime(VOLUME, beep2Start + RAMP);
+    gain.gain.setValueAtTime(VOLUME, beep2End - RAMP);
+    gain.gain.linearRampToValueAtTime(0.001, beep2End);
 
     oscillator.connect(gain);
 
@@ -94,7 +103,7 @@ export function playConnectedBeep(sinkId = "") {
     }
 
     oscillator.start();
-    oscillator.stop(t + 0.34);
+    oscillator.stop(beep2End);
     oscillator.onended = () => ctx.close();
   } catch {
     // Never let a beep failure break the actual call-connected flow.
