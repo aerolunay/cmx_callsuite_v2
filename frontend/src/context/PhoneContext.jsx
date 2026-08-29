@@ -155,6 +155,21 @@ export function PhoneProvider({ children }) {
 
         if (data.originator === "remote") {
           setCallState(CALL_STATES.INCOMING);
+
+          // REAL BUG FIX, confirmed live: a supervisor without
+          // /dialer page access has nowhere to click "Answer" at
+          // all — MiniPhone.jsx (the only UI with that button) only
+          // renders there, while this connection itself is app-wide
+          // regardless of page. Silent Listen's own Originate call
+          // (see monitoringService.js) sets this exact, distinctive
+          // Caller ID specifically so it can be recognized here and
+          // auto-answered immediately — every other kind of incoming
+          // call (Line 2, Conference, Transfer) still requires a
+          // real, manual answer via MiniPhone as before; this check
+          // only ever matches the one, specific case.
+          if (session.remote_identity?.display_name === "CMX Silent Listen") {
+            session.answer({ mediaConstraints: { audio: true, video: false } });
+          }
         } else {
           setCallState(CALL_STATES.ACTIVE);
         }

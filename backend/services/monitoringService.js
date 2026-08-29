@@ -88,6 +88,20 @@ function startSilentListen(room, listenerExtension, listenerAppUserId, excludeCh
       Application: "ConfBridge",
       Data: `${room},vici_agent_bridge,cmx_silent_listener`,
       Async: "true",
+      // REAL BUG FIX, confirmed live: a supervisor without /dialer
+      // page access (e.g. some admin roles) has nowhere to click
+      // "Answer" at all — MiniPhone.jsx, the only UI with that
+      // button, only renders on that one page, while this Originate
+      // rings their browser regardless of which page they're
+      // actually on (the softphone connection itself is app-wide).
+      // Without this, the call just rings unanswered until the
+      // 30s timeout above gives up — confirmed exactly this way with
+      // a real admin account. This distinctive Caller ID lets
+      // PhoneContext.jsx recognize a Silent Listen call specifically
+      // and auto-answer it immediately, regardless of page, while
+      // every other kind of incoming call still requires a real,
+      // manual answer as before.
+      CallerID: '"CMX Silent Listen" <9999>',
     };
 
     ami.originate(originateParams).catch(() => {
