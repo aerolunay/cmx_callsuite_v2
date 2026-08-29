@@ -16,16 +16,18 @@ ConfBridge room at all.
 export function playConnectedBeep() {
   try {
     const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-    if (!AudioContextClass) return; // very old browser — fail silently, not worth surfacing an error for a cosmetic tone
+    if (!AudioContextClass) {
+      console.warn("[playConnectedBeep] No AudioContext support in this browser.");
+      return;
+    }
 
     const ctx = new AudioContextClass();
+    console.log("[playConnectedBeep] AudioContext created, state:", ctx.state);
     if (ctx.state === "suspended") {
-      // Harmless no-op if already running — only matters if this
-      // browser started the context suspended, pending some prior
-      // user gesture elsewhere on the page (logging in, going Ready,
-      // etc. almost certainly already satisfied this by the time a
-      // call connects, but cheap to cover regardless).
-      ctx.resume().catch(() => {});
+      ctx.resume().then(
+        () => console.log("[playConnectedBeep] context resumed, new state:", ctx.state),
+        (err) => console.warn("[playConnectedBeep] resume() rejected:", err)
+      );
     }
 
     const oscillator = ctx.createOscillator();
@@ -42,7 +44,11 @@ export function playConnectedBeep() {
     oscillator.start();
     oscillator.stop(ctx.currentTime + 0.18);
     oscillator.onended = () => ctx.close();
-  } catch {
-    // Never let a beep failure break the actual call-connected flow.
+    console.log("[playConnectedBeep] oscillator started.");
+  } catch (err) {
+    // TEMPORARY — normally never let a beep failure break the actual
+    // call-connected flow, but logging this while diagnosing why no
+    // sound is heard despite the code confirmed present and running.
+    console.error("[playConnectedBeep] threw:", err);
   }
 }
