@@ -246,6 +246,17 @@ export function PhoneProvider({ children }) {
       toggleMute,
       dial,
       CALL_STATES,
+      // Per explicit request — lets other sounds (e.g. the
+      // connected-call beep, see utils/audio.js) explicitly target
+      // whichever output device the actual call audio is really
+      // using, rather than trusting the browser's own "default
+      // device" resolution to agree between a plain AudioContext and
+      // this <audio> element — confirmed live these CAN disagree
+      // when a headset is plugged in (call audio correctly went to
+      // the headset; a separate AudioContext's tone did not). Reads
+      // remoteAudioRef fresh on every call, not captured once, so it
+      // always reflects whatever's actually live right now.
+      getOutputSinkId: () => remoteAudioRef.current?.sinkId || "",
     }),
     [registered, registrationError, callState, remoteIdentity, answer, hangup, toggleMute, dial]
   );

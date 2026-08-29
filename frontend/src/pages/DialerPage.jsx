@@ -12,6 +12,7 @@ import { getOutboundDispositionsForCampaign, getInboundDispositionsForCampaign }
 import { formatDuration, durationColorFor } from "../utils/format";
 import { playConnectedBeep } from "../utils/audio";
 import { useFlashingTitle } from "../hooks/useFlashingTitle";
+import { usePhone } from "../context/PhoneContext";
 
 
 // Agent-selectable statuses. IN_CALL and AFTER_CALL_WORK are set only
@@ -57,6 +58,7 @@ const CALL_STATUS_LABELS = {
 };
 
 export default function DialerPage() {
+  const phone = usePhone();
   const { agent } = useAuth();
   const navigate = useNavigate();
 
@@ -384,8 +386,7 @@ export default function DialerPage() {
         // every subsequent WS message that happens to arrive while
         // already connected (e.g. an onHold toggle).
         if (prev?.status !== "agent_connected" && message.status === "agent_connected") {
-          console.log("[beep] transition detected, calling playConnectedBeep()");
-          playConnectedBeep();
+          playConnectedBeep(phone.getOutputSinkId());
         }
 
         return {
