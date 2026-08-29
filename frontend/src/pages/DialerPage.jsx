@@ -384,6 +384,7 @@ export default function DialerPage() {
         // every subsequent WS message that happens to arrive while
         // already connected (e.g. an onHold toggle).
         if (prev?.status !== "agent_connected" && message.status === "agent_connected") {
+          console.log("[beep] transition detected, calling playConnectedBeep()");
           playConnectedBeep();
         }
 
