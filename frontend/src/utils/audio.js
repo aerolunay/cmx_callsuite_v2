@@ -48,8 +48,23 @@ export function playConnectedBeep(sinkId = "") {
 
     oscillator.type = "sine";
     oscillator.frequency.value = 880; // a clear, pleasant A5 tone — noticeable without being jarring
-    gain.gain.setValueAtTime(0.15, ctx.currentTime); // kept quiet — this is a notification, not an alarm
-    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.18);
+
+    // Per explicit request — a single quiet beep was too subtle to
+    // reliably notice. Two short beeps in quick succession read much
+    // more clearly as "notification" than one longer tone, and the
+    // volume is doubled (0.15 -> 0.3, still well below max) —
+    // together, noticeably more attention-grabbing without becoming
+    // an alarm.
+    const t = ctx.currentTime;
+    gain.gain.setValueAtTime(0, t);
+    gain.gain.linearRampToValueAtTime(0.3, t + 0.01);
+    gain.gain.setValueAtTime(0.3, t + 0.12);
+    gain.gain.linearRampToValueAtTime(0, t + 0.14);
+    gain.gain.setValueAtTime(0, t + 0.2);
+    gain.gain.linearRampToValueAtTime(0.3, t + 0.21);
+    gain.gain.setValueAtTime(0.3, t + 0.32);
+    gain.gain.linearRampToValueAtTime(0.001, t + 0.34);
+
     oscillator.connect(gain);
 
     const canTargetDevice = sinkId && typeof HTMLMediaElement !== "undefined" && "setSinkId" in HTMLMediaElement.prototype;
@@ -79,7 +94,7 @@ export function playConnectedBeep(sinkId = "") {
     }
 
     oscillator.start();
-    oscillator.stop(ctx.currentTime + 0.18);
+    oscillator.stop(t + 0.34);
     oscillator.onended = () => ctx.close();
   } catch {
     // Never let a beep failure break the actual call-connected flow.
