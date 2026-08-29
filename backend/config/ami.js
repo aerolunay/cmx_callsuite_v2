@@ -223,6 +223,34 @@ function reloadDialplan() {
   return sendAction({ action: "Command", command: "dialplan reload" });
 }
 
+/*
+==================================================
+isExpectedAlreadyGoneError
+==================================================
+Per explicit request — genuinely reduce this noise, not just wave it
+away as harmless. Root cause: when a customer or agent hangs up
+naturally (their own phone/browser), Asterisk itself tears down that
+channel — and once a ConfBridge room empties, the conference dissolves
+on its own — BEFORE our own cleanup code (endCall/endInboundCall
+etc., triggered by the ConfbridgeLeave/Hangup event that fires as a
+RESULT of that same natural hangup) gets a chance to run its own
+redundant hangupChannel()/stopRecording() calls. Those calls correctly
+fail with these exact two error strings when that's what happened —
+expected, not a real problem. Centralized here (not duplicated per
+call site) since this is knowledge about what AMI/Asterisk actually
+returns, which belongs with the module that talks to it.
+
+Deliberately narrow — matches only these two known, confirmed-benign
+messages. Any other error text still gets logged normally by the
+caller; this only suppresses the "we tried to clean up something that
+was already gone" case specifically.
+==================================================
+*/
+function isExpectedAlreadyGoneError(err) {
+  const message = err?.message || "";
+  return message.includes("No such channel") || message.includes("No active conferences");
+}
+
 connect();
 
 module.exports = {
@@ -235,4 +263,5 @@ module.exports = {
   stopRecording,
   reloadPjsip,
   reloadDialplan,
+  isExpectedAlreadyGoneError,
 };

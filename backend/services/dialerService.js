@@ -142,7 +142,9 @@ async function markCallEnded(call) {
       try {
         await ami.stopRecording(call.room);
       } catch (err) {
-        console.error(`[dialerService] Failed to stop recording for call ${call.callId}:`, err.message);
+        if (!ami.isExpectedAlreadyGoneError(err)) {
+          console.error(`[dialerService] Failed to stop recording for call ${call.callId}:`, err.message);
+        }
       }
     }
   } catch (err) {
@@ -704,6 +706,7 @@ function registerCallEventTracking() {
 
     if (!hasExtraParticipants && call.agentChannel) {
       await ami.hangupChannel(call.agentChannel).catch((err) => {
+        if (ami.isExpectedAlreadyGoneError(err)) return;
         console.error(`[dialerService] Failed to hang up agent channel ${call.agentChannel}:`, err.message);
       });
     }
@@ -811,12 +814,14 @@ async function endCall(callId) {
   // one's third party was still actively using it.
   if (!hasExtraParticipants && call.customerChannel) {
     hangups.push(ami.hangupChannel(call.customerChannel).catch((err) => {
+      if (ami.isExpectedAlreadyGoneError(err)) return;
       console.error(`[dialerService] Failed to hang up customer channel ${call.customerChannel}:`, err.message);
     }));
   }
 
   if (call.agentChannel) {
     hangups.push(ami.hangupChannel(call.agentChannel).catch((err) => {
+      if (ami.isExpectedAlreadyGoneError(err)) return;
       console.error(`[dialerService] Failed to hang up agent channel ${call.agentChannel}:`, err.message);
     }));
   }
@@ -936,6 +941,7 @@ async function handleAutomaticDialOutcome(room, outcomeType) {
 
   if (call.agentChannel) {
     await ami.hangupChannel(call.agentChannel).catch((err) => {
+      if (ami.isExpectedAlreadyGoneError(err)) return;
       console.error(`[dialerService] Failed to hang up agent channel after ${outcomeType} outcome:`, err.message);
     });
   }

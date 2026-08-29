@@ -468,6 +468,7 @@ async function endInboundCall(room) {
   if (!hasExtraParticipants && call.customerChannel) {
     hangups.push(
       ami.hangupChannel(call.customerChannel).catch((err) => {
+        if (ami.isExpectedAlreadyGoneError(err)) return;
         console.error(`[inboundCallService] Failed to hang up customer channel ${call.customerChannel}:`, err.message);
       })
     );
@@ -475,6 +476,7 @@ async function endInboundCall(room) {
   if (call.agentChannel) {
     hangups.push(
       ami.hangupChannel(call.agentChannel).catch((err) => {
+        if (ami.isExpectedAlreadyGoneError(err)) return;
         console.error(`[inboundCallService] Failed to hang up agent channel ${call.agentChannel}:`, err.message);
       })
     );
@@ -522,7 +524,9 @@ async function endInboundCall(room) {
       try {
         await ami.stopRecording(call.room);
       } catch (err) {
-        console.error(`[inboundCallService] Failed to stop recording for call ${call.callId}:`, err.message);
+        if (!ami.isExpectedAlreadyGoneError(err)) {
+          console.error(`[inboundCallService] Failed to stop recording for call ${call.callId}:`, err.message);
+        }
       }
     }
   } catch (err) {

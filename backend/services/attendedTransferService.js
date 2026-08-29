@@ -444,6 +444,7 @@ async function cancelLineTwo(active) {
 
   if (lineTwo.targetChannel) {
     await ami.hangupChannel(lineTwo.targetChannel).catch((err) => {
+      if (ami.isExpectedAlreadyGoneError(err)) return;
       console.error("[attendedTransferService] Failed to hang up Line 2 target on cancel:", err.message);
     });
   }
