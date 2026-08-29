@@ -49,30 +49,21 @@ export function playConnectedBeep(sinkId = "") {
     oscillator.type = "sine";
     oscillator.frequency.value = 880; // a clear, pleasant A5 tone — noticeable without being jarring
 
-    // Per explicit request — louder, and each beep at least 750ms
-    // long. Ramp up/down (20ms each) rather than an abrupt on/off is
-    // still needed even at this length — skipping it produces an
-    // audible click at the start and end of each tone.
+    // Per explicit request — one single beep, 750ms, louder than the
+    // original. Ramp up/down (20ms each) rather than an abrupt on/off
+    // is still needed even at this length — skipping it produces an
+    // audible click at the start and end of the tone.
     const BEEP_DURATION = 0.75;
-    const GAP = 0.15;
     const RAMP = 0.02;
     const VOLUME = 0.5;
 
     const t = ctx.currentTime;
-    const beep1Start = t;
-    const beep1End = beep1Start + BEEP_DURATION;
-    const beep2Start = beep1End + GAP;
-    const beep2End = beep2Start + BEEP_DURATION;
+    const beepEnd = t + BEEP_DURATION;
 
-    gain.gain.setValueAtTime(0, beep1Start);
-    gain.gain.linearRampToValueAtTime(VOLUME, beep1Start + RAMP);
-    gain.gain.setValueAtTime(VOLUME, beep1End - RAMP);
-    gain.gain.linearRampToValueAtTime(0, beep1End);
-
-    gain.gain.setValueAtTime(0, beep2Start);
-    gain.gain.linearRampToValueAtTime(VOLUME, beep2Start + RAMP);
-    gain.gain.setValueAtTime(VOLUME, beep2End - RAMP);
-    gain.gain.linearRampToValueAtTime(0.001, beep2End);
+    gain.gain.setValueAtTime(0, t);
+    gain.gain.linearRampToValueAtTime(VOLUME, t + RAMP);
+    gain.gain.setValueAtTime(VOLUME, beepEnd - RAMP);
+    gain.gain.linearRampToValueAtTime(0.001, beepEnd);
 
     oscillator.connect(gain);
 
@@ -103,7 +94,7 @@ export function playConnectedBeep(sinkId = "") {
     }
 
     oscillator.start();
-    oscillator.stop(beep2End);
+    oscillator.stop(beepEnd);
     oscillator.onended = () => ctx.close();
   } catch {
     // Never let a beep failure break the actual call-connected flow.
