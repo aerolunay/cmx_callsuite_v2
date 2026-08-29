@@ -178,6 +178,56 @@ export default function LiveStatusDashboard() {
     }
   }
 
+  // Silent Listen — listeningTo tracks who we're currently
+  // listening to (appUserId + name, for the "Stop listening to X"
+  // banner) since the backend only ever supports one active listen
+  // session per supervisor at a time; starting a new one server-side
+  // automatically ends any previous one first (see adminRoutes.js's
+  // own comment on this), so this state just needs to track what to
+  // show, not enforce the one-at-a-time rule itself.
+  const [listeningTo, setListeningTo] = useState(null);
+  const [listenBusyKey, setListenBusyKey] = useState(null);
+
+  // Ref mirrors listeningTo so the unmount cleanup below always sees
+  // its LATEST value, not whatever it was when this effect last ran
+  // (a plain closure over state would go stale otherwise).
+  const listeningToRef = useRef(null);
+  useEffect(() => {
+    listeningToRef.current = listeningTo;
+  }, [listeningTo]);
+
+  useEffect(() => {
+    return () => {
+      if (listeningToRef.current) {
+        api.stopListen().catch(() => {});
+      }
+    };
+  }, []);
+
+  async function handleStartListen(agentRow, line) {
+    setListenBusyKey(`${agentRow.appUserId}-${line}`);
+    setError("");
+    try {
+      await api.startListen(agentRow.appUserId, line);
+      setListeningTo({ appUserId: agentRow.appUserId, fullName: agentRow.fullName, line });
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setListenBusyKey(null);
+    }
+  }
+
+  async function handleStopListen() {
+    setError("");
+    try {
+      await api.stopListen();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setListeningTo(null);
+    }
+  }
+
   // "Set Prio" — real-time control, per explicit request. Takes effect
   // on the very next inbound-call matching pass (no caching anywhere
   // in that path — see agentStatusService.js's
@@ -297,7 +347,19 @@ export default function LiveStatusDashboard() {
           </select>
         </div>
 
-        {error && <div className="error">{error}</div>}
+        {error && <div className="error" role="alert">{error}</div>}
+
+        {listeningTo && (
+          <div className="card" style={{ marginBottom: 20, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <span>
+              🔴 Silently listening to <strong>{listeningTo.fullName}</strong>
+              {listeningTo.line === 2 ? " (Line 2)" : ""}
+            </span>
+            <button type="button" className="link" onClick={handleStopListen}>
+              Stop listening
+            </button>
+          </div>
+        )}
 
         <div className="live-status-grid">
           {/* LEFT: Inbound Stats, Combined States, Logged Out. Height
@@ -447,6 +509,38 @@ export default function LiveStatusDashboard() {
                                 >
                                   {kickingId === a.appUserId ? "Kicking…" : "Kick"}
                                 </button>
+                              )}
+                              {/* Silent Listen — shown whenever there's an
+                                  actual live call to listen to. Line 2's
+                                  button is offered unconditionally rather
+                                  than only when it's actually active,
+                                  since that state isn't currently exposed
+                                  by this endpoint — the backend gives a
+                                  clear error ("Line 2 isn't active on
+                                  this call right now") if clicked when it
+                                  doesn't apply, which is an acceptable
+                                  trade-off for now. */}
+                              {["IN_CALL", "ON_HOLD"].includes(a.status) &&
+                                ["training_quality", "supervisor", "admin"].includes(agent?.accessLevel) && (
+                                <>
+                                  {" "}
+                                  <button
+                                    type="button"
+                                    className="link"
+                                    disabled={listenBusyKey === `${a.appUserId}-1`}
+                                    onClick={() => handleStartListen(a, 1)}
+                                  >
+                                    {listenBusyKey === `${a.appUserId}-1` ? "Connecting…" : "Listen"}
+                                  </button>{" "}
+                                  <button
+                                    type="button"
+                                    className="link"
+                                    disabled={listenBusyKey === `${a.appUserId}-2`}
+                                    onClick={() => handleStartListen(a, 2)}
+                                  >
+                                    {listenBusyKey === `${a.appUserId}-2` ? "Connecting…" : "Listen (Line 2)"}
+                                  </button>
+                                </>
                               )}
                             </td>
                           </tr>

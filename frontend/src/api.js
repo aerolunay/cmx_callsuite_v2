@@ -148,6 +148,9 @@ export const api = {
     request(`/admin/users/${appUserId}`, { method: "DELETE" }),
   kickAgent: (appUserId) =>
     request(`/admin/users/${appUserId}/kick`, { method: "POST" }),
+  startListen: (appUserId, line = 1) =>
+    request("/admin/listen/start", { method: "POST", body: JSON.stringify({ appUserId, line }) }),
+  stopListen: () => request("/admin/listen/stop", { method: "POST" }),
   // Real-time priority control — used by the Live Status Dashboard's
   // "Set Prio" per-row action. Deliberately lightweight/standalone,
   // not routed through updateAdminUser's full-form PUT.

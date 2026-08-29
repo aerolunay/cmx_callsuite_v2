@@ -12,7 +12,8 @@ const ws = require("../config/ws");
 const ami = require("../config/ami");
 const { transporter } = require("../config/mailer");
 const { buildWelcomeEmail } = require("../services/emailTemplates");
-const { requireRoles, requireCampaignAccess, resolveCampaignScope } = require("../services/accessControlService");
+const { requireRoles, requireCampaignAccess, resolveCampaignScope, getAssignedCampaignIds, UNRESTRICTED_CAMPAIGN_ROLES } = require("../services/accessControlService");
+const monitoringService = require("../services/monitoringService");
 
 const router = express.Router();
 
@@ -1064,6 +1065,119 @@ router.get(
   } catch (error) {
     console.error("GET /api/admin/live-status failed:", error);
     return res.status(500).json({ success: false, message: "Failed to load live status." });
+  }
+});
+
+/*
+==================================================
+SILENT LISTEN
+==================================================
+POST /api/admin/listen/start
+Body: { appUserId, line } (line: 1 or 2, defaults to 1)
+Lets training_quality/supervisor/admin roles silently join a live
+call, completely inaudible to both the agent and the customer. See
+monitoringService.js for the full mechanism and confbridge.conf's
+cmx_silent_listener profile for why it's actually silent, not just
+started that way.
+
+Known limitation, not yet handled: if the underlying call ends (or
+the supervisor's own browser tab just closes) without an explicit
+POST /listen/stop, this listening channel is never automatically
+cleaned up — left alone in an otherwise-empty room indefinitely.
+Worth a follow-up once this ships.
+==================================================
+*/
+router.post("/listen/start", requireRoles("training_quality", "supervisor", "admin"), async (req, res) => {
+  try {
+    const targetAppUserId = Number(req.body.appUserId);
+    const wantsLineTwo = Number(req.body.line) === 2;
+    if (!targetAppUserId) {
+      return res.status(400).json({ success: false, message: "appUserId is required." });
+    }
+
+    const listenerAppUserId = req.session.agent.appUserId;
+    const listenerExtension = req.session.agent.extension;
+    if (!listenerExtension) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Your own account has no phone extension configured." });
+    }
+
+    // A given agent can only ever be on one or the other at a time —
+    // check outbound first, then inbound.
+    let call = dialerService.getRawActiveCallForAgent(targetAppUserId);
+    let direction = "outbound";
+    if (!call) {
+      call = inboundCallService.getInboundCallForAgent(targetAppUserId);
+      direction = "inbound";
+    }
+    if (!call) {
+      return res.status(404).json({ success: false, message: "This agent isn't on an active call right now." });
+    }
+
+    const fullyConnectedStatus = direction === "outbound" ? "customer_connected" : "agent_connected";
+    if (!wantsLineTwo && call.status !== fullyConnectedStatus) {
+      return res
+        .status(409)
+        .json({ success: false, message: "This call hasn't actually connected yet — nothing to listen to." });
+    }
+
+    // Campaign scoping — same principle as requireCampaignAccess:
+    // enforced here, not just left to the dashboard's own filtering,
+    // since a request can always be sent directly regardless of what
+    // the UI shows.
+    if (!UNRESTRICTED_CAMPAIGN_ROLES.includes(req.session.agent.accessLevel)) {
+      const assigned = await getAssignedCampaignIds(listenerAppUserId);
+      if (!assigned.includes(call.campaignId)) {
+        return res.status(403).json({ success: false, message: "You don't have access to this campaign." });
+      }
+    }
+
+    const excludeChannels = [call.agentChannel, call.customerChannel].filter(Boolean);
+    let room;
+
+    if (wantsLineTwo) {
+      if (!call.lineTwo || call.lineTwo.status !== "connected") {
+        return res.status(409).json({ success: false, message: "Line 2 isn't active on this call right now." });
+      }
+      room = call.lineTwo.room;
+      if (call.lineTwo.targetChannel) excludeChannels.push(call.lineTwo.targetChannel);
+    } else {
+      room = call.room;
+    }
+
+    // A supervisor can only ever be listening to one call at a time
+    // — if they were already listening to someone else, end that
+    // first so switching agents never leaves the old channel
+    // orphaned in its room.
+    await monitoringService.endSilentListen(listenerAppUserId);
+
+    const result = await monitoringService.startSilentListen(
+      room,
+      listenerExtension,
+      listenerAppUserId,
+      excludeChannels
+    );
+    if (!result.success) {
+      return res
+        .status(502)
+        .json({ success: false, message: "Couldn't connect — the call may have just ended.", reason: result.reason });
+    }
+
+    return res.json({ success: true });
+  } catch (error) {
+    console.error("POST /api/admin/listen/start failed:", error);
+    return res.status(500).json({ success: false, message: "Failed to start listening." });
+  }
+});
+
+router.post("/listen/stop", requireRoles("training_quality", "supervisor", "admin"), async (req, res) => {
+  try {
+    await monitoringService.endSilentListen(req.session.agent.appUserId);
+    return res.json({ success: true });
+  } catch (error) {
+    console.error("POST /api/admin/listen/stop failed:", error);
+    return res.status(500).json({ success: false, message: "Failed to stop listening." });
   }
 });
 
