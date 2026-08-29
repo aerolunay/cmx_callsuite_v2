@@ -55,6 +55,14 @@ body {
   font-size: 11px;
   color: rgba(255, 255, 255, 0.55);
   white-space: nowrap;
+  /* The logo PNG itself has ~22px of transparent padding before the
+     visible "C" starts (confirmed by measuring the actual file: the
+     logo is 621x124px, visible content starts at x=64, i.e. ~10.3%
+     of its width — at this header's 42px logo height, that's ~22px).
+     Without this, the version text (flush with the image's true
+     left edge) looks misaligned against the logo's visible text
+     above it. */
+  margin-left: 22px;
 }
 
 .header-right {
