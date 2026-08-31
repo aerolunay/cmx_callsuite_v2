@@ -5,6 +5,7 @@ const db = require("../config/db");
 const dialerService = require("./dialerService");
 const inboundCallService = require("./inboundCallService");
 const conferenceService = require("./conferenceService");
+const monitoringService = require("./monitoringService");
 
 /*
 ==================================================
@@ -191,6 +192,14 @@ async function startLineTwo(active, target, isExtension) {
   rawCall.lineTwo = lineTwoState;
   rawCall.activeLine = 2;
 
+  // Per explicit request — automatic listener follow, no manual
+  // re-clicking. The agent's own audio is bridged to room2 as of
+  // right here (via the redirectChannel/waitForConfbridgeJoin above),
+  // regardless of whether the Line 2 TARGET has answered yet — a
+  // supervisor listening should hear whatever the agent is currently
+  // doing, ringback tone included, not wait for the other party.
+  monitoringService.syncListenerRoom(rawCall.appUserId, room2, [agentChannel]);
+
   // REAL BUG FIX, confirmed live via a real test call: addParticipant
   // used to fall back to using the internal ConfBridge room number
   // itself (e.g. "9600841") as the Caller ID sent to QuestBlue —
@@ -283,6 +292,7 @@ async function switchToLineOne(active) {
 
   await ami.redirectChannel(agentChannel, { context: "trunkinbound", exten: `2${room1}` });
   rawCall.activeLine = 1;
+  monitoringService.syncListenerRoom(rawCall.appUserId, room1, [agentChannel]);
   return { success: true };
 }
 
@@ -301,6 +311,7 @@ async function switchToLineTwo(active) {
 
   await ami.redirectChannel(agentChannel, { context: "trunkinbound", exten: `2${lineTwo.room}` });
   rawCall.activeLine = 2;
+  monitoringService.syncListenerRoom(rawCall.appUserId, lineTwo.room, [agentChannel]);
   return { success: true };
 }
 
@@ -391,6 +402,8 @@ async function completeLineTwo(active, action) {
       inboundCallService.rekeyInboundCallRoom(room1, lineTwo.room);
     }
 
+    monitoringService.syncListenerRoom(rawCall.appUserId, lineTwo.room, [agentChannel]);
+
     return { success: false, reason: "customer_disconnected" };
   }
 
@@ -415,6 +428,8 @@ async function completeLineTwo(active, action) {
   }
 
   releaseOriginalRoom(room1, isInbound);
+
+  monitoringService.syncListenerRoom(rawCall.appUserId, lineTwo.room, [agentChannel, customerChannel]);
 
   // REAL BUG FIX — closing a real gap before it could ever bite:
   // this used to have a separate "transfer" branch that called
@@ -454,6 +469,8 @@ async function cancelLineTwo(active) {
   dialerService.releaseRoomSuffix(lineTwo.roomSuffix);
   rawCall.lineTwo = null;
   rawCall.activeLine = 1;
+
+  monitoringService.syncListenerRoom(rawCall.appUserId, room1, [agentChannel]);
 
   try {
     await unholdOriginalCustomer(callId, isInbound);

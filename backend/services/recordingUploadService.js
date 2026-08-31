@@ -155,9 +155,33 @@ async function getPlaybackUrl(recordingKey) {
   return getSignedUrl(s3, command, { expiresIn: 3600 });
 }
 
+/*
+==================================================
+getDownloadUrl
+==================================================
+Per explicit request — admin-only recording download. Same
+presigned-URL mechanism as getPlaybackUrl above, but with
+ResponseContentDisposition explicitly set to "attachment" — without
+this, S3 serves the file with whatever Content-Type it was uploaded
+as (audio/wav), which browsers play inline rather than prompting an
+actual file save. This is what makes it a real download instead of
+just another way to listen.
+==================================================
+*/
+async function getDownloadUrl(recordingKey, filename) {
+  const command = new GetObjectCommand({
+    Bucket: S3_RECORDING_BUCKET,
+    Key: recordingKey,
+    ResponseContentDisposition: `attachment; filename="${filename}"`,
+  });
+
+  return getSignedUrl(s3, command, { expiresIn: 3600 });
+}
+
 module.exports = {
   uploadRecording,
   getPlaybackUrl,
+  getDownloadUrl,
   recordingPathForCall,
   recordingKeyForCall,
 };

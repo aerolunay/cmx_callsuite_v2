@@ -46,6 +46,7 @@ export default function RecordingsPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [playingId, setPlayingId] = useState(null);
+  const [downloadingId, setDownloadingId] = useState(null);
   const [modalRecording, setModalRecording] = useState(null);
   const [modalUrl, setModalUrl] = useState(null);
 
@@ -132,6 +133,26 @@ export default function RecordingsPage() {
       setError(err.message);
     } finally {
       setPlayingId(null);
+    }
+  }
+
+  // Admin-only — see dialerRoutes.js's own download-url route
+  // (separate from playback-url, since a real file-save prompt needs
+  // Content-Disposition: attachment set on the presigned URL itself,
+  // not something achievable by just reusing the playback link).
+  // Triggers the actual browser download via a real navigation
+  // (window.location.href), not window.open — a new-tab approach
+  // would just show the file inline rather than prompting a save.
+  async function handleDownload(recording) {
+    setDownloadingId(recording.call_id);
+    setError("");
+    try {
+      const data = await api.getRecordingDownloadUrl(recording.call_id);
+      window.location.href = data.url;
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setDownloadingId(null);
     }
   }
 
@@ -228,6 +249,19 @@ export default function RecordingsPage() {
                       >
                         {playingId === r.call_id ? "Loading…" : "Play"}
                       </button>
+                      {agent?.accessLevel === "admin" && (
+                        <>
+                          {" "}
+                          <button
+                            type="button"
+                            className="link"
+                            disabled={downloadingId === r.call_id}
+                            onClick={() => handleDownload(r)}
+                          >
+                            {downloadingId === r.call_id ? "Preparing…" : "Download"}
+                          </button>
+                        </>
+                      )}
                     </td>
                   </tr>
                 ))}

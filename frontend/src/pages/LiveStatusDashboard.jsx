@@ -185,8 +185,16 @@ export default function LiveStatusDashboard() {
   // automatically ends any previous one first (see adminRoutes.js's
   // own comment on this), so this state just needs to track what to
   // show, not enforce the one-at-a-time rule itself.
+  //
+  // Per explicit request — one "Listen" action per agent now, no
+  // separate Line 1/Line 2 buttons at all. Which room actually gets
+  // listened to is decided and kept in sync entirely server-side
+  // (see monitoringService.syncListenerRoom, called from every point
+  // in attendedTransferService.js where the agent's active line can
+  // change) — this page has no notion of "which line" at all
+  // anymore, on purpose.
   const [listeningTo, setListeningTo] = useState(null);
-  const [listenBusyKey, setListenBusyKey] = useState(null);
+  const [listenBusyId, setListenBusyId] = useState(null);
 
   // Ref mirrors listeningTo so the unmount cleanup below always sees
   // its LATEST value, not whatever it was when this effect last ran
@@ -204,16 +212,16 @@ export default function LiveStatusDashboard() {
     };
   }, []);
 
-  async function handleStartListen(agentRow, line) {
-    setListenBusyKey(`${agentRow.appUserId}-${line}`);
+  async function handleStartListen(agentRow) {
+    setListenBusyId(agentRow.appUserId);
     setError("");
     try {
-      await api.startListen(agentRow.appUserId, line);
-      setListeningTo({ appUserId: agentRow.appUserId, fullName: agentRow.fullName, line });
+      await api.startListen(agentRow.appUserId);
+      setListeningTo({ appUserId: agentRow.appUserId, fullName: agentRow.fullName });
     } catch (err) {
       setError(err.message);
     } finally {
-      setListenBusyKey(null);
+      setListenBusyId(null);
     }
   }
 
@@ -353,7 +361,6 @@ export default function LiveStatusDashboard() {
           <div className="card" style={{ marginBottom: 20, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
             <span>
               🔴 Silently listening to <strong>{listeningTo.fullName}</strong>
-              {listeningTo.line === 2 ? " (Line 2)" : ""}
             </span>
             <button type="button" className="link" onClick={handleStopListen}>
               Stop listening
@@ -510,16 +517,19 @@ export default function LiveStatusDashboard() {
                                   {kickingId === a.appUserId ? "Kicking…" : "Kick"}
                                 </button>
                               )}
-                              {/* Silent Listen — shown whenever there's an
-                                  actual live call to listen to. Line 2's
-                                  button is offered unconditionally rather
-                                  than only when it's actually active,
-                                  since that state isn't currently exposed
-                                  by this endpoint — the backend gives a
-                                  clear error ("Line 2 isn't active on
-                                  this call right now") if clicked when it
-                                  doesn't apply, which is an acceptable
-                                  trade-off for now. */}
+                              {/* Silent Listen — per explicit request, one
+                                  action per agent now, no separate Line
+                                  1/Line 2 choice at all. Automatically
+                                  follows whichever room the agent's own
+                                  audio is currently in, and stays in sync
+                                  as that changes — see
+                                  monitoringService.syncListenerRoom,
+                                  called from every point in
+                                  attendedTransferService.js where the
+                                  active line can change. Conference/Blind
+                                  Transfer participants are heard
+                                  automatically too — those join the SAME
+                                  room as Line 1, not a separate one. */}
                               {["IN_CALL", "ON_HOLD"].includes(a.status) &&
                                 ["training_quality", "supervisor", "admin"].includes(agent?.accessLevel) && (
                                 <>
@@ -527,18 +537,10 @@ export default function LiveStatusDashboard() {
                                   <button
                                     type="button"
                                     className="link"
-                                    disabled={listenBusyKey === `${a.appUserId}-1`}
-                                    onClick={() => handleStartListen(a, 1)}
+                                    disabled={listenBusyId === a.appUserId}
+                                    onClick={() => handleStartListen(a)}
                                   >
-                                    {listenBusyKey === `${a.appUserId}-1` ? "Connecting…" : "Listen"}
-                                  </button>{" "}
-                                  <button
-                                    type="button"
-                                    className="link"
-                                    disabled={listenBusyKey === `${a.appUserId}-2`}
-                                    onClick={() => handleStartListen(a, 2)}
-                                  >
-                                    {listenBusyKey === `${a.appUserId}-2` ? "Connecting…" : "Listen (Line 2)"}
+                                    {listenBusyId === a.appUserId ? "Connecting…" : "Listen"}
                                   </button>
                                 </>
                               )}
@@ -650,6 +652,7 @@ export default function LiveStatusDashboard() {
                     <tr>
                       <th>Campaign</th>
                       <th>Caller ID</th>
+                      <th>Agent</th>
                       <th>Call DateTime</th>
                       <th>Handle Time</th>
                     </tr>
@@ -657,7 +660,7 @@ export default function LiveStatusDashboard() {
                   <tbody>
                     {inboundCallsList.length === 0 ? (
                       <tr>
-                        <td colSpan={4} style={{ color: "#888" }}>
+                        <td colSpan={5} style={{ color: "#888" }}>
                           No inbound calls today.
                         </td>
                       </tr>
@@ -666,6 +669,7 @@ export default function LiveStatusDashboard() {
                         <tr key={i}>
                           <td>{c.campaignId || "—"}</td>
                           <td>{c.phoneNumber || "—"}</td>
+                          <td>{c.agentName || "—"}</td>
                           <td>{formatDate(c.callStartedAt)}</td>
                           <td>{formatDurationHMS(c.handleTimeSeconds)}</td>
                         </tr>
@@ -684,6 +688,7 @@ export default function LiveStatusDashboard() {
                     <tr>
                       <th>Campaign</th>
                       <th>Caller ID</th>
+                      <th>Agent</th>
                       <th>Call DateTime</th>
                       <th>Handle Time</th>
                     </tr>
@@ -691,7 +696,7 @@ export default function LiveStatusDashboard() {
                   <tbody>
                     {outboundCallsList.length === 0 ? (
                       <tr>
-                        <td colSpan={4} style={{ color: "#888" }}>
+                        <td colSpan={5} style={{ color: "#888" }}>
                           No outbound calls today.
                         </td>
                       </tr>
@@ -700,6 +705,7 @@ export default function LiveStatusDashboard() {
                         <tr key={i}>
                           <td>{c.campaignId || "—"}</td>
                           <td>{c.phoneNumber || "—"}</td>
+                          <td>{c.agentName || "—"}</td>
                           <td>{formatDate(c.callStartedAt)}</td>
                           <td>{formatDurationHMS(c.handleTimeSeconds)}</td>
                         </tr>

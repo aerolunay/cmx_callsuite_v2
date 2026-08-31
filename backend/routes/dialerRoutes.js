@@ -1293,4 +1293,49 @@ router.get("/recordings/:callId/playback-url", requireRoles(...RECORDINGS_ROLES)
   }
 });
 
+/*
+==================================================
+GET /api/recordings/:callId/download-url
+==================================================
+Per explicit request — admin-only. Mirrors playback-url's own lookup
+and campaign-ownership check exactly, but requireRoles here is
+narrowed to just "admin" (not the full RECORDINGS_ROLES list) — every
+other role can still play recordings via the route above, just not
+download them.
+==================================================
+*/
+router.get("/recordings/:callId/download-url", requireRoles("admin"), async (req, res) => {
+  try {
+    const { callId } = req.params;
+
+    const [rows] = await db.execute(
+      `
+        SELECT recording_key, campaign_id FROM cmx_dialer.dialer_call_log WHERE call_id = ? AND recording_key IS NOT NULL
+        UNION ALL
+        SELECT recording_key, campaign_id FROM cmx_dialer.inbound_call_log WHERE call_id = ? AND recording_key IS NOT NULL
+        LIMIT 1
+      `,
+      [callId, callId]
+    );
+
+    if (!rows.length) {
+      return res.status(404).json({ success: false, message: "No recording found for this call." });
+    }
+
+    const { accessLevel, appUserId } = req.session.agent;
+    if (!UNRESTRICTED_CAMPAIGN_ROLES.includes(accessLevel)) {
+      const assignedIds = await getAssignedCampaignIds(appUserId);
+      if (!assignedIds.includes(rows[0].campaign_id)) {
+        return res.status(403).json({ success: false, message: "You are not assigned to that campaign." });
+      }
+    }
+
+    const url = await recordingUploadService.getDownloadUrl(rows[0].recording_key, `${callId}.wav`);
+    return res.json({ success: true, url });
+  } catch (error) {
+    console.error(`GET /api/recordings/${req.params.callId}/download-url failed:`, error);
+    return res.status(500).json({ success: false, message: "Failed to generate download URL." });
+  }
+});
+
 module.exports = router;

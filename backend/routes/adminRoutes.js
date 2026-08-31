@@ -1090,7 +1090,6 @@ Worth a follow-up once this ships.
 router.post("/listen/start", requireRoles("training_quality", "supervisor", "admin"), async (req, res) => {
   try {
     const targetAppUserId = Number(req.body.appUserId);
-    const wantsLineTwo = Number(req.body.line) === 2;
     if (!targetAppUserId) {
       return res.status(400).json({ success: false, message: "appUserId is required." });
     }
@@ -1116,7 +1115,7 @@ router.post("/listen/start", requireRoles("training_quality", "supervisor", "adm
     }
 
     const fullyConnectedStatus = direction === "outbound" ? "customer_connected" : "agent_connected";
-    if (!wantsLineTwo && call.status !== fullyConnectedStatus) {
+    if (call.status !== fullyConnectedStatus) {
       return res
         .status(409)
         .json({ success: false, message: "This call hasn't actually connected yet — nothing to listen to." });
@@ -1133,17 +1132,21 @@ router.post("/listen/start", requireRoles("training_quality", "supervisor", "adm
       }
     }
 
+    // Per explicit request — one "Listen" action, no separate Line
+    // 1/Line 2 buttons at all. Follows call.activeLine (this app's
+    // own existing source of truth for which room the agent's audio
+    // is CURRENTLY bridged to — see attendedTransferService.js) at
+    // the moment Listen is clicked; every subsequent switch is then
+    // handled automatically by monitoringService.syncListenerRoom,
+    // called from every point in attendedTransferService.js where
+    // activeLine can change. Conference/Blind Transfer participants
+    // need no special handling here at all — confirmed directly,
+    // those join the SAME room as Line 1, never a separate one.
     const excludeChannels = [call.agentChannel, call.customerChannel].filter(Boolean);
-    let room;
-
-    if (wantsLineTwo) {
-      if (!call.lineTwo || call.lineTwo.status !== "connected") {
-        return res.status(409).json({ success: false, message: "Line 2 isn't active on this call right now." });
-      }
+    let room = call.room;
+    if (call.activeLine === 2 && call.lineTwo) {
       room = call.lineTwo.room;
       if (call.lineTwo.targetChannel) excludeChannels.push(call.lineTwo.targetChannel);
-    } else {
-      room = call.room;
     }
 
     // A supervisor can only ever be listening to one call at a time
@@ -1156,6 +1159,7 @@ router.post("/listen/start", requireRoles("training_quality", "supervisor", "adm
       room,
       listenerExtension,
       listenerAppUserId,
+      targetAppUserId,
       excludeChannels
     );
     if (!result.success) {
@@ -1479,12 +1483,14 @@ router.get(
           combined.phone_number,
           combined.call_started_at,
           combined.direction,
-          agg.handle_time_seconds
+          agg.handle_time_seconds,
+          au.full_name AS agent_name,
+          combined.agent_user
         FROM (
-          SELECT campaign_id, phone_number, call_id, call_started_at, 'outbound' AS direction
+          SELECT campaign_id, phone_number, call_id, call_started_at, agent_user, 'outbound' AS direction
           FROM cmx_dialer.dialer_call_log
           UNION ALL
-          SELECT campaign_id, caller_id_number AS phone_number, call_id, call_started_at, 'inbound' AS direction
+          SELECT campaign_id, caller_id_number AS phone_number, call_id, call_started_at, agent_user, 'inbound' AS direction
           FROM cmx_dialer.inbound_call_log
         ) combined
         LEFT JOIN (
@@ -1493,6 +1499,7 @@ router.get(
           WHERE related_call_id IS NOT NULL AND ended_at IS NOT NULL
           GROUP BY related_call_id
         ) agg ON agg.related_call_id = combined.call_id
+        LEFT JOIN cmx_dialer.app_users au ON au.vicidial_user = combined.agent_user
         WHERE combined.call_started_at >= ? AND combined.call_started_at <= ?
         ${campaignFilter}
         ORDER BY combined.call_started_at DESC
@@ -1507,6 +1514,11 @@ router.get(
       callStartedAt: r.call_started_at,
       direction: r.direction,
       handleTimeSeconds: r.handle_time_seconds,
+      // Falls back to the raw vicidial_user if the app_users join
+      // doesn't resolve (e.g. an agent account since deleted) — same
+      // "agent_name || agent_user" fallback pattern already used by
+      // getRawCallsReport() elsewhere in this file, for consistency.
+      agentName: r.agent_name || r.agent_user || null,
     }));
 
     return res.json({ success: true, calls });

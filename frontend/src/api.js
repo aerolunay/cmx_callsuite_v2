@@ -148,8 +148,8 @@ export const api = {
     request(`/admin/users/${appUserId}`, { method: "DELETE" }),
   kickAgent: (appUserId) =>
     request(`/admin/users/${appUserId}/kick`, { method: "POST" }),
-  startListen: (appUserId, line = 1) =>
-    request("/admin/listen/start", { method: "POST", body: JSON.stringify({ appUserId, line }) }),
+  startListen: (appUserId) =>
+    request("/admin/listen/start", { method: "POST", body: JSON.stringify({ appUserId }) }),
   stopListen: () => request("/admin/listen/stop", { method: "POST" }),
   // Real-time priority control — used by the Live Status Dashboard's
   // "Set Prio" per-row action. Deliberately lightweight/standalone,
@@ -205,6 +205,8 @@ export const api = {
   getRecordings: (queryString) => request(`/recordings${queryString ? `?${queryString}` : ""}`),
   getRecordingPlaybackUrl: (callId) =>
     request(`/recordings/${encodeURIComponent(callId)}/playback-url`),
+  getRecordingDownloadUrl: (callId) =>
+    request(`/recordings/${encodeURIComponent(callId)}/download-url`),
 
   // Outbound Auto-Dial, Phase 1 — lead upload, DNC management, and
   // per-campaign autodial rules. Template downloads are plain GET
