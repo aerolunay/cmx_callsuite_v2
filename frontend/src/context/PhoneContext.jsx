@@ -185,10 +185,17 @@ export function PhoneProvider({ children }) {
           setCallState(CALL_STATES.ACTIVE);
         }
 
-        session.on("accepted", () => setCallState(CALL_STATES.ACTIVE));
-        session.on("confirmed", () => setCallState(CALL_STATES.ACTIVE));
+        session.on("accepted", () => {
+          console.log("[PhoneContext] Session 'accepted' event fired.");
+          setCallState(CALL_STATES.ACTIVE);
+        });
+        session.on("confirmed", () => {
+          console.log("[PhoneContext] Session 'confirmed' event fired.");
+          setCallState(CALL_STATES.ACTIVE);
+        });
 
-        session.on("ended", () => {
+        session.on("ended", (e) => {
+          console.log("[PhoneContext] Session 'ended' event fired. cause:", e?.cause);
           setCallState(CALL_STATES.ENDED);
           sessionRef.current = null;
           if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null;
