@@ -173,7 +173,12 @@ export function PhoneProvider({ children }) {
           // only ever matches the one, specific case.
           if (session.remote_identity?.display_name === "CMX Silent Listen") {
             console.log("[PhoneContext] Matched Silent Listen — auto-answering now.");
-            session.answer({ mediaConstraints: { audio: true, video: false } });
+            try {
+              session.answer({ mediaConstraints: { audio: true, video: false } });
+              console.log("[PhoneContext] session.answer() call returned without throwing.");
+            } catch (err) {
+              console.error("[PhoneContext] session.answer() threw synchronously:", err);
+            }
           } else {
             console.log("[PhoneContext] Did NOT match Silent Listen — waiting for manual answer as normal.");
           }
@@ -181,16 +186,24 @@ export function PhoneProvider({ children }) {
           setCallState(CALL_STATES.ACTIVE);
         }
 
-        session.on("accepted", () => setCallState(CALL_STATES.ACTIVE));
-        session.on("confirmed", () => setCallState(CALL_STATES.ACTIVE));
+        session.on("accepted", () => {
+          console.log("[PhoneContext] Session 'accepted' event fired.");
+          setCallState(CALL_STATES.ACTIVE);
+        });
+        session.on("confirmed", () => {
+          console.log("[PhoneContext] Session 'confirmed' event fired.");
+          setCallState(CALL_STATES.ACTIVE);
+        });
 
-        session.on("ended", () => {
+        session.on("ended", (e) => {
+          console.log("[PhoneContext] Session 'ended' event fired. cause:", e?.cause);
           setCallState(CALL_STATES.ENDED);
           sessionRef.current = null;
           if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null;
         });
 
-        session.on("failed", () => {
+        session.on("failed", (e) => {
+          console.error("[PhoneContext] Session 'failed' event fired. cause:", e?.cause, "full event:", e);
           setCallState(CALL_STATES.ENDED);
           sessionRef.current = null;
           if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null;
