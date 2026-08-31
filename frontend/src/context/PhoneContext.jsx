@@ -144,7 +144,10 @@ export function PhoneProvider({ children }) {
       ua.on("newRTCSession", (data) => {
         const session = data.session;
 
+        console.log("[PhoneContext] newRTCSession fired. originator:", data.originator, "existing sessionRef.current:", !!sessionRef.current);
+
         if (sessionRef.current) {
+          console.warn("[PhoneContext] Already have an active session — terminating this new one instead of answering it.");
           if (data.originator === "remote") session.terminate();
           return;
         }
@@ -155,6 +158,7 @@ export function PhoneProvider({ children }) {
 
         if (data.originator === "remote") {
           setCallState(CALL_STATES.INCOMING);
+          console.log("[PhoneContext] Incoming session remote_identity:", session.remote_identity, "display_name:", session.remote_identity?.display_name);
 
           // REAL BUG FIX, confirmed live: a supervisor without
           // /dialer page access has nowhere to click "Answer" at
@@ -168,7 +172,10 @@ export function PhoneProvider({ children }) {
           // real, manual answer via MiniPhone as before; this check
           // only ever matches the one, specific case.
           if (session.remote_identity?.display_name === "CMX Silent Listen") {
+            console.log("[PhoneContext] Matched Silent Listen — auto-answering now.");
             session.answer({ mediaConstraints: { audio: true, video: false } });
+          } else {
+            console.log("[PhoneContext] Did NOT match Silent Listen — waiting for manual answer as normal.");
           }
         } else {
           setCallState(CALL_STATES.ACTIVE);
@@ -193,6 +200,17 @@ export function PhoneProvider({ children }) {
           e.peerconnection.addEventListener("track", (event) => {
             if (remoteAudioRef.current) {
               remoteAudioRef.current.srcObject = event.streams[0];
+              // REAL BUG FIX, confirmed live: relying solely on the
+              // autoplay attribute (set once, at element creation)
+              // wasn't reliably starting playback once the stream
+              // attached here, well after that — the SIP session
+              // itself connected fine (confirmed via console
+              // logging), the room correctly showed the listener as
+              // joined, but no audio was actually heard. Explicit
+              // .play() is more robust than the attribute alone.
+              remoteAudioRef.current.play().catch((err) => {
+                console.error("[PhoneContext] Failed to play remote audio:", err.message);
+              });
             }
           });
         });
