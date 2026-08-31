@@ -344,7 +344,7 @@ export default function ReportsPage() {
                 <tbody>
                   {rawCalls.map((c) => (
                     <tr key={c.call_id}>
-                      <td>{new Date(c.call_started_at).toLocaleString()}</td>
+                      <td>{new Date(c.call_started_at).toLocaleString(undefined, { timeZone: "America/New_York" })}</td>
                       <td>{c.campaign_id || "—"}</td>
                       <td>{c.direction === "inbound" ? "Inbound" : "Outbound"}</td>
                       <td>{c.agent_name || c.agent_user || "—"}</td>

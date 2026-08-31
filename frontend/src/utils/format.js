@@ -101,7 +101,18 @@ export function serviceLevelColorFor(pct) {
 export function formatDate(value) {
   if (!value) return "—";
   const d = new Date(value);
+  // REAL BUG FIX, confirmed live: toLocaleString's locale/timezone
+  // argument was `undefined`, meaning "use the browser's own local
+  // timezone" — but this app is meant to always show Eastern time
+  // (see statsService.js's own "Eastern-day-boundary" logic and every
+  // other timestamp in this app), regardless of which timezone the
+  // viewer's own computer happens to be set to. The underlying data
+  // was actually correct the whole time (confirmed directly against
+  // the database) — only the DISPLAY was wrong, silently reformatting
+  // an already-correct moment into whatever timezone the viewing
+  // browser's OS happened to be configured for.
   return d.toLocaleString(undefined, {
+    timeZone: "America/New_York",
     month: "short",
     day: "numeric",
     hour: "numeric",

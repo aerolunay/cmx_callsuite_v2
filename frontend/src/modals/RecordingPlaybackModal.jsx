@@ -86,7 +86,7 @@ export default function RecordingPlaybackModal({ recording, url, onClose }) {
 
   function formatDateTime(value) {
     if (!value) return "—";
-    return new Date(value).toLocaleString();
+    return new Date(value).toLocaleString(undefined, { timeZone: "America/New_York" });
   }
 
   const customerName = [recording.first_name, recording.last_name].filter(Boolean).join(" ") || "—";
