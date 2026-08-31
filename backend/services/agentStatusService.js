@@ -222,16 +222,21 @@ as the DB status, since a READY row alone isn't proof anyone is
 actually present in the app (browser close/crash/sleep leaves rows
 open indefinitely; see the comment on this originally).
 
-PRIORITY LOGIC (new): priority 1 (default) is strict FIFO — always
-selected immediately when it's their turn. Priority 2 is skipped up to
-3 times in a row when it would otherwise be their turn; priority 3 up
-to 5 times — in both cases, ONLY when a lower-skip-tier candidate is
-actually available to take the call instead. If a priority 2/3 agent
-is the ONLY eligible candidate at all, or every eligible candidate is
-currently under its own skip threshold, the "unless no other agents
-are available" carve-out always wins — someone gets selected rather
-than letting the call wait indefinitely for a priority tier that never
-comes due.
+PRIORITY LOGIC (updated per explicit request): priority 1 (default) is
+strict FIFO — always selected immediately when it's their turn.
+Priority 2 is skipped up to 5 times in a row when it would otherwise
+be their turn. Priority 3 is skipped UNCONDITIONALLY — Infinity as its
+threshold means the "skipCount < threshold" check below is always
+true, so a priority 3 agent is never selected through the normal loop
+at all, no matter how many times they're skipped. In both cases, ONLY
+when a lower-skip-tier candidate is actually available to take the
+call instead. If a priority 2/3 agent is the ONLY eligible candidate
+at all, or every eligible candidate is currently under its own skip
+threshold (which, for priority 3, is permanently true — this is what
+makes "unless no one else is available" the ONLY way they're ever
+selected), the "unless no other agents are available" carve-out always
+wins — someone gets selected rather than letting the call wait
+indefinitely for a priority tier that never comes due.
 
 priority_skip_count lives on cmx_dialer.app_users (not
 agent_status_log) — it's a running counter tied to the agent, meant to
@@ -249,7 +254,7 @@ can never be matched to the same agent before either Originate
 finishes.
 ==================================================
 */
-const SKIP_THRESHOLDS = { 1: 0, 2: 3, 3: 5 };
+const SKIP_THRESHOLDS = { 1: 0, 2: 5, 3: Infinity };
 
 async function incrementSkipCount(appUserId) {
   await db.execute(
@@ -324,8 +329,13 @@ async function getAnyReadyAgentWithExtension(campaignId, excludeAppUserIds = [])
       // Skip this candidate for now — someone else (further down the
       // FIFO order, or a lower skip-tier) gets this call instead. Bump
       // their counter so they're one step closer to their next
-      // guaranteed turn.
-      await incrementSkipCount(candidate.appUserId);
+      // guaranteed turn — except for priority 3 (threshold Infinity),
+      // where that count can never matter to any future decision at
+      // all, so incrementing it forever would just be a wasted write
+      // on every single call this function is ever asked to match.
+      if (Number.isFinite(threshold)) {
+        await incrementSkipCount(candidate.appUserId);
+      }
       continue;
     }
 
