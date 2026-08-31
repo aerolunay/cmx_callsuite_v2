@@ -153,49 +153,27 @@ export function PhoneProvider({ children }) {
         sessionIsIncomingRef.current = data.originator === "remote";
         setRemoteIdentity(session.remote_identity?.uri?.user || "");
 
-        if (data.originator === "remote") {
-          setCallState(CALL_STATES.INCOMING);
+        // REAL BUG FIX, confirmed live: every session.on(...) listener
+        // below (most importantly 'peerconnection', which is what
+        // attaches the incoming audio track at all) MUST be registered
+        // BEFORE session.answer() is ever called. For a regular,
+        // manually-answered call this was never a problem — the user
+        // clicks "Answer" as a genuinely separate, later action, long
+        // after this whole handler already ran and every listener was
+        // already attached. Silent Listen's auto-answer, though, used
+        // to call session.answer() immediately, inline, further down
+        // in this same function — BEFORE reaching the 'peerconnection'
+        // registration below at all. If that event fires as fast
+        // internally as it appears to, answering that early means
+        // missing it entirely: the audio track never gets attached to
+        // remoteAudioRef, the call connects and stays connected, but
+        // nothing is ever actually heard. Confirmed exactly this way —
+        // 'accepted'/'confirmed' both fired normally, 'peerconnection'
+        // never did at all.
+        session.on("accepted", () => setCallState(CALL_STATES.ACTIVE));
+        session.on("confirmed", () => setCallState(CALL_STATES.ACTIVE));
 
-          // REAL BUG FIX, confirmed live: a supervisor without
-          // /dialer page access has nowhere to click "Answer" at
-          // all — MiniPhone.jsx (the only UI with that button) only
-          // renders there, while this connection itself is app-wide
-          // regardless of page. Silent Listen's own Originate call
-          // (see monitoringService.js) sets this exact, distinctive
-          // Caller ID specifically so it can be recognized here and
-          // auto-answered immediately — every other kind of incoming
-          // call (Line 2, Conference, Transfer) still requires a
-          // real, manual answer via MiniPhone as before; this check
-          // only ever matches the one, specific case.
-          //
-          // Confirmed live this needs LiveStatusDashboard.jsx's own
-          // "warm up" getUserMedia() call at the actual Listen click
-          // to reliably succeed — a purely programmatic getUserMedia()
-          // here, with no truly recent user gesture behind it, was
-          // silently blocked ("User Denied Media Access") even with
-          // mic permission already granted.
-          if (session.remote_identity?.display_name === "CMX Silent Listen") {
-            try {
-              session.answer({ mediaConstraints: { audio: true, video: false } });
-            } catch (err) {
-              console.error("[PhoneContext] Silent Listen auto-answer threw:", err.message);
-            }
-          }
-        } else {
-          setCallState(CALL_STATES.ACTIVE);
-        }
-
-        session.on("accepted", () => {
-          console.log("[PhoneContext] Session 'accepted' event fired.");
-          setCallState(CALL_STATES.ACTIVE);
-        });
-        session.on("confirmed", () => {
-          console.log("[PhoneContext] Session 'confirmed' event fired.");
-          setCallState(CALL_STATES.ACTIVE);
-        });
-
-        session.on("ended", (e) => {
-          console.log("[PhoneContext] Session 'ended' event fired. cause:", e?.cause);
+        session.on("ended", () => {
           setCallState(CALL_STATES.ENDED);
           sessionRef.current = null;
           if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null;
@@ -209,30 +187,51 @@ export function PhoneProvider({ children }) {
         });
 
         session.on("peerconnection", (e) => {
-          console.log("[PhoneContext] 'peerconnection' event fired.");
           e.peerconnection.addEventListener("track", (event) => {
-            console.log("[PhoneContext] 'track' event fired. streams:", event.streams.length, "track kind:", event.track?.kind);
             if (remoteAudioRef.current) {
               remoteAudioRef.current.srcObject = event.streams[0];
-              // REAL BUG FIX, confirmed live: relying solely on the
-              // autoplay attribute (set once, at element creation)
-              // wasn't reliably starting playback once the stream
-              // attached here, well after that — the SIP session
-              // itself connected fine (confirmed via console
-              // logging), the room correctly showed the listener as
-              // joined, but no audio was actually heard. Explicit
-              // .play() is more robust than the attribute alone.
-              remoteAudioRef.current
-                .play()
-                .then(() => console.log("[PhoneContext] remoteAudioRef.play() succeeded."))
-                .catch((err) => {
-                  console.error("[PhoneContext] Failed to play remote audio:", err.message);
-                });
-            } else {
-              console.warn("[PhoneContext] 'track' fired but remoteAudioRef.current is null!");
+              // Explicit .play() is more robust than relying solely on
+              // the autoplay attribute, which doesn't reliably start
+              // playback once the stream attaches here, well after
+              // element creation.
+              remoteAudioRef.current.play().catch((err) => {
+                console.error("[PhoneContext] Failed to play remote audio:", err.message);
+              });
             }
           });
         });
+
+        if (data.originator === "remote") {
+          setCallState(CALL_STATES.INCOMING);
+
+          // Per explicit request — a supervisor without /dialer page
+          // access has nowhere to click "Answer" at all — MiniPhone.jsx
+          // (the only UI with that button) only renders there, while
+          // this connection itself is app-wide regardless of page.
+          // Silent Listen's own Originate call (see
+          // monitoringService.js) sets this exact, distinctive Caller
+          // ID specifically so it can be recognized here and
+          // auto-answered immediately — every other kind of incoming
+          // call (Line 2, Conference, Transfer) still requires a real,
+          // manual answer via MiniPhone as before; this check only
+          // ever matches the one, specific case.
+          //
+          // Confirmed live this also needs LiveStatusDashboard.jsx's
+          // own "warm up" getUserMedia() call at the actual Listen
+          // click to reliably succeed — a purely programmatic
+          // getUserMedia() here, with no truly recent user gesture
+          // behind it, was silently blocked ("User Denied Media
+          // Access") even with mic permission already granted.
+          if (session.remote_identity?.display_name === "CMX Silent Listen") {
+            try {
+              session.answer({ mediaConstraints: { audio: true, video: false } });
+            } catch (err) {
+              console.error("[PhoneContext] Silent Listen auto-answer threw:", err.message);
+            }
+          }
+        } else {
+          setCallState(CALL_STATES.ACTIVE);
+        }
       });
 
       ua.start();
