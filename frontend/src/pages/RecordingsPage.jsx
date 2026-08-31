@@ -4,6 +4,7 @@ import Header from "../components/Header";
 import { useAuth } from "../context/AuthContext";
 import { api } from "../api";
 import RecordingPlaybackModal from "../modals/RecordingPlaybackModal";
+import { formatDurationHMS } from "../utils/format";
 
 /*
 ==================================================
@@ -166,6 +167,15 @@ export default function RecordingsPage() {
     return new Date(value).toLocaleString(undefined, { timeZone: "America/New_York" });
   }
 
+  // Calculated directly from the two timestamps this endpoint already
+  // returns — no backend change needed at all for this.
+  function formatCallDuration(startedAt, endedAt) {
+    if (!startedAt || !endedAt) return "—";
+    const seconds = Math.round((new Date(endedAt).getTime() - new Date(startedAt).getTime()) / 1000);
+    if (seconds < 0) return "—"; // defensive only — should never happen for a genuinely completed, recorded call
+    return formatDurationHMS(seconds);
+  }
+
   return (
     <>
       <Header />
@@ -229,6 +239,7 @@ export default function RecordingsPage() {
                   <th>Agent</th>
                   <th>Direction</th>
                   <th>Phone Number</th>
+                  <th>Duration</th>
                   <th>Action</th>
                 </tr>
               </thead>
@@ -240,6 +251,7 @@ export default function RecordingsPage() {
                     <td>{r.agent_name || r.agent_user || "—"}</td>
                     <td>{r.direction === "inbound" ? "Inbound" : "Outbound"}</td>
                     <td>{r.phone_number || "—"}</td>
+                    <td>{formatCallDuration(r.call_started_at, r.call_ended_at)}</td>
                     <td>
                       <button
                         type="button"
