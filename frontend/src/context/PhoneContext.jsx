@@ -144,10 +144,7 @@ export function PhoneProvider({ children }) {
       ua.on("newRTCSession", (data) => {
         const session = data.session;
 
-        console.log("[PhoneContext] newRTCSession fired. originator:", data.originator, "existing sessionRef.current:", !!sessionRef.current);
-
         if (sessionRef.current) {
-          console.warn("[PhoneContext] Already have an active session — terminating this new one instead of answering it.");
           if (data.originator === "remote") session.terminate();
           return;
         }
@@ -158,7 +155,6 @@ export function PhoneProvider({ children }) {
 
         if (data.originator === "remote") {
           setCallState(CALL_STATES.INCOMING);
-          console.log("[PhoneContext] Incoming session remote_identity:", session.remote_identity, "display_name:", session.remote_identity?.display_name);
 
           // REAL BUG FIX, confirmed live: a supervisor without
           // /dialer page access has nowhere to click "Answer" at
@@ -171,46 +167,44 @@ export function PhoneProvider({ children }) {
           // call (Line 2, Conference, Transfer) still requires a
           // real, manual answer via MiniPhone as before; this check
           // only ever matches the one, specific case.
+          //
+          // Confirmed live this needs LiveStatusDashboard.jsx's own
+          // "warm up" getUserMedia() call at the actual Listen click
+          // to reliably succeed — a purely programmatic getUserMedia()
+          // here, with no truly recent user gesture behind it, was
+          // silently blocked ("User Denied Media Access") even with
+          // mic permission already granted.
           if (session.remote_identity?.display_name === "CMX Silent Listen") {
-            console.log("[PhoneContext] Matched Silent Listen — auto-answering now.");
             try {
               session.answer({ mediaConstraints: { audio: true, video: false } });
-              console.log("[PhoneContext] session.answer() call returned without throwing.");
             } catch (err) {
-              console.error("[PhoneContext] session.answer() threw synchronously:", err);
+              console.error("[PhoneContext] Silent Listen auto-answer threw:", err.message);
             }
-          } else {
-            console.log("[PhoneContext] Did NOT match Silent Listen — waiting for manual answer as normal.");
           }
         } else {
           setCallState(CALL_STATES.ACTIVE);
         }
 
-        session.on("accepted", () => {
-          console.log("[PhoneContext] Session 'accepted' event fired.");
-          setCallState(CALL_STATES.ACTIVE);
-        });
-        session.on("confirmed", () => {
-          console.log("[PhoneContext] Session 'confirmed' event fired.");
-          setCallState(CALL_STATES.ACTIVE);
-        });
+        session.on("accepted", () => setCallState(CALL_STATES.ACTIVE));
+        session.on("confirmed", () => setCallState(CALL_STATES.ACTIVE));
 
-        session.on("ended", (e) => {
-          console.log("[PhoneContext] Session 'ended' event fired. cause:", e?.cause);
+        session.on("ended", () => {
           setCallState(CALL_STATES.ENDED);
           sessionRef.current = null;
           if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null;
         });
 
         session.on("failed", (e) => {
-          console.error("[PhoneContext] Session 'failed' event fired. cause:", e?.cause, "full event:", e);
+          console.error("[PhoneContext] Call session failed, cause:", e?.cause);
           setCallState(CALL_STATES.ENDED);
           sessionRef.current = null;
           if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null;
         });
 
         session.on("peerconnection", (e) => {
+          console.log("[PhoneContext] 'peerconnection' event fired.");
           e.peerconnection.addEventListener("track", (event) => {
+            console.log("[PhoneContext] 'track' event fired. streams:", event.streams.length, "track kind:", event.track?.kind);
             if (remoteAudioRef.current) {
               remoteAudioRef.current.srcObject = event.streams[0];
               // REAL BUG FIX, confirmed live: relying solely on the
@@ -221,9 +215,14 @@ export function PhoneProvider({ children }) {
               // logging), the room correctly showed the listener as
               // joined, but no audio was actually heard. Explicit
               // .play() is more robust than the attribute alone.
-              remoteAudioRef.current.play().catch((err) => {
-                console.error("[PhoneContext] Failed to play remote audio:", err.message);
-              });
+              remoteAudioRef.current
+                .play()
+                .then(() => console.log("[PhoneContext] remoteAudioRef.play() succeeded."))
+                .catch((err) => {
+                  console.error("[PhoneContext] Failed to play remote audio:", err.message);
+                });
+            } else {
+              console.warn("[PhoneContext] 'track' fired but remoteAudioRef.current is null!");
             }
           });
         });
