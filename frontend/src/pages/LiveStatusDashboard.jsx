@@ -51,6 +51,16 @@ const STATE_LABELS = {
 
 const DIRECTION_LABELS = { inbound: "Inbound", outbound: "Outbound" };
 
+// Voicemails card — deliberately a NARROWER role set than this whole
+// page's own access (supervisor/training_quality/account_manager/wfm/
+// admin). Per explicit request, wfm has no voicemail access at all
+// ("WFM is just call queue monitoring") — same VOICEMAIL_ROLES set
+// voicemailRoutes.js/VoicemailsPage.jsx already enforce server-side.
+// Gated here too so wfm's dashboard simply never attempts the fetch
+// (and never shows the card) rather than firing a request that's
+// certain to 403.
+const VOICEMAIL_ROLES = ["supervisor", "account_manager", "training_quality", "admin"];
+
 const REFRESH_INTERVAL_MS = 5000;
 
 function fmtSeconds(seconds) {
@@ -76,6 +86,7 @@ export default function LiveStatusDashboard() {
   const [abandonedCalls, setAbandonedCalls] = useState([]);
   const [totalCalls, setTotalCalls] = useState([]);
   const [summary, setSummary] = useState(null);
+  const [voicemails, setVoicemails] = useState([]);
   const [error, setError] = useState("");
   const [kickingId, setKickingId] = useState(null);
   const [priorityUpdatingId, setPriorityUpdatingId] = useState(null);
@@ -142,19 +153,32 @@ export default function LiveStatusDashboard() {
   }, [agent]);
 
   function load() {
-    Promise.all([
+    const includeVoicemails = agent && VOICEMAIL_ROLES.includes(agent.accessLevel);
+    const promises = [
       api.getLiveStatus(campaignId || undefined),
       api.getQueueStatus(campaignId || undefined),
       api.getAbandonedCalls(campaignId || undefined),
       api.getTotalCalls(campaignId || undefined),
       api.getReportingSummary(campaignId || undefined),
-    ])
-      .then(([statusData, queueData, abandonedData, totalCallsData, summaryData]) => {
+    ];
+    // Voicemails — only fetched for roles that actually have access
+    // (see VOICEMAIL_ROLES above); wfm would just get a guaranteed 403
+    // from the backend otherwise. campaignId is required for every
+    // scoped role here (supervisor/account_manager/training_quality) —
+    // already guaranteed non-blank by the earlier per-role campaign
+    // auto-select effect before this ever runs.
+    if (includeVoicemails) {
+      promises.push(api.getVoicemails(campaignId ? `campaignId=${encodeURIComponent(campaignId)}` : ""));
+    }
+
+    Promise.all(promises)
+      .then(([statusData, queueData, abandonedData, totalCallsData, summaryData, voicemailData]) => {
         setAgents(statusData.agents);
         setQueues(queueData.queues);
         setAbandonedCalls(abandonedData.calls);
         setTotalCalls(totalCallsData.calls);
         setSummary(summaryData.summary);
+        if (includeVoicemails) setVoicemails(voicemailData.voicemails || []);
       })
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
@@ -627,8 +651,8 @@ export default function LiveStatusDashboard() {
           </div>
 
           {/* RIGHT: Outbound Stats, Calls in Queue, Inbound Calls List,
-              Outbound Calls List, Abandoned. ref used by the
-              ResizeObserver above to measure this column's real
+              Outbound Calls List, Voicemails, Abandoned. ref used by
+              the ResizeObserver above to measure this column's real
               rendered height, which the left column then matches
               exactly. */}
           <div className="live-status-column" ref={rightColumnRef}>
@@ -754,6 +778,50 @@ export default function LiveStatusDashboard() {
                 </table>
               </div>
             </div>
+
+            {/* Voicemails — per explicit request, sits below Outbound
+                Calls and above Abandoned. Gated to VOICEMAIL_ROLES
+                (wfm never sees this card at all, matching that role's
+                lack of backend access — see the load() guard above).
+                Reuses the exact same voicemail data the standalone
+                Voicemails page shows (GET /api/voicemails), just a
+                recent-items view rather than the full filterable
+                list. */}
+            {agent && VOICEMAIL_ROLES.includes(agent.accessLevel) && (
+              <div className="card live-status-card">
+                <h3>Voicemails ({voicemails.length})</h3>
+                <div className="live-status-scroll">
+                  <table className="call-log-table">
+                    <thead>
+                      <tr>
+                        <th>Campaign</th>
+                        <th>Caller</th>
+                        <th>Left At</th>
+                        <th>When</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {voicemails.length === 0 ? (
+                        <tr>
+                          <td colSpan={4} style={{ color: "#888" }}>
+                            No voicemails today.
+                          </td>
+                        </tr>
+                      ) : (
+                        voicemails.map((v) => (
+                          <tr key={v.voicemail_log_id}>
+                            <td>{v.campaign_name || v.campaign_id || "—"}</td>
+                            <td>{v.caller_id_number || "Unknown"}</td>
+                            <td>{formatDate(v.left_at)}</td>
+                            <td>{v.is_after_hours === "Y" ? "After Hours" : "Business Hours"}</td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
 
             <div className="card live-status-card">
               <h3>Abandoned ({abandonedCalls.length})</h3>

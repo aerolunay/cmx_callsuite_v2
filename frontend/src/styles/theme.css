@@ -287,12 +287,26 @@ button.primary:disabled {
 
 /*
 ==================================================
-LIVE STATUS DASHBOARD — 2-column layout, 5 uniform cards each side
+LIVE STATUS DASHBOARD — 2-column layout, uniform fixed-height cards
 ==================================================
-Both columns hold exactly 5 cards (.live-status-card), ALL the same
-fixed height/width — no card grows with its own content. Each card's
-content scrolls internally (.live-status-scroll) once it exceeds that
-height, sized to comfortably show ~15 rows before scrolling kicks in.
+The right column holds up to 5 fixed-height cards (.live-status-card):
+Calls in Queue, Inbound Calls, Outbound Calls, Voicemails (roles with
+voicemail access only — see VOICEMAIL_ROLES in
+LiveStatusDashboard.jsx), Abandoned. No card grows with its own
+content — each one's content scrolls internally (.live-status-scroll)
+once it exceeds the fixed height, sized to comfortably show ~15 rows
+before scrolling kicks in.
+
+REAL RESIZE, per explicit request: height was previously 520px for 4
+cards (4*520 + 3*16px gaps = 2128px total). Adding the 5th
+(Voicemails) card at the same 520px would have grown the right
+column — and therefore the LEFT column too, which measures and matches
+the right column's height exactly (see the ResizeObserver in
+LiveStatusDashboard.jsx) — by another ~536px. Resized to 420px instead
+so 5 cards (5*420 + 4*16px gaps = 2164px total) land within a few
+percent of the original 4-card total, rather than compounding taller
+with every card this page ever gains.
+
 .live-status-column is a plain vertical stack — width equality between
 the two columns comes for free from the parent grid's equal 1fr/1fr
 columns, not from anything set on the cards themselves.
@@ -312,7 +326,7 @@ columns, not from anything set on the cards themselves.
 }
 
 .live-status-card {
-  height: 520px;
+  height: 420px;
   display: flex;
   flex-direction: column;
 }

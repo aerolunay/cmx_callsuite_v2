@@ -71,10 +71,11 @@ FIELD MAPPING — what this app's UI concept maps to on each real table
   (NOT explicitly requested, but functionally required — the
   after-hours audio has no meaning without a real hours/days window to
   gate on. Defaults to 09:00-18:00, mon-fri if not provided.)
-- Voicemail Capture Enabled       -> cmx_dialer.campaign_settings.voicemail_enabled
-  (single toggle, covers BOTH business-hours and after-hours voicemail
-  offer — see buildCampaignDialplanBlock's own comments for exactly
-  what changes in the generated dialplan when this is 'Y')
+- Voicemail Capture Enabled       -> cmx_dialer.campaign_settings
+  (TWO independent toggles: voicemail_business_hours_enabled and
+  voicemail_afterhours_enabled — see buildCampaignDialplanBlock's own
+  comments for exactly what changes in the generated dialplan when
+  each is 'Y')
 - Business/After Hours IVR Prompts,
   Invalid Option Prompt           -> cmx_dialer.campaign_settings
   (three separate per-campaign uploads — see processUploadedAudio call
@@ -224,9 +225,14 @@ silently overwrite each other. Scoping every label to its own DID
 avoids that collision entirely.
 
 ==================================================
-VOICEMAIL — what changes when voicemailEnabled is 'Y'
+VOICEMAIL — what changes when each toggle is 'Y'
 ==================================================
-Business hours: instead of going straight into ConfBridge (which just
+TWO INDEPENDENT toggles, per explicit request — voicemailBusinessHoursEnabled
+and voicemailAfterhoursEnabled. A campaign can have voicemail during
+business hours only, after hours only, both, or neither; each section
+below checks only its own toggle.
+
+Business hours (voicemailBusinessHoursEnabled): instead of going straight into ConfBridge (which just
 plays cmxwait's own MOH class — hold music, then a generic "please
 continue holding" announcement, on a loop — with no way to capture a
 DTMF press), the caller is held in a dialplan-level loop instead:
@@ -239,7 +245,7 @@ customerEnteredWaitLoop()/tryConnectReadyAgentsInner() handle pulling
 the caller INTO the ConfBridge the moment an agent is actually found,
 via an AMI redirect — see that file's own comments.
 
-After hours: the voicemail offer is immediate (no wait loop — there's
+After hours (voicemailAfterhoursEnabled): the voicemail offer is immediate (no wait loop — there's
 no agent to wait for at all after hours), with one retry on an invalid
 keypress before giving up and hanging up.
 
@@ -268,7 +274,8 @@ function buildCampaignDialplanBlock({
   businessHoursStart,
   businessHoursEnd,
   businessDays,
-  voicemailEnabled,
+  voicemailBusinessHoursEnabled,
+  voicemailAfterhoursEnabled,
   voicemailPromptAudioFilename,
   afterhoursVoicemailPromptAudioFilename,
   voicemailInvalidOptionAudioFilename,
@@ -328,12 +335,12 @@ function buildCampaignDialplanBlock({
   const afterhoursSound = afterhoursAudioFilename
     ? `custom/${path.basename(afterhoursAudioFilename, path.extname(afterhoursAudioFilename))}`
     : null;
-  // Voicemail-related sounds — each optional even when voicemailEnabled
-  // is 'Y' (an admin can flip the toggle on before every prompt is
-  // uploaded). Read()'s filename argument accepts an empty string (no
-  // playback, just waits for a digit), so a missing upload degrades to
-  // a silent prompt rather than breaking the call; Playback() is simply
-  // skipped for a missing invalid-option sound.
+  // Voicemail-related sounds — each optional even when one of the two
+  // toggles below is 'Y' (an admin can flip a toggle on before every
+  // prompt is uploaded). Read()'s filename argument accepts an empty
+  // string (no playback, just waits for a digit), so a missing upload
+  // degrades to a silent prompt rather than breaking the call;
+  // Playback() is simply skipped for a missing invalid-option sound.
   const voicemailPromptSound = voicemailPromptAudioFilename
     ? `custom/${path.basename(voicemailPromptAudioFilename, path.extname(voicemailPromptAudioFilename))}`
     : "";
@@ -348,7 +355,14 @@ function buildCampaignDialplanBlock({
   // a static dialplan file, so a bad/missing value can't slip through
   // some other future call site of this function.
   const waitSeconds = Math.max(60, Number(voicemailWaitSeconds) || 60);
-  const isVoicemailEnabled = voicemailEnabled === "Y";
+  // TWO INDEPENDENT TOGGLES, per explicit request — a campaign can
+  // have voicemail during business hours only, after hours only,
+  // both, or neither. Previously a single voicemailEnabled flag
+  // covered both; see 003_split_voicemail_business_afterhours.sql for
+  // the migration that split the DB column, and this function's own
+  // header comment for exactly which section each one gates.
+  const isVoicemailEnabledBusinessHours = voicemailBusinessHoursEnabled === "Y";
+  const isVoicemailEnabledAfterhours = voicemailAfterhoursEnabled === "Y";
 
   const lines = [
     `exten => ${did},1,NoOp(CMX Campaign ${campaignId} inbound)`,
@@ -366,7 +380,7 @@ function buildCampaignDialplanBlock({
     `exten => ${did},n,GotoIf($["\${ROOM}" = ""]?${noRoomLabel})`
   );
 
-  if (isVoicemailEnabled) {
+  if (isVoicemailEnabledBusinessHours) {
     // Caller is deliberately NOT put in the ConfBridge yet — see this
     // function's own header comment for the full "why". Read() (not
     // WaitExten/bare-digit-extension matching) captures the digit, to
@@ -403,7 +417,7 @@ function buildCampaignDialplanBlock({
 
   lines.push(`exten => ${did},n(${noRoomLabel}),Hangup()`);
 
-  if (isVoicemailEnabled) {
+  if (isVoicemailEnabledBusinessHours) {
     lines.push(
       `exten => ${vmRecordLabel},1,NoOp(CMX Campaign ${campaignId} inbound voicemail - business hours)`,
       `exten => ${vmRecordLabel},n,Set(CMXDISCARD=\${CURL(${INTERNAL_API_BASE_URL}/internal/voicemail-starting?secret=${INTERNAL_API_SECRET}&room=\${ROOM})})`,
@@ -419,7 +433,17 @@ function buildCampaignDialplanBlock({
       // have dropped, but the recording would never have reached S3).
       `exten => ${vmRecordLabel},n,Record(${VOICEMAIL_SPOOL_DIR}/\${ROOM}:wav,3,300,k)`,
       `exten => ${vmRecordLabel},n,Read(CMXVMCONFIRM,,1,,,45)`,
-      `exten => ${vmRecordLabel},n,GotoIf($["\${CMXVMCONFIRM}" = "1"]?${vmRecordSaveLabel},1)`,
+      // REAL BUG FIX, confirmed via a real test call: vmRecordSaveLabel
+      // is a named priority LABEL inside the vmRecordLabel extension
+      // (created via n(${vmRecordSaveLabel}) below), NOT its own
+      // separate extension — unlike vmRecordLabel itself, which IS a
+      // real extension (exten => ${vmRecordLabel},1,...). Targeting it
+      // as "label,1" (extension+priority syntax) instead of the bare
+      // label form Asterisk actually logged: "sent to invalid
+      // extension ... trunkinbound,..._vm_record_save,1" and hung up
+      // instead of saving the voicemail — even though the caller
+      // pressed 1 correctly and everything up to Record() worked.
+      `exten => ${vmRecordLabel},n,GotoIf($["\${CMXVMCONFIRM}" = "1"]?${vmRecordSaveLabel})`,
       `exten => ${vmRecordLabel},n,GotoIf($["\${CMXVMCONFIRM}" = "2"]?${vmRecordStartLabel})`
     );
     if (voicemailInvalidOptionSound) {
@@ -438,7 +462,7 @@ function buildCampaignDialplanBlock({
     lines.push(`exten => ${afterhoursExten},n,Playback(${afterhoursSound})`);
   }
 
-  if (isVoicemailEnabled) {
+  if (isVoicemailEnabledAfterhours) {
     // No wait loop after hours — offered immediately, once, per
     // explicit requirement. One retry after an invalid keypress; a
     // second miss (or no keypress at all) just hangs up, same as this
@@ -461,7 +485,7 @@ function buildCampaignDialplanBlock({
       `exten => ${afterhoursVmRecordLabel},n,Playback(beep)`,
       `exten => ${afterhoursVmRecordLabel},n,Record(${VOICEMAIL_SPOOL_DIR}/\${UNIQUEID}:wav,3,300,k)`,
       `exten => ${afterhoursVmRecordLabel},n,Read(CMXVMCONFIRM,,1,,,45)`,
-      `exten => ${afterhoursVmRecordLabel},n,GotoIf($["\${CMXVMCONFIRM}" = "1"]?${afterhoursVmRecordSaveLabel},1)`,
+      `exten => ${afterhoursVmRecordLabel},n,GotoIf($["\${CMXVMCONFIRM}" = "1"]?${afterhoursVmRecordSaveLabel})`,
       `exten => ${afterhoursVmRecordLabel},n,GotoIf($["\${CMXVMCONFIRM}" = "2"]?${afterhoursVmRecordStartLabel})`
     );
     if (voicemailInvalidOptionSound) {
@@ -492,7 +516,8 @@ async function regenerateCampaignDialplanFile() {
         s.business_hours_start AS businessHoursStart,
         s.business_hours_end AS businessHoursEnd,
         s.business_days AS businessDays,
-        s.voicemail_enabled AS voicemailEnabled,
+        s.voicemail_business_hours_enabled AS voicemailBusinessHoursEnabled,
+        s.voicemail_afterhours_enabled AS voicemailAfterhoursEnabled,
         s.voicemail_prompt_audio_filename AS voicemailPromptAudioFilename,
         s.afterhours_voicemail_prompt_audio_filename AS afterhoursVoicemailPromptAudioFilename,
         s.voicemail_invalid_option_audio_filename AS voicemailInvalidOptionAudioFilename,
@@ -561,7 +586,7 @@ router.get("/", requireAdmin, async (req, res) => {
           d.did_pattern AS did, d.record_call,
           s.campaign_type, s.welcome_greeting_filename, s.afterhours_audio_filename,
           s.business_hours_start, s.business_hours_end, s.business_days, s.blended_fallback_campaign_id,
-          s.voicemail_enabled, s.voicemail_prompt_audio_filename, s.afterhours_voicemail_prompt_audio_filename,
+          s.voicemail_business_hours_enabled, s.voicemail_afterhours_enabled, s.voicemail_prompt_audio_filename, s.afterhours_voicemail_prompt_audio_filename,
           s.voicemail_invalid_option_audio_filename, s.voicemail_wait_seconds
         FROM asterisk.vicidial_campaigns c
         LEFT JOIN asterisk.vicidial_inbound_dids d ON d.campaign_id = c.campaign_id
@@ -586,8 +611,9 @@ multipart/form-data. Text fields: campaignId, campaignName, did,
 callerId (optional — blank means spoof the DID as CID), campaignType
 ("OUTBOUND" | "BLENDED"), dialMethod ("AUTO" | "MANUAL", only really
 meaningful for OUTBOUND), recordingEnabled ("true" | "false"),
-businessHoursStart, businessHoursEnd, businessDays, voicemailEnabled
-("true" | "false"), voicemailWaitSeconds.
+businessHoursStart, businessHoursEnd, businessDays,
+voicemailBusinessHoursEnabled ("true" | "false"),
+voicemailAfterhoursEnabled ("true" | "false"), voicemailWaitSeconds.
 Files: welcomeGreeting, afterhoursAudio, voicemailPromptAudio,
 afterhoursVoicemailPromptAudio, voicemailInvalidOptionAudio (all
 optional at the DB-write stage, but a campaign with no greeting/no DID
@@ -618,7 +644,8 @@ router.post(
       businessHoursEnd,
       businessDays,
       blendedFallbackCampaignId,
-      voicemailEnabled,
+      voicemailBusinessHoursEnabled,
+      voicemailAfterhoursEnabled,
       voicemailWaitSeconds,
     } = req.body;
 
@@ -642,11 +669,14 @@ router.post(
     const resolvedBusinessHoursEnd = businessHoursEnd || "18:00";
     const resolvedBusinessDays = businessDays || "mon-fri";
 
-    // VOICEMAIL — 'Y'/'N' single toggle, covers business hours AND
-    // after hours together. 60s floor enforced here (same floor
-    // re-checked in buildCampaignDialplanBlock as a last line of
-    // defense before it's baked into the static dialplan file).
-    const resolvedVoicemailEnabled = voicemailEnabled === "true" ? "Y" : "N";
+    // VOICEMAIL — TWO independent 'Y'/'N' toggles, per explicit
+    // request (a campaign can have voicemail during business hours
+    // only, after hours only, both, or neither). 60s floor enforced
+    // here (same floor re-checked in buildCampaignDialplanBlock as a
+    // last line of defense before it's baked into the static dialplan
+    // file).
+    const resolvedVoicemailBusinessHoursEnabled = voicemailBusinessHoursEnabled === "true" ? "Y" : "N";
+    const resolvedVoicemailAfterhoursEnabled = voicemailAfterhoursEnabled === "true" ? "Y" : "N";
     const resolvedVoicemailWaitSeconds = Math.max(60, parseInt(voicemailWaitSeconds, 10) || 60);
 
     const connection = await db.getConnection();
@@ -676,8 +706,8 @@ router.post(
       await connection.execute(
         `
           INSERT INTO cmx_dialer.campaign_settings
-            (campaign_id, campaign_type, business_hours_start, business_hours_end, business_days, blended_fallback_campaign_id, voicemail_enabled, voicemail_wait_seconds)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            (campaign_id, campaign_type, business_hours_start, business_hours_end, business_days, blended_fallback_campaign_id, voicemail_business_hours_enabled, voicemail_afterhours_enabled, voicemail_wait_seconds)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
         [
           campaignId,
@@ -686,7 +716,8 @@ router.post(
           resolvedBusinessHoursEnd,
           resolvedBusinessDays,
           blendedFallbackCampaignId || null,
-          resolvedVoicemailEnabled,
+          resolvedVoicemailBusinessHoursEnabled,
+          resolvedVoicemailAfterhoursEnabled,
           resolvedVoicemailWaitSeconds,
         ]
       );
@@ -803,7 +834,8 @@ router.put(
       businessDays,
       active,
       blendedFallbackCampaignId,
-      voicemailEnabled,
+      voicemailBusinessHoursEnabled,
+      voicemailAfterhoursEnabled,
       voicemailWaitSeconds,
     } = req.body;
 
@@ -822,7 +854,8 @@ router.put(
     const resolvedRecording = recordingEnabled === "false" ? "NEVER" : "ALLCALLS";
 
     // VOICEMAIL — same resolution/floor as the create route above.
-    const resolvedVoicemailEnabled = voicemailEnabled === "true" ? "Y" : "N";
+    const resolvedVoicemailBusinessHoursEnabled = voicemailBusinessHoursEnabled === "true" ? "Y" : "N";
+    const resolvedVoicemailAfterhoursEnabled = voicemailAfterhoursEnabled === "true" ? "Y" : "N";
     const resolvedVoicemailWaitSeconds = Math.max(60, parseInt(voicemailWaitSeconds, 10) || 60);
 
     const connection = await db.getConnection();
@@ -871,15 +904,16 @@ router.put(
       await connection.execute(
         `
           INSERT INTO cmx_dialer.campaign_settings
-            (campaign_id, campaign_type, business_hours_start, business_hours_end, business_days, blended_fallback_campaign_id, voicemail_enabled, voicemail_wait_seconds)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            (campaign_id, campaign_type, business_hours_start, business_hours_end, business_days, blended_fallback_campaign_id, voicemail_business_hours_enabled, voicemail_afterhours_enabled, voicemail_wait_seconds)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON DUPLICATE KEY UPDATE
             campaign_type = VALUES(campaign_type),
             business_hours_start = VALUES(business_hours_start),
             business_hours_end = VALUES(business_hours_end),
             business_days = VALUES(business_days),
             blended_fallback_campaign_id = VALUES(blended_fallback_campaign_id),
-            voicemail_enabled = VALUES(voicemail_enabled),
+            voicemail_business_hours_enabled = VALUES(voicemail_business_hours_enabled),
+            voicemail_afterhours_enabled = VALUES(voicemail_afterhours_enabled),
             voicemail_wait_seconds = VALUES(voicemail_wait_seconds)
         `,
         [
@@ -889,7 +923,8 @@ router.put(
           businessHoursEnd || "18:00",
           businessDays || "mon-fri",
           blendedFallbackCampaignId || null,
-          resolvedVoicemailEnabled,
+          resolvedVoicemailBusinessHoursEnabled,
+          resolvedVoicemailAfterhoursEnabled,
           resolvedVoicemailWaitSeconds,
         ]
       );
