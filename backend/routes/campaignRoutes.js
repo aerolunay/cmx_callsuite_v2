@@ -373,7 +373,21 @@ function buildCampaignDialplanBlock({
     // avoid ever adding a shared "1" extension into [trunkinbound],
     // which every OTHER campaign's block also lives inside.
     lines.push(
-      `exten => ${did},n,Set(CURL(${INTERNAL_API_BASE_URL}/internal/customer-waiting?secret=${INTERNAL_API_SECRET}&room=\${ROOM}&channel=\${CHANNEL}&callerId=\${CALLERID(num)})=)`,
+      // REAL BUG FIX, confirmed via a real test call: Set(CURL(url)=)
+      // — the "write" pattern — never actually fired the request at
+      // all. allocate-inbound-room above works because it uses the
+      // "read" pattern (Set(VAR=${CURL(url)})), which genuinely
+      // performs the HTTP call; these three fire-and-forget calls
+      // used the write pattern instead, since no return value is
+      // needed — but CURL() apparently has no real write handler for
+      // an arbitrary URL like this, so the call silently never
+      // happened. Confirmed directly: a manual curl to this same
+      // endpoint showed up in the backend's access log immediately;
+      // the dialplan's own Set(CURL(...)=) version never did, for an
+      // hours-long real test call. Fixed by switching to the same
+      // read pattern, discarding into a throwaway variable instead of
+      // a real one.
+      `exten => ${did},n,Set(CMXDISCARD=\${CURL(${INTERNAL_API_BASE_URL}/internal/customer-waiting?secret=${INTERNAL_API_SECRET}&room=\${ROOM}&channel=\${CHANNEL}&callerId=\${CALLERID(num)})})`,
       `exten => ${did},n(${vmWaitLabel}),MusicOnHold(cmxvmwait,${waitSeconds})`,
       `exten => ${did},n,Read(CMXVMCHOICE,${voicemailPromptSound},1,,,6)`,
       `exten => ${did},n,GotoIf($["\${CMXVMCHOICE}" = "1"]?${vmRecordLabel},1)`,
@@ -392,7 +406,7 @@ function buildCampaignDialplanBlock({
   if (isVoicemailEnabled) {
     lines.push(
       `exten => ${vmRecordLabel},1,NoOp(CMX Campaign ${campaignId} inbound voicemail - business hours)`,
-      `exten => ${vmRecordLabel},n,Set(CURL(${INTERNAL_API_BASE_URL}/internal/voicemail-starting?secret=${INTERNAL_API_SECRET}&room=\${ROOM})=)`,
+      `exten => ${vmRecordLabel},n,Set(CMXDISCARD=\${CURL(${INTERNAL_API_BASE_URL}/internal/voicemail-starting?secret=${INTERNAL_API_SECRET}&room=\${ROOM})})`,
       `exten => ${vmRecordLabel},n(${vmRecordStartLabel}),Playback(${VOICEMAIL_LEAVE_MESSAGE_SOUND})`,
       `exten => ${vmRecordLabel},n,Playback(beep)`,
       // REAL BUG FIX, confirmed via a real test call: Record()'s
@@ -413,7 +427,7 @@ function buildCampaignDialplanBlock({
     }
     lines.push(
       `exten => ${vmRecordLabel},n,Goto(${vmRecordStartLabel})`,
-      `exten => ${vmRecordLabel},n(${vmRecordSaveLabel}),Set(CURL(${INTERNAL_API_BASE_URL}/internal/voicemail-recorded?secret=${INTERNAL_API_SECRET}&room=\${ROOM}&campaignId=${campaignId}&callerId=\${CALLERID(num)}&isAfterHours=0)=)`,
+      `exten => ${vmRecordLabel},n(${vmRecordSaveLabel}),Set(CMXDISCARD=\${CURL(${INTERNAL_API_BASE_URL}/internal/voicemail-recorded?secret=${INTERNAL_API_SECRET}&room=\${ROOM}&campaignId=${campaignId}&callerId=\${CALLERID(num)}&isAfterHours=0)})`,
       `exten => ${vmRecordLabel},n,Hangup()`
     );
   }
@@ -455,7 +469,7 @@ function buildCampaignDialplanBlock({
     }
     lines.push(
       `exten => ${afterhoursVmRecordLabel},n,Goto(${afterhoursVmRecordStartLabel})`,
-      `exten => ${afterhoursVmRecordLabel},n(${afterhoursVmRecordSaveLabel}),Set(CURL(${INTERNAL_API_BASE_URL}/internal/voicemail-recorded?secret=${INTERNAL_API_SECRET}&campaignId=${campaignId}&callerId=\${CALLERID(num)}&isAfterHours=1&uniqueId=\${UNIQUEID})=)`,
+      `exten => ${afterhoursVmRecordLabel},n(${afterhoursVmRecordSaveLabel}),Set(CMXDISCARD=\${CURL(${INTERNAL_API_BASE_URL}/internal/voicemail-recorded?secret=${INTERNAL_API_SECRET}&campaignId=${campaignId}&callerId=\${CALLERID(num)}&isAfterHours=1&uniqueId=\${UNIQUEID})})`,
       `exten => ${afterhoursVmRecordLabel},n,Hangup()`
     );
   } else {
