@@ -208,6 +208,21 @@ export const api = {
   getRecordingDownloadUrl: (callId) =>
     request(`/recordings/${encodeURIComponent(callId)}/download-url`),
 
+  // Voicemails — its own standalone page (VoicemailsPage.jsx), gated
+  // server-side by voicemailRoutes.js's own access matrix, which
+  // deliberately does NOT match Recordings' (training_quality is
+  // unrestricted here, wfm has no access at all — see that file's own
+  // comment on why). getVoicemailCampaigns() is a narrow helper ONLY
+  // for admin/training_quality's "All Campaigns" dropdown — supervisor/
+  // account_manager use the existing getMyCampaigns() instead.
+  getVoicemails: (queryString) => request(`/voicemails${queryString ? `?${queryString}` : ""}`),
+  getVoicemailCampaigns: () => request("/voicemails/campaigns"),
+  getVoicemail: (voicemailLogId) => request(`/voicemails/${encodeURIComponent(voicemailLogId)}`),
+  getVoicemailPlaybackUrl: (voicemailLogId) =>
+    request(`/voicemails/${encodeURIComponent(voicemailLogId)}/playback-url`),
+  getVoicemailDownloadUrl: (voicemailLogId) =>
+    request(`/voicemails/${encodeURIComponent(voicemailLogId)}/download-url`),
+
   // Outbound Auto-Dial, Phase 1 — lead upload, DNC management, and
   // per-campaign autodial rules. Template downloads are plain GET
   // endpoints that return a file with Content-Disposition: attachment

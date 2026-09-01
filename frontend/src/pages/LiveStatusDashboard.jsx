@@ -561,10 +561,25 @@ export default function LiveStatusDashboard() {
                                   <button
                                     type="button"
                                     className="link"
-                                    disabled={listenBusyId === a.appUserId}
+                                    // Per explicit request — disable EVERY
+                                    // Listen button, not just this row's own
+                                    // busy state, while already listening to
+                                    // ANYONE. Without this, clicking a
+                                    // different agent's Listen button while
+                                    // already listening silently switches
+                                    // the session server-side (see this
+                                    // page's own listeningTo comment above)
+                                    // with no confirmation — easy to do by
+                                    // accident. Now requires an explicit
+                                    // "Stop listening" first.
+                                    disabled={listenBusyId === a.appUserId || Boolean(listeningTo)}
                                     onClick={() => handleStartListen(a)}
                                   >
-                                    {listenBusyId === a.appUserId ? "Connecting…" : "Listen"}
+                                    {listenBusyId === a.appUserId
+                                      ? "Connecting…"
+                                      : listeningTo?.appUserId === a.appUserId
+                                        ? "Listening…"
+                                        : "Listen"}
                                   </button>
                                 </>
                               )}

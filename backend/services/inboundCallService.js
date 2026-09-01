@@ -6,6 +6,8 @@ const ws = require("../config/ws");
 const db = require("../config/db");
 const agentStatusService = require("./agentStatusService");
 const recordingUploadService = require("./recordingUploadService");
+const { transporter } = require("../config/mailer");
+const { buildVoicemailNotificationEmail } = require("./emailTemplates");
 
 /*
 ==================================================
@@ -68,6 +70,11 @@ caveat (a second backend instance would not know about the other's
 in-use rooms; move to a shared store if that ever changes).
 ==================================================
 */
+// Same convention as emailTemplates.js's own FRONTEND_URL — kept as
+// its own local constant here rather than importing it from that
+// file (which doesn't export it), since it's a one-line env read.
+const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
+
 const ROOM_PREFIX = "9700";
 const usedRoomSuffixes = new Set();
 
@@ -386,8 +393,9 @@ async function recordVoicemail({ room, uniqueId, campaignId, callerIdNumber, isA
     console.error(`[inboundCallService] Failed to upload voicemail recording for ${key}:`, err.message);
   }
 
+  let voicemailLogId = null;
   try {
-    await db.execute(
+    const [insertResult] = await db.execute(
       `
         INSERT INTO cmx_dialer.voicemail_log
           (campaign_id, caller_id_number, call_started_at, left_at, duration_seconds, recording_key, is_after_hours)
@@ -395,8 +403,65 @@ async function recordVoicemail({ room, uniqueId, campaignId, callerIdNumber, isA
       `,
       [campaignId, callerIdNumber, callStartedAt, leftAt, durationSeconds, recordingKey, isAfterHours ? "Y" : "N"]
     );
+    voicemailLogId = insertResult.insertId;
   } catch (err) {
     console.error(`[inboundCallService] Failed to insert voicemail_log row for campaign ${campaignId}:`, err.message);
+  }
+
+  // EMAIL NOTIFICATION — per explicit request, one email per saved
+  // voicemail to every supervisor/account_manager assigned to THIS
+  // campaign (not admin/training_quality — they already have
+  // unrestricted visibility on the Voicemails page and don't need a
+  // per-message alert for every campaign). Best-effort: a failed
+  // lookup or a down SMTP server should never undo the voicemail_log
+  // insert that already succeeded above, so this is deliberately its
+  // own try/catch, after that insert, not wrapping it.
+  if (voicemailLogId) {
+    try {
+      const [campaignRows] = await db.execute(
+        `SELECT campaign_name FROM asterisk.vicidial_campaigns WHERE campaign_id = ?`,
+        [campaignId]
+      );
+      const campaignName = campaignRows[0]?.campaign_name || null;
+
+      const [recipientRows] = await db.execute(
+        `
+          SELECT DISTINCT au.email, au.full_name
+          FROM cmx_dialer.app_users au
+          JOIN cmx_dialer.agent_campaign_assignments aca
+            ON aca.app_user_id = au.app_user_id AND aca.active = 1
+          WHERE aca.campaign_id = ?
+            AND au.access_level IN ('supervisor', 'account_manager')
+            AND au.active = 1
+        `,
+        [campaignId]
+      );
+
+      const playUrl = `${FRONTEND_URL}/voicemails/${voicemailLogId}`;
+
+      await Promise.all(
+        recipientRows.map((recipient) =>
+          transporter
+            .sendMail({
+              from: process.env.SMTP_FROM,
+              to: recipient.email,
+              ...buildVoicemailNotificationEmail({
+                fullName: recipient.full_name,
+                campaignName,
+                campaignId,
+                callerIdNumber,
+                leftAt,
+                playUrl,
+              }),
+            })
+            .catch((err) => {
+              console.error(`[inboundCallService] Failed to send voicemail notification to ${recipient.email}:`, err.message);
+            })
+        )
+      );
+    } catch (err) {
+      console.error(`[inboundCallService] Failed to notify supervisors/account managers for voicemail ${voicemailLogId}:`, err.message);
+    }
   }
 
   if (room && call) {

@@ -108,4 +108,57 @@ function buildWelcomeEmail({ fullName, email, accessLevel }) {
   return { subject: "Welcome to CMX Dialer", text, html };
 }
 
-module.exports = { buildOtpEmail, buildWelcomeEmail };
+/*
+==================================================
+buildVoicemailNotificationEmail
+==================================================
+Sent once per saved voicemail (both business-hours and after-hours
+captures — see inboundCallService.js's recordVoicemail) to every
+supervisor/account_manager assigned to that specific campaign — NOT
+admin/training_quality, who already have unrestricted visibility into
+the Voicemails page and don't need a per-message alert for every
+campaign in the system.
+
+playUrl points at a dedicated standalone page
+(FRONTEND_URL/voicemails/:voicemailLogId), NOT a raw presigned S3 URL
+— presigned URLs expire in 1 hour (see recordingUploadService.js), far
+too short-lived for an email someone might not open until the next
+day. That page generates a FRESH presigned URL server-side at the
+moment it's actually opened (via the same access-controlled
+playback-url endpoint the Voicemails list page itself uses), so the
+link in this email is effectively permanent — and still fully subject
+to the recipient's own real role/campaign access at open-time, not a
+bypass of it.
+==================================================
+*/
+function buildVoicemailNotificationEmail({ fullName, campaignName, campaignId, callerIdNumber, leftAt, playUrl }) {
+  const firstName = (fullName || "").split(" ")[0] || "there";
+  const formattedLeftAt = leftAt
+    ? new Date(leftAt).toLocaleString(undefined, { timeZone: "America/New_York" })
+    : "just now";
+
+  const html = wrapEmailHtml(`
+    <p style="margin: 0 0 16px; font-size: 15px;">Hi ${firstName},</p>
+    <p style="margin: 0 0 16px; font-size: 15px;">
+      A new voicemail was left for <strong>${campaignName || campaignId}</strong>.
+    </p>
+    <div style="margin: 0 0 24px; font-size: 14px; background: #f4f6fa; border-radius: 8px; padding: 16px 20px;">
+      <div style="margin-bottom: 6px;"><strong>Caller:</strong> ${callerIdNumber || "Unknown"}</div>
+      <div><strong>Left at:</strong> ${formattedLeftAt} (Eastern)</div>
+    </div>
+    <div style="text-align: center; margin: 0 0 24px;">
+      <a href="${playUrl}" style="display: inline-block; background: #182d57; color: #ffffff; font-weight: 700; font-size: 14px; text-decoration: none; padding: 12px 28px; border-radius: 6px;">
+        Listen to Voicemail
+      </a>
+    </div>
+    <p style="margin: 0; font-size: 13px; color: #667085;">
+      You'll need to be logged in to CMX Dialer to play or download it — this link takes you straight there.
+    </p>
+  `);
+
+  const text = `Hi ${firstName},\n\nA new voicemail was left for ${campaignName || campaignId}.\n\nCaller: ${callerIdNumber || "Unknown"}\nLeft at: ${formattedLeftAt} (Eastern)\n\nListen here: ${playUrl}\n\nYou'll need to be logged in to CMX Dialer to play or download it.`;
+
+  return { subject: `New voicemail — ${campaignName || campaignId}`, text, html };
+}
+
+module.exports = { buildOtpEmail, buildWelcomeEmail, buildVoicemailNotificationEmail };

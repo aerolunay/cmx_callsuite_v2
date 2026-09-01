@@ -21,6 +21,7 @@ const dialerRoutes = require("./routes/dialerRoutes");
 const adminRoutes = require("./routes/adminRoutes");
 const campaignRoutes = require("./routes/campaignRoutes");
 const leadRoutes = require("./routes/leadRoutes");
+const voicemailRoutes = require("./routes/voicemailRoutes");
 const internalRoutes = require("./routes/internalRoutes");
 
 const app = express();
@@ -182,6 +183,11 @@ app.use("/api", dialerRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/admin/campaigns", campaignRoutes);
 app.use("/api/admin", leadRoutes);
+// Voicemails — deliberately mounted at /api, not /api/admin, since
+// it's its own standalone page (VoicemailsPage.jsx) with a distinct
+// access matrix — see voicemailRoutes.js's own comment on exactly how
+// it differs from the shared accessControlService pattern.
+app.use("/api", voicemailRoutes);
 
 // Not session-authenticated — called by Asterisk's dialplan via
 // CURL(), protected by INTERNAL_API_SECRET instead. See

@@ -1,0 +1,259 @@
+import { useEffect, useState } from "react";
+import { Navigate } from "react-router-dom";
+import Header from "../components/Header";
+import { useAuth } from "../context/AuthContext";
+import { api } from "../api";
+import VoicemailPlaybackModal from "../modals/VoicemailPlaybackModal";
+import { formatDurationHMS } from "../utils/format";
+
+/*
+==================================================
+VOICEMAILS PAGE — standalone, mirrors RecordingsPage.jsx's structure
+==================================================
+Access matrix is deliberately DIFFERENT from Recordings in one way —
+per explicit request, see voicemailRoutes.js's own comment for the
+full reasoning:
+  supervisor, account_manager, training_quality -> scoped to assigned
+                                                      campaigns (same
+                                                      as Recordings)
+  admin                                            -> unrestricted
+                                                      (ALL campaigns)
+  wfm                                              -> no access to
+                                                      this page at all
+
+Campaign dropdown: admin uses the new, narrow getVoicemailCampaigns()
+helper (NOT getAdminCampaigns() — that's admin/wfm-gated and exposes
+far more than this page needs). Every other role uses the existing
+getMyCampaigns(), same as RecordingsPage does for its own scoped
+roles.
+==================================================
+*/
+const VOICEMAIL_ROLES = ["supervisor", "account_manager", "training_quality", "admin"];
+const VOICEMAIL_UNRESTRICTED_ROLES = ["admin"];
+
+export default function VoicemailsPage() {
+  const { agent } = useAuth();
+
+  const [voicemails, setVoicemails] = useState([]);
+  const [campaigns, setCampaigns] = useState([]);
+
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+  const [campaignId, setCampaignId] = useState("");
+
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [playingId, setPlayingId] = useState(null);
+  const [downloadingId, setDownloadingId] = useState(null);
+  const [modalVoicemail, setModalVoicemail] = useState(null);
+  const [modalUrl, setModalUrl] = useState(null);
+
+  const isUnrestrictedCampaignAccess = VOICEMAIL_UNRESTRICTED_ROLES.includes(agent?.accessLevel);
+
+  function loadCampaigns() {
+    if (isUnrestrictedCampaignAccess) {
+      api
+        .getVoicemailCampaigns()
+        .then((data) => setCampaigns(data.campaigns || []))
+        .catch(() => {});
+    } else {
+      api
+        .getMyCampaigns()
+        .then((data) => {
+          const list = data.campaigns || [];
+          setCampaigns(list);
+          if (list.length > 0) setCampaignId((prev) => prev || list[0].campaign_id);
+        })
+        .catch(() => {});
+    }
+  }
+
+  function loadVoicemails() {
+    setLoading(true);
+    setError("");
+    const params = new URLSearchParams();
+    if (startDate) params.set("startDate", startDate);
+    if (endDate) params.set("endDate", endDate);
+    if (campaignId) params.set("campaignId", campaignId);
+
+    api
+      .getVoicemails(params.toString())
+      .then((data) => setVoicemails(data.voicemails || []))
+      .catch((err) => setError(err.message))
+      .finally(() => setLoading(false));
+  }
+
+  useEffect(() => {
+    if (!agent || !VOICEMAIL_ROLES.includes(agent.accessLevel)) return;
+    loadCampaigns();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agent]);
+
+  useEffect(() => {
+    if (!agent || !VOICEMAIL_ROLES.includes(agent.accessLevel)) return;
+    // Scoped roles must have a real campaignId selected before this
+    // can run — avoids firing a request that's certain to 400 while
+    // the auto-select from loadCampaigns() above is still in flight.
+    if (!isUnrestrictedCampaignAccess && !campaignId) return;
+    loadVoicemails();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agent, campaignId]);
+
+  if (agent && !VOICEMAIL_ROLES.includes(agent.accessLevel)) {
+    return <Navigate to="/" replace />;
+  }
+
+  function handleFilterSubmit(e) {
+    e.preventDefault();
+    loadVoicemails();
+  }
+
+  function handleClearFilters() {
+    setStartDate("");
+    setEndDate("");
+    if (isUnrestrictedCampaignAccess) setCampaignId("");
+    setTimeout(loadVoicemails, 0);
+  }
+
+  async function handlePlay(voicemail) {
+    setPlayingId(voicemail.voicemail_log_id);
+    setError("");
+    try {
+      const data = await api.getVoicemailPlaybackUrl(voicemail.voicemail_log_id);
+      setModalVoicemail(voicemail);
+      setModalUrl(data.url);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setPlayingId(null);
+    }
+  }
+
+  // Admin-only, per explicit request — same reasoning as Recordings'
+  // own download-url route: every other role here can still play a
+  // voicemail, just not download it.
+  async function handleDownload(voicemail) {
+    setDownloadingId(voicemail.voicemail_log_id);
+    setError("");
+    try {
+      const data = await api.getVoicemailDownloadUrl(voicemail.voicemail_log_id);
+      window.location.href = data.url;
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setDownloadingId(null);
+    }
+  }
+
+  function closeModal() {
+    setModalVoicemail(null);
+    setModalUrl(null);
+  }
+
+  function formatDateTime(value) {
+    if (!value) return "—";
+    return new Date(value).toLocaleString(undefined, { timeZone: "America/New_York" });
+  }
+
+  return (
+    <>
+      <Header />
+      <div className="page-content page-content-wide">
+        <h2 style={{ marginBottom: 20 }}>Voicemails</h2>
+
+        {error && <div className="error">{error}</div>}
+
+        <div className="card">
+          <form onSubmit={handleFilterSubmit} style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end" }}>
+            <div>
+              <label className="comments-label">From</label>
+              <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+            </div>
+            <div>
+              <label className="comments-label">To</label>
+              <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+            </div>
+            <div>
+              <label className="comments-label">Campaign</label>
+              <select value={campaignId} onChange={(e) => setCampaignId(e.target.value)}>
+                {isUnrestrictedCampaignAccess && <option value="">All Campaigns</option>}
+                {campaigns.map((c) => (
+                  <option key={c.campaign_id} value={c.campaign_id}>
+                    {c.campaign_name} ({c.campaign_id})
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button className="button-secondary" type="submit" disabled={loading}>
+                {loading ? "Loading…" : "Apply"}
+              </button>
+              <button type="button" className="link" onClick={handleClearFilters} disabled={loading}>
+                Clear
+              </button>
+            </div>
+          </form>
+        </div>
+
+        <div className="card call-log-card" style={{ marginTop: 16 }}>
+          {loading ? (
+            <p>Loading…</p>
+          ) : voicemails.length === 0 ? (
+            <p>No voicemails found for these filters.</p>
+          ) : (
+            <table className="call-log-table">
+              <thead>
+                <tr>
+                  <th>Left At</th>
+                  <th>Campaign</th>
+                  <th>Caller</th>
+                  <th>When</th>
+                  <th>Duration</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {voicemails.map((v) => (
+                  <tr key={v.voicemail_log_id} className="call-log-row">
+                    <td>{formatDateTime(v.left_at)}</td>
+                    <td>{v.campaign_name || v.campaign_id || "—"}</td>
+                    <td>{v.caller_id_number || "Unknown"}</td>
+                    <td>{v.is_after_hours === "Y" ? "After Hours" : "Business Hours"}</td>
+                    <td>{v.duration_seconds != null ? formatDurationHMS(v.duration_seconds) : "—"}</td>
+                    <td>
+                      <button
+                        type="button"
+                        className="link"
+                        disabled={playingId === v.voicemail_log_id}
+                        onClick={() => handlePlay(v)}
+                      >
+                        {playingId === v.voicemail_log_id ? "Loading…" : "Play"}
+                      </button>
+                      {agent?.accessLevel === "admin" && (
+                        <>
+                          {" "}
+                          <button
+                            type="button"
+                            className="link"
+                            disabled={downloadingId === v.voicemail_log_id}
+                            onClick={() => handleDownload(v)}
+                          >
+                            {downloadingId === v.voicemail_log_id ? "Preparing…" : "Download"}
+                          </button>
+                        </>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+
+      {modalVoicemail && modalUrl && (
+        <VoicemailPlaybackModal voicemail={modalVoicemail} url={modalUrl} onClose={closeModal} />
+      )}
+    </>
+  );
+}
