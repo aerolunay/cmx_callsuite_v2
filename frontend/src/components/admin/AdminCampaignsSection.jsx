@@ -6,7 +6,7 @@ import { api } from "../../api";
 ADMIN CAMPAIGNS SECTION
 ==================================================
 Creating a campaign here also auto-creates its DID routing
-(asterisk.vicidial_inbound_dids), converts + deploys its two audio
+(asterisk.vicidial_inbound_dids), converts + deploys its audio
 prompts, and generates/reloads the dialplan that actually routes calls
 for that DID — see campaignRoutes.js for the full chain. Nothing here
 ever touches pjsip.conf or the shared outbound trunk (CMXSandbox) —
@@ -25,6 +25,17 @@ Business hours are NOT something the user explicitly asked for when
 this feature was scoped, but the After Hours audio has no meaning
 without a real hours/day window to gate on — defaults to 09:00-18:00,
 Mon-Fri if left as-is.
+
+VOICEMAIL — single toggle covers both business-hours and after-hours
+voicemail capture (see campaignRoutes.js's buildCampaignDialplanBlock
+for exactly what changes in the generated dialplan). Three separate
+per-campaign audio uploads once the toggle is on: the business-hours
+IVR prompt, the after-hours IVR prompt, and one shared invalid-option/
+fallback prompt used by both. The "leave a message after the beep"
+prompt itself and the beep are NOT uploaded here — they're a single,
+hardcoded sound file + Asterisk's built-in Beep() shared by every
+campaign, deployed directly to the server rather than through this
+form.
 ==================================================
 */
 
@@ -89,6 +100,14 @@ export default function AdminCampaignsSection() {
   const [welcomeGreetingFile, setWelcomeGreetingFile] = useState(null);
   const [afterhoursAudioFile, setAfterhoursAudioFile] = useState(null);
 
+  // VOICEMAIL — single toggle + wait-seconds (business hours only;
+  // after hours has no wait) + three separate audio uploads.
+  const [voicemailEnabled, setVoicemailEnabled] = useState(false);
+  const [voicemailWaitSeconds, setVoicemailWaitSeconds] = useState(60);
+  const [voicemailPromptAudioFile, setVoicemailPromptAudioFile] = useState(null);
+  const [afterhoursVoicemailPromptAudioFile, setAfterhoursVoicemailPromptAudioFile] = useState(null);
+  const [voicemailInvalidOptionAudioFile, setVoicemailInvalidOptionAudioFile] = useState(null);
+
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [busy, setBusy] = useState(false);
@@ -123,6 +142,11 @@ export default function AdminCampaignsSection() {
     setActive(true);
     setWelcomeGreetingFile(null);
     setAfterhoursAudioFile(null);
+    setVoicemailEnabled(false);
+    setVoicemailWaitSeconds(60);
+    setVoicemailPromptAudioFile(null);
+    setAfterhoursVoicemailPromptAudioFile(null);
+    setVoicemailInvalidOptionAudioFile(null);
     setError("");
     setSuccess("");
   }
@@ -143,6 +167,16 @@ export default function AdminCampaignsSection() {
     setActive(c.active === "Y");
     setWelcomeGreetingFile(null);
     setAfterhoursAudioFile(null);
+    // VOICEMAIL — pre-fill from the campaign's existing row. Audio
+    // files themselves are never pre-filled (same as
+    // welcomeGreetingFile/afterhoursAudioFile above) — leaving a file
+    // input blank on save means "keep the current file", handled
+    // entirely server-side via COALESCE.
+    setVoicemailEnabled(c.voicemail_enabled === "Y");
+    setVoicemailWaitSeconds(c.voicemail_wait_seconds || 60);
+    setVoicemailPromptAudioFile(null);
+    setAfterhoursVoicemailPromptAudioFile(null);
+    setVoicemailInvalidOptionAudioFile(null);
     setError("");
     setSuccess("");
   }
@@ -211,6 +245,12 @@ export default function AdminCampaignsSection() {
     }
     if (welcomeGreetingFile) formData.append("welcomeGreeting", welcomeGreetingFile);
     if (afterhoursAudioFile) formData.append("afterhoursAudio", afterhoursAudioFile);
+    // VOICEMAIL
+    formData.append("voicemailEnabled", String(voicemailEnabled));
+    formData.append("voicemailWaitSeconds", String(voicemailWaitSeconds));
+    if (voicemailPromptAudioFile) formData.append("voicemailPromptAudio", voicemailPromptAudioFile);
+    if (afterhoursVoicemailPromptAudioFile) formData.append("afterhoursVoicemailPromptAudio", afterhoursVoicemailPromptAudioFile);
+    if (voicemailInvalidOptionAudioFile) formData.append("voicemailInvalidOptionAudio", voicemailInvalidOptionAudioFile);
     return formData;
   }
 
@@ -386,6 +426,66 @@ export default function AdminCampaignsSection() {
                   Any common audio format works — converted automatically to what Asterisk needs.
                 </p>
 
+                {/*
+                  VOICEMAIL — single toggle covers both business-hours
+                  and after-hours capture. See campaignRoutes.js's
+                  buildCampaignDialplanBlock for exactly what changes
+                  in the generated dialplan when this is on.
+                */}
+                <label className="disposition-row" style={{ marginTop: 14 }}>
+                  <input type="checkbox" checked={voicemailEnabled} onChange={(e) => setVoicemailEnabled(e.target.checked)} />
+                  Voicemail Capture Enabled (business hours + after hours)
+                </label>
+
+                {voicemailEnabled && (
+                  <>
+                    <label className="comments-label" style={{ marginTop: 10 }}>
+                      Business Hours Wait Before Voicemail Offer (seconds, minimum 60)
+                    </label>
+                    <input
+                      type="number"
+                      min={60}
+                      value={voicemailWaitSeconds}
+                      onChange={(e) => setVoicemailWaitSeconds(Math.max(60, Number(e.target.value) || 60))}
+                    />
+
+                    <label className="comments-label" style={{ marginTop: 10 }}>
+                      Business Hours IVR Prompt {editingCampaignId && "(leave blank to keep current)"}
+                    </label>
+                    <input type="file" accept="audio/*" onChange={(e) => setVoicemailPromptAudioFile(e.target.files?.[0] || null)} />
+                    <p style={{ fontSize: 13, color: "#888", marginTop: 4 }}>
+                      Played after the wait above, e.g. "All agents are busy — please stay on the line, or press 1 to leave a
+                      voicemail."
+                    </p>
+
+                    <label className="comments-label" style={{ marginTop: 10 }}>
+                      After Hours IVR Prompt {editingCampaignId && "(leave blank to keep current)"}
+                    </label>
+                    <input
+                      type="file"
+                      accept="audio/*"
+                      onChange={(e) => setAfterhoursVoicemailPromptAudioFile(e.target.files?.[0] || null)}
+                    />
+                    <p style={{ fontSize: 13, color: "#888", marginTop: 4 }}>
+                      Played immediately after hours, e.g. "Our business hours are 9am-6pm, Monday to Friday — press 1 to leave
+                      a message."
+                    </p>
+
+                    <label className="comments-label" style={{ marginTop: 10 }}>
+                      Invalid Option / Fallback Prompt (shared) {editingCampaignId && "(leave blank to keep current)"}
+                    </label>
+                    <input
+                      type="file"
+                      accept="audio/*"
+                      onChange={(e) => setVoicemailInvalidOptionAudioFile(e.target.files?.[0] || null)}
+                    />
+                    <p style={{ fontSize: 13, color: "#888", marginTop: 4 }}>
+                      Played once when an unrecognized key is pressed (in either prompt above, or after the caller records
+                      their message), before trying again.
+                    </p>
+                  </>
+                )}
+
                 <label className="disposition-row" style={{ marginTop: 10 }}>
                   <input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} />
                   Active
@@ -418,6 +518,7 @@ export default function AdminCampaignsSection() {
                       <th>DID</th>
                       <th>Type</th>
                       <th>Recording</th>
+                      <th>Voicemail</th>
                       <th>Active</th>
                       <th>Actions</th>
                     </tr>
@@ -430,6 +531,7 @@ export default function AdminCampaignsSection() {
                         <td>{c.did || "—"}</td>
                         <td>{c.campaign_type || "OUTBOUND"}</td>
                         <td>{c.campaign_recording === "NEVER" ? "Off" : "On"}</td>
+                        <td>{c.voicemail_enabled === "Y" ? "On" : "Off"}</td>
                         <td>{c.active === "Y" ? "Yes" : "No"}</td>
                         <td style={{ whiteSpace: "nowrap" }}>
                           <button type="button" className="link" onClick={() => handleStartEdit(c)} disabled={busy}>

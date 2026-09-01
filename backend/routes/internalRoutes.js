@@ -193,4 +193,113 @@ router.get("/dial-result", async (req, res) => {
   return res.type("text/plain").send("");
 });
 
+/*
+==================================================
+GET /internal/customer-waiting?secret=...&room=...&channel=...&callerId=...
+==================================================
+NEW — voicemail feature. Called from the dialplan's voicemail
+wait-loop, the moment the caller enters it — BEFORE they're ever in a
+ConfBridge. Same "tell the backend before the real event happens" idea
+as allocate-inbound-room, needed here because a voicemail-enabled
+campaign's caller doesn't generate a ConfbridgeJoin event until
+inboundCallService.js actively redirects them in once an agent is
+found.
+==================================================
+*/
+router.get("/customer-waiting", async (req, res) => {
+  const { secret, room, channel, callerId } = req.query;
+
+  if (!isValidSecret(secret)) {
+    console.warn("[internalRoutes] Rejected customer-waiting call with an invalid/missing secret.");
+    return res.status(403).type("text/plain").send("");
+  }
+  if (!room || !channel) {
+    console.warn("[internalRoutes] Rejected customer-waiting call with missing room/channel.");
+    return res.status(400).type("text/plain").send("");
+  }
+
+  try {
+    inboundCallService.customerEnteredWaitLoop(room, channel, callerId || null);
+  } catch (err) {
+    console.error(`[internalRoutes] customerEnteredWaitLoop failed for room ${room}:`, err.message);
+  }
+
+  return res.type("text/plain").send("");
+});
+
+/*
+==================================================
+GET /internal/voicemail-starting?secret=...&room=...
+==================================================
+NEW — voicemail feature. Called right before the dialplan's Record()
+step starts, business-hours path only (an after-hours voicemail never
+has a room/inboundCalls entry at all — see allocateInboundRoom's usual
+flow, which after-hours voicemail skips entirely). Flips the call to
+"leaving_voicemail" so a Hangup mid-recording is never mistaken for an
+abandoned call, and so tryConnectReadyAgentsInner's own "waiting"
+filter stops considering this call at all — it's busy, not abandoned.
+==================================================
+*/
+router.get("/voicemail-starting", async (req, res) => {
+  const { secret, room } = req.query;
+
+  if (!isValidSecret(secret)) {
+    console.warn("[internalRoutes] Rejected voicemail-starting call with an invalid/missing secret.");
+    return res.status(403).type("text/plain").send("");
+  }
+  if (!room) {
+    console.warn("[internalRoutes] Rejected voicemail-starting call with no room param.");
+    return res.status(400).type("text/plain").send("");
+  }
+
+  try {
+    inboundCallService.markLeavingVoicemail(room);
+  } catch (err) {
+    console.error(`[internalRoutes] markLeavingVoicemail failed for room ${room}:`, err.message);
+  }
+
+  return res.type("text/plain").send("");
+});
+
+/*
+==================================================
+GET /internal/voicemail-recorded?secret=...&campaignId=...&callerId=...&isAfterHours=0|1&room=...&uniqueId=...
+==================================================
+NEW — voicemail feature. Called once the caller has confirmed they're
+satisfied with the recording (pressed 1 at the confirmation prompt, or
+timed out/pressed something unrecognized — see buildCampaignDialplanBlock's
+comment on why that defaults to "save" rather than discarding the
+message). room is present for the business-hours path (drives
+inboundCalls Map cleanup); uniqueId is present for the after-hours path
+instead (no Map entry to clean up there at all). Upload-to-S3 + a
+voicemail_log insert happens inside inboundCallService.recordVoicemail.
+==================================================
+*/
+router.get("/voicemail-recorded", async (req, res) => {
+  const { secret, campaignId, callerId, isAfterHours, room, uniqueId } = req.query;
+
+  if (!isValidSecret(secret)) {
+    console.warn("[internalRoutes] Rejected voicemail-recorded call with an invalid/missing secret.");
+    return res.status(403).type("text/plain").send("");
+  }
+  if (!campaignId || (!room && !uniqueId)) {
+    console.warn("[internalRoutes] Rejected voicemail-recorded call with missing campaignId/room/uniqueId.");
+    return res.status(400).type("text/plain").send("");
+  }
+
+  try {
+    await inboundCallService.recordVoicemail({
+      room: room || null,
+      uniqueId: uniqueId || null,
+      campaignId,
+      callerIdNumber: callerId || null,
+      isAfterHours: isAfterHours === "1",
+    });
+  } catch (err) {
+    console.error(`[internalRoutes] recordVoicemail failed for campaign ${campaignId}:`, err.message);
+  }
+
+  return res.type("text/plain").send("");
+});
+
 module.exports = router;

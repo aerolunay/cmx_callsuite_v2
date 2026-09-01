@@ -178,10 +178,71 @@ async function getDownloadUrl(recordingKey, filename) {
   return getSignedUrl(s3, command, { expiresIn: 3600 });
 }
 
+/*
+==================================================
+VOICEMAIL — uploadVoicemailRecording / voicemailKeyForRecording
+==================================================
+Deliberately separate from uploadRecording/recordingKeyForCall above,
+not a variant reusing the same code path — two real differences:
+
+1. Asterisk's Record() app (what captures a voicemail — see
+   campaignRoutes.js's buildCampaignDialplanBlock) writes the EXACT
+   filename it's given, unlike ConfbridgeStartRecord/MixMonitor (what
+   captures a normal call), which always appends "-<unix-timestamp>"
+   regardless of what filename you ask for (see findLocalRecordingFile's
+   own comment above for how that was actually confirmed). A voicemail
+   file's exact path is already known in advance — no glob/prefix
+   search needed at all.
+2. inboundCallService.js already knows the exact local path (it
+   computed it — see voicemailRecordingPath there) and the exact S3
+   key it wants, rather than needing this file to derive either one
+   from a callId the way uploadRecording does.
+
+voicemailKeyForRecording nests under "voicemails/" inside the SAME
+per-campaign folder convention as call recordings
+(CAMPAIGN_RECORDING_FOLDERS) — reuses that existing map rather than
+introducing a second, parallel one, so a voicemail and that same
+campaign's call recordings land in sibling locations in S3, not
+scattered across two unrelated naming schemes.
+
+getPlaybackUrl/getDownloadUrl above already work on ANY recordingKey
+regardless of which of these two upload paths produced it — no changes
+needed there for voicemail playback/download.
+==================================================
+*/
+function voicemailKeyForRecording(campaignId, recordingId) {
+  const folder = CAMPAIGN_RECORDING_FOLDERS[campaignId] || campaignId;
+  return `${folder}/voicemails/${recordingId}.wav`;
+}
+
+async function uploadVoicemailRecording(localPath, key) {
+  if (!fs.existsSync(localPath)) {
+    throw new Error(
+      `No local voicemail recording found at ${localPath} — Record() may never have started, or the file was already cleaned up.`
+    );
+  }
+
+  const fileStream = fs.createReadStream(localPath);
+
+  await s3.send(
+    new PutObjectCommand({
+      Bucket: S3_RECORDING_BUCKET,
+      Key: key,
+      Body: fileStream,
+      ContentType: "audio/wav",
+    })
+  );
+
+  return key;
+}
+
 module.exports = {
   uploadRecording,
   getPlaybackUrl,
   getDownloadUrl,
   recordingPathForCall,
   recordingKeyForCall,
+  // VOICEMAIL — new exports
+  uploadVoicemailRecording,
+  voicemailKeyForRecording,
 };

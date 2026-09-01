@@ -5,6 +5,7 @@ const ami = require("../config/ami");
 const ws = require("../config/ws");
 const db = require("../config/db");
 const agentStatusService = require("./agentStatusService");
+const recordingUploadService = require("./recordingUploadService");
 
 /*
 ==================================================
@@ -32,6 +33,21 @@ the same real, native ViciDial table campaignRoutes.js writes a row
 into when a campaign is created. Still bypasses ViciDial's own
 AGI/Ingroup routing entirely — this only reads did_pattern/campaign_id/
 did_active from that table, nothing else.
+
+VOICEMAIL FEATURE — a voicemail-enabled campaign's caller is NOT put
+straight into the ConfBridge the way every other campaign's caller is.
+Instead the dialplan holds them in a wait-loop extension (MOH + a
+periodic "press 1 for voicemail" prompt) and calls
+customerEnteredWaitLoop() below the moment they arrive there — before
+any ConfbridgeJoin event could possibly exist for them. The new
+call.customerInConfBridge flag (default true, for every existing
+non-voicemail campaign's unchanged direct-ConfBridge path) tracks
+whether this particular caller's channel is actually inside the room's
+ConfBridge yet; tryConnectReadyAgentsInner uses it to decide whether it
+needs to actively AMI-redirect the caller in before originating the
+agent leg — same redirectChannel() mechanism holdInboundCall/
+unholdInboundCall already use for a totally different reason (agent-
+initiated hold).
 ==================================================
 */
 async function lookupCampaignForDid(did) {
@@ -99,7 +115,7 @@ function rekeyInboundCallRoom(oldRoom, newRoom) {
 
 /*
 ==================================================
-RECORDING PATH — NEW
+RECORDING PATH — calls
 ==================================================
 Same convention as dialerService.js's recordingPathForCall — kept as
 its own small, duplicated helper here rather than a shared module,
@@ -113,6 +129,16 @@ regardless of which file actually managed that call.
 const RECORDING_DIR = "/var/spool/asterisk/monitor";
 function recordingPathForCall(callId) {
   return `${RECORDING_DIR}/${callId}.wav`;
+}
+
+// Separate spool dir for voicemail captures (Record(), not
+// MixMonitor) — kept apart from call recordings above so a voicemail
+// file is never confused with an in-progress call recording during
+// cleanup/inspection. Must match VOICEMAIL_SPOOL_DIR in
+// campaignRoutes.js's dialplan generator exactly.
+const VOICEMAIL_SPOOL_DIR = "/var/spool/asterisk/monitor/voicemail";
+function voicemailRecordingPath(key) {
+  return `${VOICEMAIL_SPOOL_DIR}/${key}.wav`;
 }
 
 // How long a pre-allocated room is allowed to sit with no customer
@@ -135,14 +161,18 @@ dialerService.js's activeCalls Map.
 Call shape:
   { callId, room, campaignId, status, customerChannel, agentChannel,
     callerIdNumber, pendingAppUserId, pendingAgentExtension,
-    connectedAppUserId, onHold, startedAt, endedAt }
+    connectedAppUserId, onHold, startedAt, endedAt,
+    customerInConfBridge }
 
 status values: "awaiting_customer" (room allocated, dialplan CURL()
-succeeded, caller not yet actually in the ConfBridge) ->
-"waiting_for_agent" (caller joined, no agent yet) -> "ringing_agent" ->
-"agent_connected" -> "ended" (stays in the Map, NOT deleted, until the
-disposition is saved — same reasoning as v1: the agent still needs
-caller info to fill out the intake form after the call ends).
+succeeded, caller not yet actually in the ConfBridge OR the voicemail
+wait-loop) -> "waiting_for_agent" (caller joined the ConfBridge
+directly, OR entered the voicemail wait-loop — either way, waiting) ->
+"ringing_agent" -> "agent_connected" -> "ended" (stays in the Map, NOT
+deleted, until the disposition is saved — same reasoning as v1: the
+agent still needs caller info to fill out the intake form after the
+call ends). "leaving_voicemail" is a voicemail-only branch off
+"waiting_for_agent" — see markLeavingVoicemail below.
 ==================================================
 */
 const inboundCalls = new Map();
@@ -173,11 +203,12 @@ function broadcastInboundStatus(call) {
 allocateInboundRoom(did)
 ==================================================
 Called by internalRoutes.js the instant a call arrives, BEFORE the
-caller is actually put in a ConfBridge — the dialplan's CURL() needs a
-room number back to build its own ConfBridge() line. Pre-registers a
-Map entry in "awaiting_customer" status so the eventual ConfbridgeJoin
-event (which only carries room/channel, no campaign info) has
-something to attach to.
+caller is actually put in a ConfBridge (or, for a voicemail-enabled
+campaign, the wait-loop) — the dialplan's CURL() needs a room number
+back to build its own ConfBridge()/wait-loop lines. Pre-registers a
+Map entry in "awaiting_customer" status so the eventual
+ConfbridgeJoin/customerEnteredWaitLoop event (neither of which carry
+campaign info on their own) has something to attach to.
 
 NOW ASYNC — the DID-to-campaign lookup is a real DB query (see
 lookupCampaignForDid above), not an in-memory object read anymore.
@@ -229,6 +260,13 @@ async function allocateInboundRoom(did, campaignIdOverride) {
     lineTwo: null, // see attendedTransferService.js
     activeLine: 1, // which room the agent's OWN channel currently sits in — 1 or 2
     xferConfTarget: null, // set by attendedTransferService.js's completeLineTwo — read by the inbound disposition route in dialerRoutes.js
+    // VOICEMAIL — true by default: every existing, non-voicemail
+    // campaign's caller goes straight into the ConfBridge, so this is
+    // already accurate the moment ConfbridgeJoin fires for them.
+    // customerEnteredWaitLoop() is the only thing that ever sets this
+    // to false, for a voicemail-enabled campaign's caller sitting in
+    // the wait-loop extension instead.
+    customerInConfBridge: true,
   };
   inboundCalls.set(room, call);
 
@@ -242,6 +280,133 @@ async function allocateInboundRoom(did, campaignIdOverride) {
   }, UNCLAIMED_ROOM_TIMEOUT_MS);
 
   return room;
+}
+
+/*
+==================================================
+customerEnteredWaitLoop(room, channel, callerIdNumber)
+==================================================
+NEW — voicemail feature. Called by internalRoutes.js's
+/internal/customer-waiting route. Mirrors the "awaiting_customer" ->
+"waiting_for_agent" transition ConfbridgeJoin normally does for a
+non-voicemail campaign — except here the caller isn't in a ConfBridge
+at all yet, they're in the dialplan's own MOH-then-Read() loop.
+Idempotent: if this fires more than once for the same room
+(defensive — the dialplan only calls it once per call, but a retried
+CURL from Asterisk shouldn't cause harm), only the first call actually
+changes anything.
+==================================================
+*/
+function customerEnteredWaitLoop(room, channel, callerIdNumber) {
+  const call = inboundCalls.get(room);
+  if (!call) return false;
+  if (call.status !== "awaiting_customer") return true; // already past this point, no-op
+
+  call.customerChannel = channel;
+  call.callerIdNumber = callerIdNumber || null;
+  call.customerInConfBridge = false;
+  call.status = "waiting_for_agent";
+  broadcastInboundStatus(call);
+  tryConnectReadyAgents();
+  return true;
+}
+
+/*
+==================================================
+markLeavingVoicemail(room)
+==================================================
+NEW — voicemail feature. Called right before the dialplan's Record()
+step starts, business-hours path only. Pulled OUT of
+"waiting_for_agent" so tryConnectReadyAgentsInner's own filter
+(status === "waiting_for_agent") stops matching this call to any
+newly-ready agent — the caller has already committed to leaving a
+message, an agent showing up now would have nothing to connect to.
+==================================================
+*/
+function markLeavingVoicemail(room) {
+  const call = inboundCalls.get(room);
+  if (!call) return false;
+  call.status = "leaving_voicemail";
+  broadcastInboundStatus(call);
+  return true;
+}
+
+/*
+==================================================
+recordVoicemail({ room, uniqueId, campaignId, callerIdNumber, isAfterHours })
+==================================================
+NEW — voicemail feature. Called once the caller has confirmed they're
+satisfied with the recording (pressed 1 at the dialplan's confirmation
+prompt, or timed out/pressed something unrecognized — deliberately
+defaults to "save" rather than discarding a real caller's message on
+ambiguous input; see campaignRoutes.js's dialplan generator for where
+that default is actually applied). Two distinct cleanup paths:
+
+- room present (business-hours path): the call has a real
+  inboundCalls Map entry and an allocated 9700XXX room that must be
+  released back to the pool, exactly like endInboundCall's own
+  cleanup — done directly here rather than calling endInboundCall,
+  since this is neither the "abandoned" nor the "normal agent-
+  connected" outcome that function's two branches are built around.
+- uniqueId present (after-hours path): no Map entry exists at all
+  (after-hours voicemail never calls allocateInboundRoom) — nothing
+  to clean up beyond the S3 upload + log insert.
+
+RECORDING UPLOAD — uses recordingUploadService.js's dedicated
+uploadVoicemailRecording/voicemailKeyForRecording pair (NOT
+uploadRecording — that one is shaped for ConfbridgeStartRecord/
+MixMonitor's auto-timestamped filenames, which Record() doesn't
+produce; see that file's own comment on the distinction). Best-effort:
+a failed S3 upload is logged, not thrown — the voicemail_log row still
+gets written with a null recording_key rather than losing the whole
+capture (campaign_id, caller ID, timestamps, duration) over an upload
+hiccup. The local .wav file is left in place either way; this app has
+no deletion capability against local recordings by explicit design
+(same as call recordings — see uploadRecording's own comment).
+==================================================
+*/
+async function recordVoicemail({ room, uniqueId, campaignId, callerIdNumber, isAfterHours }) {
+  const key = room || uniqueId;
+  const localWavPath = voicemailRecordingPath(key);
+
+  let callStartedAt = new Date();
+  let call = null;
+  if (room) {
+    call = inboundCalls.get(room);
+    if (call) callStartedAt = call.startedAt;
+  }
+  const leftAt = new Date();
+  const durationSeconds = Math.max(0, Math.floor((leftAt.getTime() - callStartedAt.getTime()) / 1000));
+
+  let recordingKey = null;
+  try {
+    const s3Key = recordingUploadService.voicemailKeyForRecording(campaignId, key);
+    recordingKey = await recordingUploadService.uploadVoicemailRecording(localWavPath, s3Key);
+  } catch (err) {
+    console.error(`[inboundCallService] Failed to upload voicemail recording for ${key}:`, err.message);
+  }
+
+  try {
+    await db.execute(
+      `
+        INSERT INTO cmx_dialer.voicemail_log
+          (campaign_id, caller_id_number, call_started_at, left_at, duration_seconds, recording_key, is_after_hours)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `,
+      [campaignId, callerIdNumber, callStartedAt, leftAt, durationSeconds, recordingKey, isAfterHours ? "Y" : "N"]
+    );
+  } catch (err) {
+    console.error(`[inboundCallService] Failed to insert voicemail_log row for campaign ${campaignId}:`, err.message);
+  }
+
+  if (room && call) {
+    inboundCalls.delete(room);
+    const suffix = room.slice(ROOM_PREFIX.length);
+    releaseRoomSuffix(suffix);
+    tryConnectReadyAgents();
+  }
+
+  return true;
 }
 
 /*
@@ -302,6 +467,17 @@ set entirely, moving on to the next real candidate. Now guaranteed to
 only ever run one pass at a time — see the tryConnectReadyAgents()
 wrapper above — so this exclusion set can no longer be undermined by a
 second, concurrently-running pass.
+
+VOICEMAIL FEATURE — a call whose customerInConfBridge is false means
+the caller is physically sitting in the dialplan's voicemail wait-loop,
+not the ConfBridge, even though status is "waiting_for_agent". Before
+originating the agent leg, this now actively redirects that channel
+into the room's ConfBridge via AMI — same mechanism holdInboundCall/
+unholdInboundCall already use to move a channel between extensions —
+so the agent has an actual bridge to land in. Every existing,
+non-voicemail campaign's calls have customerInConfBridge === true
+already (set in allocateInboundRoom), so this is a no-op for them,
+identical to today's behavior.
 ==================================================
 */
 async function tryConnectReadyAgentsInner() {
@@ -339,6 +515,25 @@ async function tryConnectReadyAgentsInner() {
     call.status = "ringing_agent";
     call.pendingAppUserId = agent.appUserId;
     call.pendingAgentExtension = agent.extension;
+
+    // VOICEMAIL — pull the caller into the ConfBridge if they're not
+    // already in it (i.e. they're currently in the wait-loop
+    // extension). Must happen before the agent is originated, so the
+    // room actually has the customer in it by the time the agent's
+    // leg lands.
+    if (!call.customerInConfBridge) {
+      try {
+        await ami.redirectChannel(call.customerChannel, { context: "trunkinbound", exten: call.room });
+        call.customerInConfBridge = true;
+      } catch (err) {
+        console.error(`[inboundCallService] Failed to redirect voicemail-wait-loop customer into ConfBridge for room ${call.room}:`, err.message);
+        call.status = "waiting_for_agent";
+        call.pendingAppUserId = null;
+        call.pendingAgentExtension = null;
+        claimedThisPass.delete(agent.appUserId);
+        continue;
+      }
+    }
 
     try {
       await agentStatusService.setStatus(agent.appUserId, "IN_CALL", {
@@ -417,9 +612,19 @@ leaving does NOT auto-close a ConfBridge room, and a lingering channel
 could otherwise collide with a FUTURE call into this same room number
 once it's reallocated.
 
-TWO DIFFERENT OUTCOMES depending on how far the call got:
+THREE DIFFERENT OUTCOMES depending on how far the call got:
 
-1. ABANDONED — the call ends while still "waiting_for_agent" (nobody
+1. LEAVING VOICEMAIL (NEW) — the call ends while status is
+   "leaving_voicemail". recordVoicemail (triggered by the dialplan's
+   own /internal/voicemail-recorded CURL, AFTER this same Hangup's
+   Record() line returns) does the REAL cleanup — Map deletion, room
+   release, the voicemail_log insert. This branch only makes sure a
+   channel hangup arriving during/after that window doesn't ALSO try
+   to hang up an already-gone channel, or fall through into the
+   abandoned/normal branches below and record this as something it
+   isn't. Checked FIRST, before either of the other two outcomes.
+
+2. ABANDONED — the call ends while still "waiting_for_agent" (nobody
    ever assigned) or "ringing_agent" (an agent's phone was ringing but
    the caller left before they answered). Recorded to
    abandoned_call_log and cleaned up IMMEDIATELY — deleted from the Map,
@@ -432,7 +637,7 @@ TWO DIFFERENT OUTCOMES depending on how far the call got:
    recording start/stop at all — an abandoned call never had an agent
    join, so nothing was ever recording in the first place.
 
-2. NORMAL — the call had reached "agent_connected" before ending. Same
+3. NORMAL — the call had reached "agent_connected" before ending. Same
    as before: agent flips to AFTER_CALL_WORK, and the call stays in the
    Map (NOT deleted) until the disposition is saved (finalizeInboundCall)
    — the agent still needs caller info to fill out the intake form.
@@ -452,6 +657,20 @@ async function endInboundCall(room) {
   call.status = "ended";
   call.endedAt = new Date();
   broadcastInboundStatus(call);
+
+  // VOICEMAIL — see outcome (1) above. Checked before anything else;
+  // deliberately does NOT touch the Map/room pool at all, since
+  // recordVoicemail owns that cleanup once it runs.
+  if (previousStatus === "leaving_voicemail") {
+    if (call.customerChannel) {
+      ami.hangupChannel(call.customerChannel).catch((err) => {
+        if (!ami.isExpectedAlreadyGoneError(err)) {
+          console.error(`[inboundCallService] Failed to hang up voicemail customer channel ${call.customerChannel}:`, err.message);
+        }
+      });
+    }
+    return;
+  }
 
   // REAL FIX, per explicit request — "just keep conference, but allow
   // agents to hang up": when a Conference/Transfer participant is
@@ -572,11 +791,23 @@ function registerInboundEventTracking() {
       call.customerChannel = evt.channel;
       call.callerIdNumber = evt.calleridnum || null;
       call.status = "waiting_for_agent";
+      // VOICEMAIL — direct-ConfBridge path (every non-voicemail
+      // campaign, unchanged): the customer's first join IS them
+      // entering the ConfBridge, so this is already true here.
+      call.customerInConfBridge = true;
       tryConnectReadyAgents();
       return;
     }
 
-    if (evt.channel === call.customerChannel) return; // duplicate/already tracked
+    if (evt.channel === call.customerChannel) {
+      // VOICEMAIL — this fires when tryConnectReadyAgentsInner's AMI
+      // redirect lands a voicemail-wait-loop customer into the
+      // ConfBridge for the first time. For every non-voicemail
+      // campaign this is just the ordinary "duplicate/already
+      // tracked" no-op it always was.
+      call.customerInConfBridge = true;
+      return;
+    }
 
     if (call.status === "ringing_agent") {
       call.agentChannel = evt.channel;
@@ -809,7 +1040,9 @@ getQueueStatus
 Real aggregation across every currently-waiting call, grouped by
 campaign — replaces v1's hardcoded 0-or-1 guess. Only counts calls
 genuinely waiting for an agent (not yet ringing/connected/ended) —
-that's what "in queue" means on the Live Status Dashboard.
+that's what "in queue" means on the Live Status Dashboard. A call in
+"leaving_voicemail" is deliberately excluded — it's no longer waiting
+for an agent at all.
 
 oldestWaitingSeconds: how long the LONGEST-waiting call in that
 campaign has been waiting. Computed here, in Node, against Node's OWN
@@ -907,4 +1140,8 @@ module.exports = {
   recordingPathForCall,
   releaseRoomSuffix,
   rekeyInboundCallRoom,
+  // VOICEMAIL — new exports
+  customerEnteredWaitLoop,
+  markLeavingVoicemail,
+  recordVoicemail,
 };
