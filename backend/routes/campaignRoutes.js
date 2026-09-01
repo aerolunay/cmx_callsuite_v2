@@ -78,10 +78,13 @@ FIELD MAPPING — what this app's UI concept maps to on each real table
 - Business/After Hours IVR Prompts,
   Invalid Option Prompt           -> cmx_dialer.campaign_settings
   (three separate per-campaign uploads — see processUploadedAudio call
-  sites below. The actual "leave a message after the beep" prompt and
-  the beep itself are NOT per-campaign; they're a single hardcoded
-  sound file + Asterisk's built-in Beep() app, shared by every
-  campaign's voicemail capture — see VOICEMAIL_LEAVE_MESSAGE_SOUND.)
+  sites below. The actual "leave a message after the beep" prompt is
+  NOT per-campaign; it's a single hardcoded sound file, shared by
+  every campaign's voicemail capture — see
+  VOICEMAIL_LEAVE_MESSAGE_SOUND. The beep itself is Asterisk's own
+  core "beep" sound file, played via Playback(beep) — NOT the Beep()
+  application, which isn't loaded on every Asterisk install; confirmed
+  the hard way via a real test call's "No application 'Beep'" error.)
 ==================================================
 */
 
@@ -242,7 +245,10 @@ keypress before giving up and hanging up.
 
 Recording (both paths, shared logic): Playback the single hardcoded
 VOICEMAIL_LEAVE_MESSAGE_SOUND (already includes the full spoken
-instructions) -> Beep() -> Record() -> silently Read() a single digit
+instructions) -> Playback(beep) [Asterisk's own core "beep" sound
+file — NOT the Beep() application, which isn't loaded on every
+Asterisk install, confirmed via a real test call] -> Record() ->
+silently Read() a single digit
 (no audio — the caller was already told what to press) for up to 45
 seconds. "1" saves and hangs up. "2" loops back to record again, no
 error message (a deliberate, valid choice). Anything else — silence
@@ -388,8 +394,16 @@ function buildCampaignDialplanBlock({
       `exten => ${vmRecordLabel},1,NoOp(CMX Campaign ${campaignId} inbound voicemail - business hours)`,
       `exten => ${vmRecordLabel},n,Set(CURL(${INTERNAL_API_BASE_URL}/internal/voicemail-starting?secret=${INTERNAL_API_SECRET}&room=\${ROOM})=)`,
       `exten => ${vmRecordLabel},n(${vmRecordStartLabel}),Playback(${VOICEMAIL_LEAVE_MESSAGE_SOUND})`,
-      `exten => ${vmRecordLabel},n,Beep()`,
-      `exten => ${vmRecordLabel},n,Record(${VOICEMAIL_SPOOL_DIR}/\${ROOM}.wav:wav,3,300,k)`,
+      `exten => ${vmRecordLabel},n,Playback(beep)`,
+      // REAL BUG FIX, confirmed via a real test call: Record()'s
+      // syntax is filename:format — it appends ".format" itself.
+      // Writing "${ROOM}.wav:wav" produced an actual file named
+      // "${ROOM}.wav.wav" on disk, never matching what
+      // voicemailRecordingPath(key) in inboundCallService.js expected
+      // ("${ROOM}.wav") — every voicemail's S3 upload would have
+      // silently failed (best-effort, so the call itself wouldn't
+      // have dropped, but the recording would never have reached S3).
+      `exten => ${vmRecordLabel},n,Record(${VOICEMAIL_SPOOL_DIR}/\${ROOM}:wav,3,300,k)`,
       `exten => ${vmRecordLabel},n,Read(CMXVMCONFIRM,,1,,,45)`,
       `exten => ${vmRecordLabel},n,GotoIf($["\${CMXVMCONFIRM}" = "1"]?${vmRecordSaveLabel},1)`,
       `exten => ${vmRecordLabel},n,GotoIf($["\${CMXVMCONFIRM}" = "2"]?${vmRecordStartLabel})`
@@ -430,8 +444,8 @@ function buildCampaignDialplanBlock({
       `exten => ${afterhoursExten},n(${afterhoursEndLabel}),Hangup()`,
       `exten => ${afterhoursVmRecordLabel},1,NoOp(CMX Campaign ${campaignId} inbound voicemail - after hours)`,
       `exten => ${afterhoursVmRecordLabel},n(${afterhoursVmRecordStartLabel}),Playback(${VOICEMAIL_LEAVE_MESSAGE_SOUND})`,
-      `exten => ${afterhoursVmRecordLabel},n,Beep()`,
-      `exten => ${afterhoursVmRecordLabel},n,Record(${VOICEMAIL_SPOOL_DIR}/\${UNIQUEID}.wav:wav,3,300,k)`,
+      `exten => ${afterhoursVmRecordLabel},n,Playback(beep)`,
+      `exten => ${afterhoursVmRecordLabel},n,Record(${VOICEMAIL_SPOOL_DIR}/\${UNIQUEID}:wav,3,300,k)`,
       `exten => ${afterhoursVmRecordLabel},n,Read(CMXVMCONFIRM,,1,,,45)`,
       `exten => ${afterhoursVmRecordLabel},n,GotoIf($["\${CMXVMCONFIRM}" = "1"]?${afterhoursVmRecordSaveLabel},1)`,
       `exten => ${afterhoursVmRecordLabel},n,GotoIf($["\${CMXVMCONFIRM}" = "2"]?${afterhoursVmRecordStartLabel})`
