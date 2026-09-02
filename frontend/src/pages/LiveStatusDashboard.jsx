@@ -405,17 +405,6 @@ export default function LiveStatusDashboard() {
 
         {error && <div className="error" role="alert">{error}</div>}
 
-        {listeningTo && (
-          <div className="card" style={{ marginBottom: 20, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <span>
-              🔴 Silently listening to <strong>{listeningTo.fullName}</strong>
-            </span>
-            <button type="button" className="link" onClick={handleStopListen}>
-              Stop listening
-            </button>
-          </div>
-        )}
-
         <div className="live-status-grid">
           {/* LEFT: Inbound Stats, Combined States, Logged Out. Height
               matches the right column exactly (measured, not guessed —
@@ -582,29 +571,40 @@ export default function LiveStatusDashboard() {
                                 ["training_quality", "supervisor", "admin"].includes(agent?.accessLevel) && (
                                 <>
                                   {" "}
-                                  <button
-                                    type="button"
-                                    className="link"
-                                    // Per explicit request — disable EVERY
-                                    // Listen button, not just this row's own
-                                    // busy state, while already listening to
-                                    // ANYONE. Without this, clicking a
-                                    // different agent's Listen button while
-                                    // already listening silently switches
-                                    // the session server-side (see this
-                                    // page's own listeningTo comment above)
-                                    // with no confirmation — easy to do by
-                                    // accident. Now requires an explicit
-                                    // "Stop listening" first.
-                                    disabled={listenBusyId === a.appUserId || Boolean(listeningTo)}
-                                    onClick={() => handleStartListen(a)}
-                                  >
-                                    {listenBusyId === a.appUserId
-                                      ? "Connecting…"
-                                      : listeningTo?.appUserId === a.appUserId
-                                        ? "Listening…"
-                                        : "Listen"}
-                                  </button>
+                                  {/* Per explicit request — the standalone
+                                      "Silently listening to X" banner is
+                                      retired. Its two jobs now live directly
+                                      on the row being listened to: the 🔴
+                                      indicator (same visual language the
+                                      banner used) and a live "Stop
+                                      listening" action, replacing the
+                                      row's own Listen button in place
+                                      rather than a separate global control. */}
+                                  {listeningTo?.appUserId === a.appUserId ? (
+                                    <button type="button" className="link" onClick={handleStopListen}>
+                                      🔴 Stop listening
+                                    </button>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      className="link"
+                                      // Per explicit request — disable EVERY
+                                      // Listen button, not just this row's own
+                                      // busy state, while already listening to
+                                      // ANYONE. Without this, clicking a
+                                      // different agent's Listen button while
+                                      // already listening silently switches
+                                      // the session server-side (see this
+                                      // page's own listeningTo comment above)
+                                      // with no confirmation — easy to do by
+                                      // accident. Now requires an explicit
+                                      // "Stop listening" first.
+                                      disabled={listenBusyId === a.appUserId || Boolean(listeningTo)}
+                                      onClick={() => handleStartListen(a)}
+                                    >
+                                      {listenBusyId === a.appUserId ? "Connecting…" : "Listen"}
+                                    </button>
+                                  )}
                                 </>
                               )}
                             </td>
