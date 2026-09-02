@@ -503,13 +503,13 @@ export default function AdminCampaignsSection() {
                 {voicemailBusinessHoursEnabled && (
                   <>
                     <label className="comments-label" style={{ marginTop: 10 }}>
-                      Business Hours Wait Before Voicemail Offer (seconds, minimum 60)
+                      Business Hours Wait Before Voicemail Offer (seconds, minimum 40)
                     </label>
                     <input
                       type="number"
-                      min={60}
+                      min={40}
                       value={voicemailWaitSeconds}
-                      onChange={(e) => setVoicemailWaitSeconds(Math.max(60, Number(e.target.value) || 60))}
+                      onChange={(e) => setVoicemailWaitSeconds(Math.max(40, Number(e.target.value) || 40))}
                     />
 
                     <label className="comments-label" style={{ marginTop: 10 }}>

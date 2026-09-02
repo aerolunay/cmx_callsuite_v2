@@ -358,11 +358,12 @@ function buildCampaignDialplanBlock({
   const voicemailInvalidOptionSound = voicemailInvalidOptionAudioFilename
     ? `custom/${path.basename(voicemailInvalidOptionAudioFilename, path.extname(voicemailInvalidOptionAudioFilename))}`
     : "";
-  // 60s floor enforced here too, not just in the admin routes below —
+  // 40s floor enforced here too, not just in the admin routes below —
   // this function is the last line of defense before it's baked into
   // a static dialplan file, so a bad/missing value can't slip through
-  // some other future call site of this function.
-  const waitSeconds = Math.max(60, Number(voicemailWaitSeconds) || 60);
+  // some other future call site of this function. Was 60s, lowered to
+  // 40s per explicit request.
+  const waitSeconds = Math.max(40, Number(voicemailWaitSeconds) || 40);
   // TWO INDEPENDENT TOGGLES, per explicit request — a campaign can
   // have voicemail during business hours only, after hours only,
   // both, or neither. Previously a single voicemailEnabled flag
@@ -713,13 +714,13 @@ router.post(
 
     // VOICEMAIL — TWO independent 'Y'/'N' toggles, per explicit
     // request (a campaign can have voicemail during business hours
-    // only, after hours only, both, or neither). 60s floor enforced
-    // here (same floor re-checked in buildCampaignDialplanBlock as a
-    // last line of defense before it's baked into the static dialplan
-    // file).
+    // only, after hours only, both, or neither). 40s floor enforced
+    // here (was 60s, lowered per explicit request; same floor
+    // re-checked in buildCampaignDialplanBlock as a last line of
+    // defense before it's baked into the static dialplan file).
     const resolvedVoicemailBusinessHoursEnabled = voicemailBusinessHoursEnabled === "true" ? "Y" : "N";
     const resolvedVoicemailAfterhoursEnabled = voicemailAfterhoursEnabled === "true" ? "Y" : "N";
-    const resolvedVoicemailWaitSeconds = Math.max(60, parseInt(voicemailWaitSeconds, 10) || 60);
+    const resolvedVoicemailWaitSeconds = Math.max(40, parseInt(voicemailWaitSeconds, 10) || 40);
 
     const connection = await db.getConnection();
     try {
@@ -898,7 +899,7 @@ router.put(
     // VOICEMAIL — same resolution/floor as the create route above.
     const resolvedVoicemailBusinessHoursEnabled = voicemailBusinessHoursEnabled === "true" ? "Y" : "N";
     const resolvedVoicemailAfterhoursEnabled = voicemailAfterhoursEnabled === "true" ? "Y" : "N";
-    const resolvedVoicemailWaitSeconds = Math.max(60, parseInt(voicemailWaitSeconds, 10) || 60);
+    const resolvedVoicemailWaitSeconds = Math.max(40, parseInt(voicemailWaitSeconds, 10) || 40);
 
     const connection = await db.getConnection();
     try {
