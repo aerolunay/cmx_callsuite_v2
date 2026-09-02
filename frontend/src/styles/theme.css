@@ -449,6 +449,51 @@ other pages sharing the same base classes.
   letter-spacing: 0.5px;
 }
 
+/*
+==================================================
+DIALER PAGE — multi-campaign badge row
+==================================================
+Per explicit request: a multi-campaign agent's DialerPage header shows
+one badge per campaign they're currently working
+(workingCampaigns.length > 1 — see DialerPage.jsx), with whichever one
+an active inbound call actually came from made visibly bolder/more
+prominent than the others, so the agent knows at a glance which
+campaign's call they're about to answer.
+
+.campaign-badge is the plain/default state — deliberately muted (grey,
+not the cyan .badge already uses elsewhere, like ON HOLD) so it reads
+as "one of several options" rather than competing for attention.
+.campaign-badge-active is the one lit up when it matches
+inboundCall.campaignId — larger, bolder, real color, with a brief
+pulse animation so it draws the eye the instant a call actually comes
+in, not just a static color difference someone could miss if looking
+away from the screen at that exact moment.
+==================================================
+*/
+.campaign-badge {
+  background: #e2e5eb;
+  color: var(--cmx-text-dark);
+  font-weight: 500;
+}
+
+.campaign-badge-active {
+  background: var(--cmx-cyan);
+  color: white;
+  font-weight: 700;
+  font-size: 12px;
+  padding: 4px 12px;
+  animation: campaign-badge-pulse 1s ease-in-out 2;
+}
+
+@keyframes campaign-badge-pulse {
+  0%, 100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.08);
+  }
+}
+
 .button-secondary {
   width: auto;
   padding: 10px 20px;

@@ -112,6 +112,12 @@ export default function DialerPage() {
   // showing it, never toward hiding a control someone might actually
   // need.
   const [myCampaignCount, setMyCampaignCount] = useState(2);
+  // Per explicit request — for a multi-campaign agent, shows which
+  // campaign(s) they're currently working, highlighting whichever one
+  // an active inbound call actually came from. Only rendered when
+  // there's genuinely more than one — a single-campaign agent keeps
+  // today's plain header untouched, see the JSX below.
+  const [workingCampaigns, setWorkingCampaigns] = useState([]);
 
   const elapsedTimerRef = useRef(null);
 
@@ -133,7 +139,22 @@ export default function DialerPage() {
   useEffect(() => {
     api
       .getMyCampaigns()
-      .then((data) => setMyCampaignCount((data.campaigns || []).length))
+      .then((data) => {
+        const list = data.campaigns || [];
+        setMyCampaignCount(list.length);
+        // Cross-reference with the agent's actual CURRENT working
+        // selection (agent_working_campaigns, server-side source of
+        // truth — see dialerRoutes.js's working-campaigns route) so
+        // the badge row reflects reality even if it's ever out of sync
+        // with the assignment list above.
+        api
+          .getWorkingCampaigns()
+          .then((workingData) => {
+            const workingIds = workingData.campaignIds || [];
+            setWorkingCampaigns(list.filter((c) => workingIds.includes(c.campaign_id)));
+          })
+          .catch(() => {}); // fail open — badge row just won't show, no worse than before this feature existed
+      })
       .catch(() => {}); // fail open — keeps the default of 2, so "Change campaign" stays visible rather than silently vanishing on an error
   }, []);
 
@@ -395,6 +416,7 @@ export default function DialerPage() {
           room: message.room,
           callerIdNumber: message.callerIdNumber,
           onHold: message.onHold,
+          campaignId: message.campaignId,
         };
       });
     }
@@ -848,6 +870,29 @@ export default function DialerPage() {
         <div className="dialer-topbar">
           <div>
             <h2 style={{ marginBottom: 4 }}>{campaign ? campaign.campaign_name : "…"}</h2>
+            {/* Per explicit request — for a multi-campaign agent
+                (workingCampaigns.length > 1), show every campaign
+                they're currently working, bolding/highlighting
+                whichever one an active inbound call actually came
+                from (inboundCall.campaignId — see
+                inboundCallService.js's broadcastInboundStatus). A
+                single-campaign agent sees no change at all; the plain
+                <h2> above already covers that case. */}
+            {workingCampaigns.length > 1 && (
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
+                {workingCampaigns.map((c) => {
+                  const isActiveCallCampaign = Boolean(inboundCall) && inboundCall.campaignId === c.campaign_id;
+                  return (
+                    <span
+                      key={c.campaign_id}
+                      className={isActiveCallCampaign ? "badge campaign-badge-active" : "badge campaign-badge"}
+                    >
+                      {c.campaign_name}
+                    </span>
+                  );
+                })}
+              </div>
+            )}
             {myCampaignCount >= 2 && (
               <button
                 type="button"

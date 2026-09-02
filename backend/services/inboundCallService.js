@@ -206,6 +206,12 @@ function broadcastInboundStatus(call) {
     room: call.room,
     callerIdNumber: call.callerIdNumber,
     onHold: call.onHold,
+    // NEW — per explicit request: DialerPage.jsx highlights which of
+    // a multi-campaign agent's currently-selected campaigns this
+    // specific call actually came from. Wasn't included before since
+    // nothing needed it; call.campaignId has been tracked internally
+    // this whole time, just never broadcast to the frontend.
+    campaignId: call.campaignId,
   });
 }
 

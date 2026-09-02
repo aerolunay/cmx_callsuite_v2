@@ -82,6 +82,7 @@ router.get("/users", requireAdmin, async (req, res) => {
           au.vicidial_user,
           au.active,
           au.priority,
+          au.multi_campaign_enabled,
           vu.phone_login,
           GROUP_CONCAT(aca.campaign_id ORDER BY aca.campaign_id SEPARATOR ', ') AS campaigns
         FROM cmx_dialer.app_users au
@@ -120,7 +121,7 @@ shouldn't be disturbed.
 ==================================================
 */
 router.post("/users", requireAdmin, async (req, res) => {
-  const { email, fullName, accessLevel, vicidialUser, campaignIds, active, priority } = req.body;
+  const { email, fullName, accessLevel, vicidialUser, campaignIds, active, priority, multiCampaignEnabled } = req.body;
 
   if (!email || !fullName || !accessLevel) {
     return res.status(400).json({ success: false, message: "email, fullName, and accessLevel are required." });
@@ -143,9 +144,9 @@ router.post("/users", requireAdmin, async (req, res) => {
     await connection.beginTransaction();
 
     const [result] = await connection.execute(
-      `INSERT INTO cmx_dialer.app_users (email, full_name, access_level, vicidial_user, active, priority)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [email, fullName, accessLevel, vicidialUser || null, active === false ? 0 : 1, resolvedPriority]
+      `INSERT INTO cmx_dialer.app_users (email, full_name, access_level, vicidial_user, active, priority, multi_campaign_enabled)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [email, fullName, accessLevel, vicidialUser || null, active === false ? 0 : 1, resolvedPriority, multiCampaignEnabled ? 1 : 0]
     );
 
     const appUserId = result.insertId;
@@ -937,7 +938,8 @@ router.get(
           open_row.related_call_id AS open_related_call_id,
           open_row.related_campaign_id AS open_related_campaign_id,
           open_row.related_call_direction AS open_related_call_direction,
-          last_closed.logged_out_elapsed_seconds
+          last_closed.logged_out_elapsed_seconds,
+          working.working_campaign_count
         FROM cmx_dialer.app_users au
         LEFT JOIN (
           SELECT app_user_id, status, related_call_id, related_campaign_id, related_call_direction, TIMESTAMPDIFF(SECOND, started_at, NOW()) AS elapsed_seconds
@@ -950,6 +952,11 @@ router.get(
           WHERE ended_at IS NOT NULL
           GROUP BY app_user_id
         ) last_closed ON last_closed.app_user_id = au.app_user_id
+        LEFT JOIN (
+          SELECT app_user_id, COUNT(*) AS working_campaign_count
+          FROM cmx_dialer.agent_working_campaigns
+          GROUP BY app_user_id
+        ) working ON working.app_user_id = au.app_user_id
         WHERE au.active = 1
           AND au.access_level != 'admin'
           AND (
@@ -1033,12 +1040,25 @@ router.get(
           const useAggregatedDuration = r.open_status === "IN_CALL";
           const totalHandlingSeconds = useAggregatedDuration ? totalsByCallId.get(r.open_related_call_id) : undefined;
 
+          // MULTI-CAMPAIGN DISPLAY — per explicit request: while an
+          // agent is in a non-call-tied status (Ready, Not Ready,
+          // Lunch/Break, etc.) with more than one campaign in their
+          // CURRENT working selection (agent_working_campaigns — see
+          // dialerRoutes.js's working-campaigns route), show the
+          // literal string "MULTI" instead of guessing at one of
+          // them. The moment they actually connect to a real call
+          // (IN_CALL/ON_HOLD/AFTER_CALL_WORK), open_related_campaign_id
+          // already correctly reflects that SPECIFIC call's real
+          // campaign — untouched here, only the non-call-tied case is
+          // affected.
+          const showMulti = !isCallRelated && Number(r.working_campaign_count) > 1;
+
           return {
             appUserId: r.app_user_id,
             fullName: r.full_name,
             email: r.email,
             vicidialUser: r.vicidial_user,
-            campaignId: r.open_related_campaign_id,
+            campaignId: showMulti ? "MULTI" : r.open_related_campaign_id,
             status: r.open_status,
             direction: isCallRelated ? r.open_related_call_direction || null : null,
             callerId: isCallRelated ? callerIdsByCallId[r.open_related_call_id] || null : null,
@@ -1195,7 +1215,7 @@ Body: { email, fullName, accessLevel, vicidialUser (nullable), campaignIds: [] }
 */
 router.put("/users/:appUserId", requireAdmin, async (req, res) => {
   const { appUserId } = req.params;
-  const { email, fullName, accessLevel, vicidialUser, campaignIds, active, priority } = req.body;
+  const { email, fullName, accessLevel, vicidialUser, campaignIds, active, priority, multiCampaignEnabled } = req.body;
 
   if (!email || !fullName || !accessLevel) {
     return res.status(400).json({ success: false, message: "email, fullName, and accessLevel are required." });
@@ -1220,9 +1240,9 @@ router.put("/users/:appUserId", requireAdmin, async (req, res) => {
     // clean rather than carrying over a stale count.
     const [result] = await connection.execute(
       `UPDATE cmx_dialer.app_users
-       SET email = ?, full_name = ?, access_level = ?, vicidial_user = ?, active = ?, priority = ?, priority_skip_count = 0
+       SET email = ?, full_name = ?, access_level = ?, vicidial_user = ?, active = ?, priority = ?, priority_skip_count = 0, multi_campaign_enabled = ?
        WHERE app_user_id = ?`,
-      [email, fullName, accessLevel, vicidialUser || null, active ? 1 : 0, resolvedPriority, appUserId]
+      [email, fullName, accessLevel, vicidialUser || null, active ? 1 : 0, resolvedPriority, multiCampaignEnabled ? 1 : 0, appUserId]
     );
 
     if (result.affectedRows === 0) {
@@ -1401,6 +1421,43 @@ router.patch("/users/:appUserId/priority", requireAdmin, async (req, res) => {
       return res.status(400).json({ success: false, message: error.message });
     }
     return res.status(500).json({ success: false, message: "Failed to update priority." });
+  }
+});
+
+/*
+==================================================
+PATCH /api/admin/users/:appUserId/multi-campaign
+==================================================
+NEW — per explicit request: "Admin / WFM controls whether agent can
+select multiple blended campaigns to work on." Same lightweight,
+standalone pattern as the priority PATCH right above — no need to open
+the full user-edit form for a single toggle. requireAdmin here already
+covers both admin AND wfm (see its own definition above), matching
+exactly who should control this.
+
+Turning this OFF for an agent does NOT retroactively clear any
+campaigns they've already selected in agent_working_campaigns — if
+they currently have 2 selected and an admin disables the feature, they
+keep receiving calls for both until they next change their own
+selection (at which point dialerRoutes.js's working-campaigns route
+would reject anything beyond one). Simpler and safer than surprise-
+dropping a call source out from under an agent mid-shift; the
+practical effect (can't add MORE) still takes hold immediately.
+==================================================
+*/
+router.patch("/users/:appUserId/multi-campaign", requireAdmin, async (req, res) => {
+  const { appUserId } = req.params;
+  const { enabled } = req.body;
+
+  try {
+    await db.execute(`UPDATE cmx_dialer.app_users SET multi_campaign_enabled = ? WHERE app_user_id = ?`, [
+      enabled ? 1 : 0,
+      appUserId,
+    ]);
+    return res.json({ success: true, multiCampaignEnabled: Boolean(enabled) });
+  } catch (error) {
+    console.error(`PATCH /api/admin/users/${appUserId}/multi-campaign failed:`, error);
+    return res.status(500).json({ success: false, message: "Failed to update multi-campaign setting." });
   }
 });
 

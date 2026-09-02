@@ -496,6 +496,126 @@ router.get("/campaigns/mine", requireAuth, async (req, res) => {
 
 /*
 ==================================================
+GET /api/dialer/working-campaigns
+POST /api/dialer/working-campaigns { campaignIds: [...] }
+==================================================
+NEW — multi-campaign agent selection, per explicit request. Separate
+from cmx_dialer.agent_campaign_assignments (the agent's PERMANENT
+assignment, set by an admin) and separate from
+agent_status_log.related_campaign_id (a per-status-row DISPLAY field,
+only ever populated for call-tied statuses) — this table is the
+agent's CURRENT, live selection of which campaign(s) they're actively
+working right now, and is what agentStatusService.
+getAnyReadyAgentWithExtension actually checks when matching an
+incoming call to a Ready agent.
+
+VALIDATION, enforced HERE (server-side), not just as a frontend nicety
+— call-routing correctness must never depend solely on frontend
+behavior being followed correctly:
+  1. Every campaignId must be one this agent is actually assigned to
+     (agent_campaign_assignments) — can't select a campaign they have
+     no real relationship with.
+  2. If au.multi_campaign_enabled is 0 for this agent, at most ONE
+     campaignId is allowed, regardless of type — an admin/WFM hasn't
+     opted this agent into the feature at all.
+  3. If ANY selected campaign is OUTBOUND (not BLENDED), at most ONE
+     campaignId is allowed, full stop — OUTBOUND lead-pulling
+     (dialerService.js's getNextLead) is fundamentally single-campaign,
+     there's no sensible way to "pull the next lead from two outbound
+     campaigns at once."
+
+GET returns the agent's current selection, for the campaign-select
+page to pre-check the right boxes on load (e.g. after a page refresh)
+rather than always starting blank.
+==================================================
+*/
+router.get("/dialer/working-campaigns", requireAuth, async (req, res) => {
+  try {
+    const { appUserId } = req.session.agent;
+    const [rows] = await db.execute(
+      `SELECT campaign_id FROM cmx_dialer.agent_working_campaigns WHERE app_user_id = ?`,
+      [appUserId]
+    );
+    return res.json({ success: true, campaignIds: rows.map((r) => r.campaign_id) });
+  } catch (error) {
+    console.error("GET /api/dialer/working-campaigns failed:", error);
+    return res.status(500).json({ success: false, message: "Failed to load your working campaigns." });
+  }
+});
+
+router.post("/dialer/working-campaigns", requireAuth, async (req, res) => {
+  try {
+    const { appUserId } = req.session.agent;
+    const { campaignIds } = req.body;
+
+    if (!Array.isArray(campaignIds) || campaignIds.length === 0) {
+      return res.status(400).json({ success: false, message: "Select at least one campaign." });
+    }
+
+    const [assignedRows] = await db.execute(
+      `
+        SELECT aca.campaign_id, s.campaign_type
+        FROM cmx_dialer.agent_campaign_assignments aca
+        LEFT JOIN cmx_dialer.campaign_settings s ON s.campaign_id = aca.campaign_id
+        WHERE aca.app_user_id = ? AND aca.active = 1
+      `,
+      [appUserId]
+    );
+    const assignedById = new Map(assignedRows.map((r) => [r.campaign_id, r.campaign_type]));
+
+    for (const campaignId of campaignIds) {
+      if (!assignedById.has(campaignId)) {
+        return res.status(403).json({ success: false, message: `You are not assigned to campaign ${campaignId}.` });
+      }
+    }
+
+    const [userRows] = await db.execute(`SELECT multi_campaign_enabled FROM cmx_dialer.app_users WHERE app_user_id = ?`, [
+      appUserId,
+    ]);
+    const multiCampaignEnabled = userRows[0]?.multi_campaign_enabled === 1;
+
+    if (!multiCampaignEnabled && campaignIds.length > 1) {
+      return res.status(403).json({
+        success: false,
+        message: "You're not enabled for working multiple campaigns at once — select just one.",
+      });
+    }
+
+    const hasOutbound = campaignIds.some((id) => assignedById.get(id) === "OUTBOUND");
+    if (hasOutbound && campaignIds.length > 1) {
+      return res.status(400).json({
+        success: false,
+        message: "An outbound campaign can't be combined with other campaigns — select just the one.",
+      });
+    }
+
+    const connection = await db.getConnection();
+    try {
+      await connection.beginTransaction();
+      await connection.execute(`DELETE FROM cmx_dialer.agent_working_campaigns WHERE app_user_id = ?`, [appUserId]);
+      for (const campaignId of campaignIds) {
+        await connection.execute(
+          `INSERT INTO cmx_dialer.agent_working_campaigns (app_user_id, campaign_id) VALUES (?, ?)`,
+          [appUserId, campaignId]
+        );
+      }
+      await connection.commit();
+    } catch (err) {
+      await connection.rollback();
+      throw err;
+    } finally {
+      connection.release();
+    }
+
+    return res.json({ success: true, campaignIds });
+  } catch (error) {
+    console.error("POST /api/dialer/working-campaigns failed:", error);
+    return res.status(500).json({ success: false, message: "Failed to save your working campaigns." });
+  }
+});
+
+/*
+==================================================
 GET /api/dialer/campaign-agents?campaignId=X
 ==================================================
 New, per explicit request — powers the "Transfer to Extension" picker

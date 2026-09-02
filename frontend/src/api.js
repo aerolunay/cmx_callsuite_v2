@@ -56,6 +56,14 @@ export const api = {
   // dialerRoutes.js's GET /campaigns/mine for why this is a genuinely
   // separate endpoint from getCampaigns() above, not a variant of it.
   getMyCampaigns: () => request("/campaigns/mine"),
+  // Multi-campaign selection — NEW. GET returns the agent's current
+  // live selection (for pre-checking boxes on load); POST replaces it
+  // entirely, subject to real server-side validation (assignment
+  // check, multi_campaign_enabled check, outbound-exclusivity check —
+  // see dialerRoutes.js's own route comment for the full rules).
+  getWorkingCampaigns: () => request("/dialer/working-campaigns"),
+  setWorkingCampaigns: (campaignIds) =>
+    request("/dialer/working-campaigns", { method: "POST", body: JSON.stringify({ campaignIds }) }),
   getCampaignAgents: (campaignId) => request(`/dialer/campaign-agents?campaignId=${encodeURIComponent(campaignId)}`),
 
   // Call history / stats

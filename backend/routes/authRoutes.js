@@ -81,6 +81,11 @@ function buildSessionAgent(appUser, vicidialContext) {
     protocol: vicidialContext.protocol,
     userGroup: vicidialContext.user_group,
     totpEnabled: Boolean(appUser.totp_enabled),
+    // NEW — multi-campaign agent selection, per explicit request.
+    // Lets the frontend (CampaignSelectPage.jsx) know whether THIS
+    // agent is allowed to select more than one blended campaign at
+    // once, without a separate round-trip just to find out.
+    multiCampaignEnabled: Boolean(appUser.multi_campaign_enabled),
   };
 }
 

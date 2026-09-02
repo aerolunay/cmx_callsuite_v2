@@ -217,6 +217,28 @@ Scoped to cmx_dialer.agent_campaign_assignments for the call's own
 campaign (see the campaign-scoping fix above this in git history —
 this function used to have no campaign filter at all).
 
+REAL BUG FIX, confirmed via real multi-campaign-assignment testing: an
+earlier fix (see dialerRoutes.js's POST /dialer/status — "Live
+Dashboard's fallback logic... guessed by picking whichever assigned
+campaign sorted first alphabetically") added
+`related_campaign_id = ?` to this query's own WHERE clause, for a
+completely different reason: making the Live Dashboard show the right
+campaign NAME for an agent assigned to more than one. That field only
+ever reflects whichever ONE campaign was selected in the agent's UI
+the moment they last changed status — it was never meant to gate
+actual call-routing eligibility. But bolted onto THIS query, it did
+exactly that: an agent assigned to Campaigns A and B, currently READY
+with related_campaign_id = A (just because A was selected in their
+dropdown when they clicked Ready), would never be matched to an
+incoming call for Campaign B — even though agent_campaign_assignments
+(joined right above) correctly says they're eligible for it. Confirmed
+live: a multi-campaign agent stopped receiving calls for whichever
+campaign wasn't their currently-selected one. Removed — the
+agent_campaign_assignments join alone is the correct, complete source
+of truth for "is this agent assigned to this campaign"; 
+related_campaign_id remains purely a display field for the dashboard,
+untouched everywhere else it's used.
+
 Requires ws.isConnected(appUserId) — an actual live socket — as well
 as the DB status, since a READY row alone isn't proof anyone is
 actually present in the app (browser close/crash/sleep leaves rows
@@ -270,6 +292,26 @@ async function resetSkipCount(appUserId) {
 async function getAnyReadyAgentWithExtension(campaignId, excludeAppUserIds = []) {
   const excludeSet = new Set(excludeAppUserIds);
 
+  // UPDATED — multi-campaign agent selection, per explicit request.
+  // Eligibility now requires BOTH a real permanent assignment
+  // (agent_campaign_assignments — unchanged, the original safety net)
+  // AND this campaign being one the agent has actively SELECTED to
+  // work right now (agent_working_campaigns — new table; see
+  // dialerRoutes.js's POST /dialer/working-campaigns for how it gets
+  // populated, including the server-side rule that an OUTBOUND
+  // selection is always exclusive). An agent permanently assigned to
+  // 3 blended campaigns but only currently WORKING 2 of them should
+  // not receive calls routed from the third until they actively
+  // select it — this join is what enforces that.
+  //
+  // SAFE ROLLOUT FALLBACK, deliberate: an agent with ZERO rows in
+  // agent_working_campaigns at all (never been through the new
+  // campaign-selection flow — true for every agent the moment this
+  // deploys, until they next select a campaign) falls back to the
+  // OLD behavior (eligible for every campaign they're assigned to).
+  // Without this, deploying this change would have instantly stopped
+  // EVERY ready agent from receiving ANY call at all, rather than
+  // degrading gracefully until each agent naturally re-selects.
   const [rows] = await db.execute(
     `
       SELECT asl.app_user_id, au.vicidial_user, au.priority, au.priority_skip_count
@@ -278,7 +320,16 @@ async function getAnyReadyAgentWithExtension(campaignId, excludeAppUserIds = [])
       JOIN cmx_dialer.agent_campaign_assignments aca
         ON aca.app_user_id = asl.app_user_id AND aca.active = 1 AND aca.campaign_id = ?
       WHERE asl.status = 'READY' AND asl.ended_at IS NULL
-        AND asl.related_campaign_id = ?
+        AND (
+          EXISTS (
+            SELECT 1 FROM cmx_dialer.agent_working_campaigns awc
+            WHERE awc.app_user_id = asl.app_user_id AND awc.campaign_id = ?
+          )
+          OR NOT EXISTS (
+            SELECT 1 FROM cmx_dialer.agent_working_campaigns awc2
+            WHERE awc2.app_user_id = asl.app_user_id
+          )
+        )
       ORDER BY asl.status_log_id ASC
     `,
     [campaignId, campaignId]

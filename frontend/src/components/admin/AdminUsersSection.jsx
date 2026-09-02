@@ -30,6 +30,14 @@ export default function AdminUsersSection() {
   // agentStatusService.js's getAnyReadyAgentWithExtension for the full
   // logic — this just sets the tier, the matching engine does the rest.
   const [priority, setPriority] = useState("1");
+  // Multi-campaign selection — per explicit request, admin/WFM
+  // controlled: whether THIS agent is allowed to select more than one
+  // BLENDED campaign to work simultaneously (see
+  // agentStatusService.js's getAnyReadyAgentWithExtension and
+  // dialerRoutes.js's POST /dialer/working-campaigns for the actual
+  // enforcement — this checkbox just sets the permission, the agent
+  // still has to go make a real selection on their end).
+  const [multiCampaignEnabled, setMultiCampaignEnabled] = useState(false);
 
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
@@ -78,6 +86,7 @@ export default function AdminUsersSection() {
     setSelectedCampaigns([]);
     setActive(true);
     setPriority("1");
+    setMultiCampaignEnabled(false);
   }
 
   function handleStartEdit(u) {
@@ -89,6 +98,7 @@ export default function AdminUsersSection() {
     setSelectedCampaigns(u.campaigns ? u.campaigns.split(", ") : []);
     setActive(Boolean(u.active));
     setPriority(String(u.priority ?? "1"));
+    setMultiCampaignEnabled(Boolean(u.multi_campaign_enabled));
     setError("");
     setSuccess("");
   }
@@ -124,6 +134,7 @@ export default function AdminUsersSection() {
         campaignIds: selectedCampaigns,
         active,
         priority: Number(priority),
+        multiCampaignEnabled,
       };
 
       if (editingUserId) {
@@ -218,6 +229,21 @@ export default function AdminUsersSection() {
                         {c.campaign_name} ({c.campaign_id})
                       </label>
                     ))}
+
+                    <label className="disposition-row" style={{ marginTop: 10 }}>
+                      <input
+                        type="checkbox"
+                        checked={multiCampaignEnabled}
+                        onChange={(e) => setMultiCampaignEnabled(e.target.checked)}
+                      />
+                      Allow Multiple Blended Campaigns
+                    </label>
+                    <p style={{ fontSize: 13, color: "#888", marginTop: 4 }}>
+                      Lets this agent select more than one blended campaign to work on
+                      simultaneously (receiving inbound calls from any of them while Ready).
+                      Selecting an outbound campaign always stays exclusive, regardless of this
+                      setting.
+                    </p>
                   </>
                 )}
 
@@ -260,6 +286,7 @@ export default function AdminUsersSection() {
                       <th>Access</th>
                       <th>Active</th>
                       <th>Priority</th>
+                      <th>Multi-Campaign</th>
                       <th>Phone Login</th>
                       <th>Phone</th>
                       <th>Campaigns</th>
@@ -278,6 +305,7 @@ export default function AdminUsersSection() {
                         <td>{u.access_level}</td>
                         <td>{u.active ? "Yes" : "No"}</td>
                         <td>{u.priority ?? 1}</td>
+                        <td>{u.multi_campaign_enabled ? "Yes" : "No"}</td>
                         <td>{u.vicidial_user || "—"}</td>
                         <td>{u.phone_login || "—"}</td>
                         <td>{u.campaigns || "—"}</td>
