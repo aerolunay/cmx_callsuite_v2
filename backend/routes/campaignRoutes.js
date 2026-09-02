@@ -102,10 +102,18 @@ const INTERNAL_API_BASE_URL = process.env.INTERNAL_API_BASE_URL || "http://127.0
 // deploy steps. Its script already includes the full instructions
 // ("please leave a message after the beep, to send press 1, otherwise
 // press 2 to create a new message"), so nothing else needs to play
-// before Record() starts, and nothing needs to play after it either
-// unless the caller's input is missing/invalid — see
-// buildCampaignDialplanBlock's vmRecordLabel block.
+// before Record() starts.
 const VOICEMAIL_LEAVE_MESSAGE_SOUND = "custom/cmx-voicemail-leave-message";
+
+// Per explicit request — a real spoken prompt for the post-recording
+// confirm step ("If you are satisfied with your message press 1,
+// otherwise press 2 to record another"), rather than a plain beep or
+// true silence. Same hardcoded/global pattern as
+// VOICEMAIL_LEAVE_MESSAGE_SOUND above, deployed the same way. This
+// also happens to be the fix under test for a real DTMF-not-
+// registering bug found via a live test call — see the Read()
+// call sites below for the full story.
+const VOICEMAIL_CONFIRM_SOUND = "custom/cmx-voicemail-confirm";
 
 // Separate spool dir from call recordings (RECORDING_DIR in
 // inboundCallService.js) — Record() writes here, not MixMonitor, so a
@@ -432,7 +440,18 @@ function buildCampaignDialplanBlock({
       // silently failed (best-effort, so the call itself wouldn't
       // have dropped, but the recording would never have reached S3).
       `exten => ${vmRecordLabel},n,Record(${VOICEMAIL_SPOOL_DIR}/\${ROOM}:wav,3,300,k)`,
-      `exten => ${vmRecordLabel},n,Read(CMXVMCONFIRM,,1,,,45)`,
+      // REAL FIX, under investigation via a real test call: this Read()
+      // used to leave the sound argument genuinely empty (true
+      // silence) — the caller's DTMF stopped being recognized
+      // specifically here, even though the exact same channel's
+      // earlier Read() (which DOES play real audio) registered digits
+      // correctly. Per explicit request, now a real spoken prompt
+      // ("if you are satisfied with your message press 1, otherwise
+      // press 2 to record another") instead of silence or a plain
+      // beep — both genuinely useful instruction AND continues
+      // testing whether a fully-silent Read() is what breaks DTMF
+      // detection on this WebRTC/PJSIP setup.
+      `exten => ${vmRecordLabel},n,Read(CMXVMCONFIRM,${VOICEMAIL_CONFIRM_SOUND},1,,,45)`,
       // REAL BUG FIX, confirmed via a real test call: vmRecordSaveLabel
       // is a named priority LABEL inside the vmRecordLabel extension
       // (created via n(${vmRecordSaveLabel}) below), NOT its own
@@ -507,7 +526,7 @@ function buildCampaignDialplanBlock({
       `exten => ${afterhoursVmRecordLabel},n(${afterhoursVmRecordStartLabel}),Playback(${VOICEMAIL_LEAVE_MESSAGE_SOUND})`,
       `exten => ${afterhoursVmRecordLabel},n,Playback(beep)`,
       `exten => ${afterhoursVmRecordLabel},n,Record(${VOICEMAIL_SPOOL_DIR}/\${CMXAHKEY}:wav,3,300,k)`,
-      `exten => ${afterhoursVmRecordLabel},n,Read(CMXVMCONFIRM,,1,,,45)`,
+      `exten => ${afterhoursVmRecordLabel},n,Read(CMXVMCONFIRM,${VOICEMAIL_CONFIRM_SOUND},1,,,45)`,
       `exten => ${afterhoursVmRecordLabel},n,GotoIf($["\${CMXVMCONFIRM}" = "1"]?${afterhoursVmRecordSaveLabel})`,
       `exten => ${afterhoursVmRecordLabel},n,GotoIf($["\${CMXVMCONFIRM}" = "2"]?${afterhoursVmRecordStartLabel})`
     );
