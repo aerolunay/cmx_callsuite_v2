@@ -3,6 +3,52 @@ import { api } from "../../api";
 
 /*
 ==================================================
+ACTION ICONS — plain inline SVG, deliberately NOT a new npm dependency
+==================================================
+Per explicit request, to conserve horizontal space in the Existing
+Campaigns table. No icon library exists anywhere else in this app
+(confirmed — nothing in package.json, no lucide-react/react-icons
+usage anywhere in frontend/src), so introducing one here would mean a
+new npm install on the server for three small icons, adding deploy
+friction for no real benefit. currentColor lets each icon inherit
+whatever color its wrapping button already uses (matches the existing
+plain ".link" style, no new CSS needed); title (native tooltip) +
+aria-label carry the same meaning the removed text labels used to,
+since the icons alone aren't self-explanatory to everyone.
+==================================================
+*/
+function EditIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+      <path d="m15 5 4 4" />
+    </svg>
+  );
+}
+
+function DeactivateIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="10" />
+      <line x1="4.93" y1="4.93" x2="19.07" y2="19.07" />
+    </svg>
+  );
+}
+
+function DeleteIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 6h18" />
+      <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
+      <line x1="10" y1="11" x2="10" y2="17" />
+      <line x1="14" y1="11" x2="14" y2="17" />
+    </svg>
+  );
+}
+
+/*
+==================================================
 ADMIN CAMPAIGNS SECTION
 ==================================================
 Creating a campaign here also auto-creates its DID routing
@@ -554,7 +600,8 @@ export default function AdminCampaignsSection() {
                       <th>DID</th>
                       <th>Type</th>
                       <th>Recording</th>
-                      <th>Voicemail</th>
+                      <th>VM (Biz Hrs)</th>
+                      <th>VM (After Hrs)</th>
                       <th>Active</th>
                       <th>Actions</th>
                     </tr>
@@ -567,19 +614,39 @@ export default function AdminCampaignsSection() {
                         <td>{c.did || "—"}</td>
                         <td>{c.campaign_type || "OUTBOUND"}</td>
                         <td>{c.campaign_recording === "NEVER" ? "Off" : "On"}</td>
-                        <td>{c.voicemail_business_hours_enabled === "Y" || c.voicemail_afterhours_enabled === "Y" ? "On" : "Off"}</td>
+                        <td>{c.voicemail_business_hours_enabled === "Y" ? "On" : "Off"}</td>
+                        <td>{c.voicemail_afterhours_enabled === "Y" ? "On" : "Off"}</td>
                         <td>{c.active === "Y" ? "Yes" : "No"}</td>
                         <td style={{ whiteSpace: "nowrap" }}>
-                          <button type="button" className="link" onClick={() => handleStartEdit(c)} disabled={busy}>
-                            Edit
-                          </button>
-                          {" · "}
-                          <button type="button" className="link" onClick={() => handleDeactivate(c)} disabled={busy}>
-                            Deactivate
-                          </button>
-                          {" · "}
-                          <button type="button" className="link" onClick={() => handleDelete(c)} disabled={busy}>
-                            Delete
+                          <button
+                            type="button"
+                            className="link"
+                            onClick={() => handleStartEdit(c)}
+                            disabled={busy}
+                            title="Edit"
+                            aria-label={`Edit ${c.campaign_id}`}
+                          >
+                            <EditIcon />
+                          </button>{" "}
+                          <button
+                            type="button"
+                            className="link"
+                            onClick={() => handleDeactivate(c)}
+                            disabled={busy}
+                            title="Deactivate"
+                            aria-label={`Deactivate ${c.campaign_id}`}
+                          >
+                            <DeactivateIcon />
+                          </button>{" "}
+                          <button
+                            type="button"
+                            className="link"
+                            onClick={() => handleDelete(c)}
+                            disabled={busy}
+                            title="Delete"
+                            aria-label={`Delete ${c.campaign_id}`}
+                          >
+                            <DeleteIcon />
                           </button>
                         </td>
                       </tr>

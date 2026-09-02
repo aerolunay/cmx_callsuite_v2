@@ -458,7 +458,15 @@ function buildCampaignDialplanBlock({
 
   lines.push(`exten => ${afterhoursExten},1,Answer()`);
 
-  if (afterhoursSound) {
+  // REAL FIX, per explicit request: the plain afterhoursSound greeting
+  // and the voicemail IVR prompt were both playing back to back
+  // whenever after-hours voicemail was on — two real audio clips
+  // running together, heard as one confusing "joined" message. Now
+  // the plain greeting only plays when after-hours voicemail is OFF;
+  // when it's ON, the voicemail IVR prompt is the entire after-hours
+  // message on its own (its own script already covers "we're closed,
+  // press 1 to leave a message" — no separate greeting needed first).
+  if (afterhoursSound && !isVoicemailEnabledAfterhours) {
     lines.push(`exten => ${afterhoursExten},n,Playback(${afterhoursSound})`);
   }
 
