@@ -1,11 +1,15 @@
 "use strict";
 
 const crypto = require("crypto");
+const { execFile } = require("child_process");
+const util = require("util");
 const ami = require("../config/ami");
 const ws = require("../config/ws");
 const db = require("../config/db");
 const agentStatusService = require("./agentStatusService");
 const recordingUploadService = require("./recordingUploadService");
+
+const execFileAsync = util.promisify(execFile);
 const { transporter } = require("../config/mailer");
 const { buildVoicemailNotificationEmail } = require("./emailTemplates");
 
@@ -370,8 +374,37 @@ capture (campaign_id, caller ID, timestamps, duration) over an upload
 hiccup. The local .wav file is left in place either way; this app has
 no deletion capability against local recordings by explicit design
 (same as call recordings — see uploadRecording's own comment).
+
+DURATION — REAL BUG FIX, confirmed via a real test call: this used to
+compute duration as (leftAt - callStartedAt), where callStartedAt fell
+back to `new Date()` for the after-hours path (no allocateInboundRoom
+ever runs there, so there's no real call-start timestamp to use at
+all) — meaning both timestamps ended up within milliseconds of each
+other every time, showing 00:00:00 regardless of how long the caller
+actually spoke. Business-hours had a quieter version of the same
+problem: callStartedAt there is the moment the ROOM was allocated, at
+the very start of the whole call — so "duration" included all the
+hold-music/IVR-navigation time before the caller ever started
+recording, not the recording itself. Fixed by measuring the ACTUAL
+audio file's duration directly via ffprobe (already part of this app's
+ffmpeg toolchain — see campaignRoutes.js's convertToUlaw) — correct
+for both paths, and no longer dependent on any call-state timestamp at
+all. Falls back to 0 (logged, not thrown) if ffprobe itself is
+unavailable or the file is unreadable, rather than blocking the whole
+save over a duration measurement.
 ==================================================
 */
+async function getAudioDurationSeconds(localPath) {
+  const { stdout } = await execFileAsync("ffprobe", [
+    "-v", "error",
+    "-show_entries", "format=duration",
+    "-of", "csv=p=0",
+    localPath,
+  ]);
+  const seconds = parseFloat(stdout.trim());
+  return Number.isFinite(seconds) ? Math.round(seconds) : 0;
+}
+
 async function recordVoicemail({ room, uniqueId, campaignId, callerIdNumber, isAfterHours }) {
   const key = room || uniqueId;
   const localWavPath = voicemailRecordingPath(key);
@@ -383,7 +416,13 @@ async function recordVoicemail({ room, uniqueId, campaignId, callerIdNumber, isA
     if (call) callStartedAt = call.startedAt;
   }
   const leftAt = new Date();
-  const durationSeconds = Math.max(0, Math.floor((leftAt.getTime() - callStartedAt.getTime()) / 1000));
+
+  let durationSeconds = 0;
+  try {
+    durationSeconds = await getAudioDurationSeconds(localWavPath);
+  } catch (err) {
+    console.error(`[inboundCallService] Failed to measure voicemail duration for ${key}:`, err.message);
+  }
 
   let recordingKey = null;
   try {
