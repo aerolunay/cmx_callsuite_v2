@@ -17,7 +17,13 @@ export default function CallLogTable({ refreshKey, campaignId, onCallBack, canCa
   const popupRef = useRef(null);
 
   useEffect(() => {
-    if (!campaignId) return;
+    // UPDATED — campaignId is now genuinely optional (empty/undefined
+    // means "all campaigns," not "not ready to fetch yet") — the old
+    // `if (!campaignId) return;` guard used to treat those as the same
+    // thing, which was correct back when this ALWAYS needed a single
+    // "Main Campaign" to even make a request. Now always fetches;
+    // DialerPage.jsx controls whether/when this component renders at
+    // all, so there's no "too early" state left to guard against here.
     setLoading(true);
     api
       .getCallLog(campaignId)
@@ -72,6 +78,7 @@ export default function CallLogTable({ refreshKey, campaignId, onCallBack, canCa
           <thead>
             <tr>
               <th>Type</th>
+              <th>Campaign</th>
               <th>Call Date</th>
               <th>Name</th>
               <th>Phone Number</th>
@@ -97,6 +104,7 @@ export default function CallLogTable({ refreshKey, campaignId, onCallBack, canCa
                     </span>
                   )}
                 </td>
+                <td>{row.campaign_name || row.campaign_id || "—"}</td>
                 <td>{formatDate(row.call_started_at)}</td>
                 <td>
                   {row.first_name} {row.last_name}

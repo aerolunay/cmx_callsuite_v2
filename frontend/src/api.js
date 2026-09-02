@@ -67,8 +67,13 @@ export const api = {
   getCampaignAgents: (campaignId) => request(`/dialer/campaign-agents?campaignId=${encodeURIComponent(campaignId)}`),
 
   // Call history / stats
-  getCallLog: (campaignId) => request(`/dialer/call-log?campaignId=${encodeURIComponent(campaignId)}`),
-  getTodayStats: (campaignId) => request(`/dialer/stats/today?campaignId=${encodeURIComponent(campaignId)}`),
+  // UPDATED — campaignId is now optional on both (empty/omitted =
+  // "all campaigns," matching the same convention already used by
+  // getAbandonedCalls/getTotalCalls/etc. elsewhere in this file), per
+  // explicit request to retire the single "Main Campaign" concept.
+  getCallLog: (campaignId) => request(`/dialer/call-log${campaignId ? `?campaignId=${encodeURIComponent(campaignId)}` : ""}`),
+  getTodayStats: (campaignId) =>
+    request(`/dialer/stats/today${campaignId ? `?campaignId=${encodeURIComponent(campaignId)}` : ""}`),
 
   // Agent status
   getStatus: () => request("/dialer/status"),

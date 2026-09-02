@@ -1260,56 +1260,99 @@ a real bug, not a timezone-math issue — which is why "yesterday's"
 calls were showing: there was no date filter applied at all before.
 ==================================================
 */
+/*
+==================================================
+getCallLog — UPDATED, per explicit request
+==================================================
+campaignId is now OPTIONAL — omitted/falsy means "every campaign this
+agent has touched today," not "no calls at all" (same "campaignId ?
+filter : no filter" convention already used by statsService.js's
+computeDirectionStats, matched here for consistency). Still always
+scoped to agentUser — this agent's own calls only, never anyone
+else's — so "all campaigns" naturally can't leak another agent's data.
+
+campaign_id and campaign_name are now SELECTED (previously only used
+to FILTER, never returned) — powers the new "Campaign" column
+CallLogTable.jsx shows now that a single agent's log can span more
+than one campaign in the same day. campaign_name comes via a LEFT
+JOIN against asterisk.vicidial_campaigns — LEFT, not INNER, so a call
+against a since-deleted campaign still shows (falls back to the raw
+campaign_id in that case, same graceful-degradation pattern used
+elsewhere in this app for a missing campaign name).
+==================================================
+*/
 async function getCallLog(agentUser, campaignId, limit = 50) {
   const { start, end } = await getEasternDayBoundsForServerClock();
+
+  const outboundParams = [agentUser];
+  let outboundFilter = "";
+  if (campaignId) {
+    outboundFilter = " AND dcl.campaign_id = ?";
+    outboundParams.push(campaignId);
+  }
+  outboundParams.push(start, end);
+
+  const inboundParams = [agentUser];
+  let inboundFilter = "";
+  if (campaignId) {
+    inboundFilter = " AND icl.campaign_id = ?";
+    inboundParams.push(campaignId);
+  }
+  inboundParams.push(start, end);
 
   const [rows] = await db.execute(
     `
       (
         SELECT
           'outbound' AS direction,
-          call_log_id,
-          call_id,
-          lead_id,
-          call_type,
-          call_started_at,
-          first_name,
-          last_name,
-          phone_number,
+          dcl.call_log_id,
+          dcl.call_id,
+          dcl.lead_id,
+          dcl.call_type,
+          dcl.call_started_at,
+          dcl.first_name,
+          dcl.last_name,
+          dcl.phone_number,
           NULL AS callback_number,
-          disposition,
-          xfer_conf,
-          xfer_conf_target
-        FROM cmx_dialer.dialer_call_log
-        WHERE agent_user = ?
-          AND campaign_id = ?
-          AND call_started_at BETWEEN ? AND ?
+          dcl.disposition,
+          dcl.xfer_conf,
+          dcl.xfer_conf_target,
+          dcl.campaign_id,
+          c1.campaign_name
+        FROM cmx_dialer.dialer_call_log dcl
+        LEFT JOIN asterisk.vicidial_campaigns c1 ON c1.campaign_id = dcl.campaign_id
+        WHERE dcl.agent_user = ?
+          ${outboundFilter}
+          AND dcl.call_started_at BETWEEN ? AND ?
       )
       UNION ALL
       (
         SELECT
           'inbound' AS direction,
-          call_log_id,
-          call_id,
+          icl.call_log_id,
+          icl.call_id,
           NULL AS lead_id,
           NULL AS call_type,
-          call_started_at,
-          first_name,
-          last_name,
-          caller_id_number AS phone_number,
-          callback_number,
-          disposition,
-          xfer_conf,
-          xfer_conf_target
-        FROM cmx_dialer.inbound_call_log
-        WHERE agent_user = ?
-          AND campaign_id = ?
-          AND call_started_at BETWEEN ? AND ?
+          icl.call_started_at,
+          icl.first_name,
+          icl.last_name,
+          icl.caller_id_number AS phone_number,
+          icl.callback_number,
+          icl.disposition,
+          icl.xfer_conf,
+          icl.xfer_conf_target,
+          icl.campaign_id,
+          c2.campaign_name
+        FROM cmx_dialer.inbound_call_log icl
+        LEFT JOIN asterisk.vicidial_campaigns c2 ON c2.campaign_id = icl.campaign_id
+        WHERE icl.agent_user = ?
+          ${inboundFilter}
+          AND icl.call_started_at BETWEEN ? AND ?
       )
       ORDER BY call_started_at DESC
       LIMIT ?
     `,
-    [agentUser, campaignId, start, end, agentUser, campaignId, start, end, limit]
+    [...outboundParams, ...inboundParams, limit]
   );
 
   return rows;

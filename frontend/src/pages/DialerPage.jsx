@@ -62,7 +62,28 @@ export default function DialerPage() {
   const { agent } = useAuth();
   const navigate = useNavigate();
 
-  const [campaign, setCampaign] = useState(null);
+  // REMOVED, per explicit request — the old single "Main Campaign"
+  // concept (localStorage's cmx_dialer_campaign, one fixed object for
+  // the whole session) is retired. Everything that used to read
+  // `campaign` now reads either workingCampaigns (the agent's real,
+  // live selection — already fetched below for the badge row) or the
+  // SPECIFIC call's own campaignId (see outboundCampaign, and
+  // call.campaignId/inboundCall.campaignId used further down for
+  // disposition options).
+  const [myCampaigns, setMyCampaigns] = useState([]); // full assignment list — powers the Stats/Call Log filter dropdown
+  // Per explicit request — Stats and Call Log now show EVERY campaign
+  // this agent has touched today by default ("" = All), with this
+  // dropdown letting them narrow down to one specific campaign. Shared
+  // by both StatsPanel and CallLogTable below, so they always stay in
+  // sync with each other.
+  const [statsCampaignFilter, setStatsCampaignFilter] = useState("");
+  // Per explicit request — manual dial while working 2+ blended
+  // campaigns needs to ask which one to call from (there's no
+  // originating call to infer it from, unlike Callback — see
+  // handleCallBack, which uses the call log row's own campaign_id
+  // instead and never shows this popup at all). Holds the phone
+  // number waiting on a campaign pick; null means the popup is closed.
+  const [pendingManualDialNumber, setPendingManualDialNumber] = useState(null);
   const [agentStatus, setAgentStatus] = useState(null); // { status, elapsedSeconds }
   const [statusDraft, setStatusDraft] = useState("NOT_READY");
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
@@ -127,20 +148,20 @@ export default function DialerPage() {
     return () => clearTimeout(timeout);
   }, [autoResolvedNotice]);
 
-  useEffect(() => {
-    const stored = localStorage.getItem("cmx_dialer_campaign");
-    if (!stored) {
-      navigate("/select-campaign");
-      return;
-    }
-    setCampaign(JSON.parse(stored));
-  }, [navigate]);
-
+  // UPDATED — replaces the old localStorage-driven "Main Campaign"
+  // check entirely. The redirect-to-select-campaign logic now depends
+  // on the REAL server-side working-campaign selection (not a stale
+  // local cache) — if the agent genuinely has zero campaigns selected
+  // (e.g. a brand new login that hasn't been through
+  // CampaignSelectPage.jsx yet, or their selection was somehow
+  // cleared), send them there; otherwise proceed with whatever's
+  // actually on file.
   useEffect(() => {
     api
       .getMyCampaigns()
       .then((data) => {
         const list = data.campaigns || [];
+        setMyCampaigns(list);
         setMyCampaignCount(list.length);
         // Cross-reference with the agent's actual CURRENT working
         // selection (agent_working_campaigns, server-side source of
@@ -151,12 +172,30 @@ export default function DialerPage() {
           .getWorkingCampaigns()
           .then((workingData) => {
             const workingIds = workingData.campaignIds || [];
-            setWorkingCampaigns(list.filter((c) => workingIds.includes(c.campaign_id)));
+            const working = list.filter((c) => workingIds.includes(c.campaign_id));
+            if (working.length === 0) {
+              navigate("/select-campaign");
+              return;
+            }
+            setWorkingCampaigns(working);
           })
-          .catch(() => {}); // fail open — badge row just won't show, no worse than before this feature existed
+          .catch(() => navigate("/select-campaign")); // can't confirm a real selection exists — safest is to send them through the picker rather than guess
       })
       .catch(() => {}); // fail open — keeps the default of 2, so "Change campaign" stays visible rather than silently vanishing on an error
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Whichever campaign OUTBOUND dialing/lead-pulling/manual-status
+  // context should use — derived, never stored. Outbound is always
+  // exclusive (server-enforced — see dialerRoutes.js's
+  // POST /dialer/working-campaigns), so whenever there's genuinely
+  // only one working campaign, that's the correct single context for
+  // all of this; when the agent is working 2 BLENDED campaigns at
+  // once, there's no sensible single outbound context at all (nor
+  // should there be — see campaignRoutes.js's own comment: blended
+  // campaigns never have leads by design, so this only ever matters
+  // for the true single-campaign case anyway).
+  const outboundCampaign = workingCampaigns.length === 1 ? workingCampaigns[0] : null;
 
   // Hide "Dial Next Number" entirely for campaigns with no leads at
   // all (e.g. CMXBSMSC, which is inbound-only and relies on the
@@ -169,13 +208,13 @@ export default function DialerPage() {
   // reset. Re-running it right as the agent becomes able to dial
   // again makes this self-healing with no manual refresh needed.
   useEffect(() => {
-    if (!campaign) return;
+    if (!outboundCampaign) return;
     if (agentStatus?.status !== "READY") return;
     api
-      .hasLeads(campaign.campaign_id)
+      .hasLeads(outboundCampaign.campaign_id)
       .then((data) => setHasLeads(data.hasLead))
       .catch(() => setHasLeads(true)); // fail open — don't hide the button just because this check errored
-  }, [campaign, agentStatus?.status]);
+  }, [outboundCampaign, agentStatus?.status]);
 
   // Per explicit request — agents shouldn't need to switch auxes
   // (toggle their own status) at all to recover once leads are
@@ -185,18 +224,18 @@ export default function DialerPage() {
   // interval, since hasLeads is in the dependency array). No interval
   // runs at all once hasLeads is true — nothing to recover from.
   useEffect(() => {
-    if (!campaign) return;
+    if (!outboundCampaign) return;
     if (hasLeads) return;
 
     const interval = setInterval(() => {
       api
-        .hasLeads(campaign.campaign_id)
+        .hasLeads(outboundCampaign.campaign_id)
         .then((data) => setHasLeads(data.hasLead))
         .catch(() => {}); // transient poll failure — just try again next tick
     }, 20000);
 
     return () => clearInterval(interval);
-  }, [campaign, hasLeads]);
+  }, [outboundCampaign, hasLeads]);
 
   // Restore an in-progress call after a page refresh or the app being
   // fully closed and reopened. The backend (dialerService.js's
@@ -273,9 +312,17 @@ export default function DialerPage() {
   const campaignStampedRef = useRef(false);
 
   useEffect(() => {
-    if (!campaign) return;
+    if (workingCampaigns.length === 0) return;
     if (!statusCheckDone) return; // still waiting to know whether a row already exists
     if (campaignStampedRef.current) return;
+
+    // Purely a DISPLAY value now (see adminRoutes.js's Live Dashboard
+    // query — it overrides to "MULTI" independently, based on the real
+    // agent_working_campaigns row count, regardless of whatever's
+    // stamped here) — so whichever working campaign happens to be
+    // first is a fine, harmless representative even for a
+    // multi-campaign agent.
+    const primaryCampaignId = workingCampaigns[0].campaign_id;
 
     if (!agentStatus) {
       // Confirmed: no status row exists at all — create the very
@@ -284,7 +331,7 @@ export default function DialerPage() {
       // they happen to touch the dropdown themselves.
       campaignStampedRef.current = true;
       api
-        .setStatus("NOT_READY", campaign.campaign_id)
+        .setStatus("NOT_READY", primaryCampaignId)
         .then((data) => {
           setAgentStatus(data.status);
           setStatusDraft(data.status.status);
@@ -297,14 +344,14 @@ export default function DialerPage() {
       return;
     }
 
-    if (agentStatus.relatedCampaignId === campaign.campaign_id) {
+    if (agentStatus.relatedCampaignId === primaryCampaignId) {
       campaignStampedRef.current = true;
       return;
     }
 
     campaignStampedRef.current = true;
     api
-      .setStatus(agentStatus.status, campaign.campaign_id)
+      .setStatus(agentStatus.status, primaryCampaignId)
       .then((data) => {
         setAgentStatus(data.status);
         baseElapsedRef.current = data.status.elapsedSeconds;
@@ -313,7 +360,7 @@ export default function DialerPage() {
       .catch(() => {
         campaignStampedRef.current = false; // allow a retry on the next render if this failed
       });
-  }, [campaign, agentStatus, statusCheckDone]);
+  }, [workingCampaigns, agentStatus, statusCheckDone]);
 
   useEffect(() => {
     clearInterval(elapsedTimerRef.current);
@@ -451,7 +498,7 @@ export default function DialerPage() {
     setError("");
     setBusy(true);
     try {
-      const data = await api.setStatus(statusDraft, campaign?.campaign_id);
+      const data = await api.setStatus(statusDraft, workingCampaigns[0]?.campaign_id);
       setAgentStatus(data.status);
       baseElapsedRef.current = data.status.elapsedSeconds;
       baseAtRef.current = Date.now();
@@ -466,16 +513,26 @@ export default function DialerPage() {
     setError("");
     setBusy(true);
     try {
-      const leadData = await api.nextLead(campaign.campaign_id);
+      const leadData = await api.nextLead(outboundCampaign.campaign_id);
       setLead(leadData.lead);
 
       const callData = await api.startCall(
-        campaign.campaign_id,
+        outboundCampaign.campaign_id,
         leadData.lead.lead_id,
         leadData.lead.phone_number,
         leadData.lead
       );
-      setCall({ callId: callData.callId, room: callData.room, status: "ringing_agent", callType: "REGULAR" });
+      // campaignId stored directly on the call now, per explicit
+      // request — disposition options (and the saved log row) use
+      // THIS call's own campaign, not any page-level "current
+      // campaign" concept, which no longer exists.
+      setCall({
+        callId: callData.callId,
+        room: callData.room,
+        status: "ringing_agent",
+        callType: "REGULAR",
+        campaignId: outboundCampaign.campaign_id,
+      });
     } catch (err) {
       // REAL BUG FIX: when the lead pool is genuinely exhausted, the
       // backend correctly returns 404 ("No eligible leads found for
@@ -506,8 +563,9 @@ export default function DialerPage() {
   }
 
   // AUTO-DIAL TRIGGER — per explicit request: campaigns set to Auto
-  // Dial (campaign.dial_method === "RATIO", see campaignRoutes.js's
-  // AUTO -> RATIO mapping) should dial automatically the moment the
+  // Dial (outboundCampaign.dial_method === "RATIO", see
+  // campaignRoutes.js's AUTO -> RATIO mapping) should dial
+  // automatically the moment the
   // agent is READY, rather than requiring a manual "Dial Next Number"
   // click. Deliberately reuses the EXACT same condition that already
   // governs whether that button renders at all (READY, no active
@@ -529,9 +587,9 @@ export default function DialerPage() {
   const autoDialInFlightRef = useRef(false);
 
   useEffect(() => {
-    const isAutoDialCampaign = campaign?.dial_method === "RATIO";
+    const isAutoDialCampaign = outboundCampaign?.dial_method === "RATIO";
     if (!isAutoDialCampaign) return;
-    if (campaign?.campaign_type === "BLENDED") return; // Blended campaigns never have leads by design
+    if (outboundCampaign?.campaign_type === "BLENDED") return; // Blended campaigns never have leads by design
     if (agentStatus?.status !== "READY") return;
     if (call) return;
     if (!hasLeads) return;
@@ -543,7 +601,7 @@ export default function DialerPage() {
       autoDialInFlightRef.current = false;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [campaign, agentStatus, call, hasLeads, busy]);
+  }, [outboundCampaign, agentStatus, call, hasLeads, busy]);
 
   // Callback: reuses the same startCall path as "Dial Next Number" but
   // skips getNextLead entirely — the row from Call Logs already has
@@ -559,6 +617,15 @@ export default function DialerPage() {
     }
     if (call || inboundCall) {
       setError("You're already on a call.");
+      return;
+    }
+    // Per explicit request — a callback always uses the campaign the
+    // ORIGINAL call came from (row.campaign_id, added specifically for
+    // this to getCallLog's SELECT — see dialerService.js). Never a
+    // popup here, unlike manual dial below — there's nothing to ask,
+    // the right campaign is already on file.
+    if (!row.campaign_id) {
+      setError("This call log entry has no campaign on file — can't determine where to call it back from.");
       return;
     }
 
@@ -581,13 +648,19 @@ export default function DialerPage() {
       setLead(callbackLead);
 
       const callData = await api.startCall(
-        campaign.campaign_id,
+        row.campaign_id,
         callbackLead.lead_id,
         callbackLead.phone_number,
         callbackLead,
         "CALLBACK"
       );
-      setCall({ callId: callData.callId, room: callData.room, status: "ringing_agent", callType: "CALLBACK" });
+      setCall({
+        callId: callData.callId,
+        room: callData.room,
+        status: "ringing_agent",
+        callType: "CALLBACK",
+        campaignId: row.campaign_id,
+      });
     } catch (err) {
       setError(err.message);
     } finally {
@@ -595,11 +668,39 @@ export default function DialerPage() {
     }
   }
 
-  // Manual dial (from MiniPhone's number field): identical tracked-call
-  // path as Callback — same disposition enforcement, same Call Logs
-  // entry — just no source row, so lead_id is always 0 (matches
-  // inbound-sourced Callback rows, which have no real lead either).
-  async function handleManualDial(phoneNumber) {
+  // Shared by both the direct (single-campaign) path and the popup's
+  // confirm handler below — the actual dial only ever happens here,
+  // once a campaign is genuinely known one way or another.
+  async function placeManualDial(campaignId, phoneNumber) {
+    setError("");
+    setBusy(true);
+    try {
+      const manualLead = { lead_id: 0, first_name: "", last_name: "", phone_number: phoneNumber };
+      setLead(manualLead);
+
+      const callData = await api.startCall(campaignId, 0, phoneNumber, manualLead, "REGULAR");
+      setCall({
+        callId: callData.callId,
+        room: callData.room,
+        status: "ringing_agent",
+        callType: "REGULAR",
+        campaignId,
+      });
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Manual dial (from MiniPhone's number field). UPDATED, per explicit
+  // request: while working a single campaign, dials immediately
+  // exactly as before — no change for the common case. While working
+  // 2+ BLENDED campaigns at once, instead of refusing outright, opens
+  // a small "Call from which campaign?" popup (see the JSX near the
+  // bottom of this file) and defers the actual dial to
+  // handleConfirmManualDialCampaign below, once the agent picks one.
+  function handleManualDial(phoneNumber) {
     if (agentStatus?.status !== "READY") {
       setError("You must be Ready to place a call.");
       return;
@@ -608,20 +709,29 @@ export default function DialerPage() {
       setError("You're already on a call.");
       return;
     }
+    if (pendingManualDialNumber) return; // popup already open for a previous attempt
 
-    setError("");
-    setBusy(true);
-    try {
-      const manualLead = { lead_id: 0, first_name: "", last_name: "", phone_number: phoneNumber };
-      setLead(manualLead);
-
-      const callData = await api.startCall(campaign.campaign_id, 0, phoneNumber, manualLead, "REGULAR");
-      setCall({ callId: callData.callId, room: callData.room, status: "ringing_agent", callType: "REGULAR" });
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setBusy(false);
+    if (outboundCampaign) {
+      placeManualDial(outboundCampaign.campaign_id, phoneNumber);
+      return;
     }
+
+    if (workingCampaigns.length > 1) {
+      setPendingManualDialNumber(phoneNumber);
+      return;
+    }
+
+    setError("No working campaign selected — please select a campaign first.");
+  }
+
+  function handleConfirmManualDialCampaign(campaignId) {
+    const phoneNumber = pendingManualDialNumber;
+    setPendingManualDialNumber(null);
+    if (phoneNumber) placeManualDial(campaignId, phoneNumber);
+  }
+
+  function handleCancelManualDialCampaign() {
+    setPendingManualDialNumber(null);
   }
 
   // Conference / Blind Transfer — both act on whichever call (outbound
@@ -742,7 +852,7 @@ export default function DialerPage() {
     setBusy(true);
     try {
       await api.saveDisposition(call.callId, {
-        campaignId: campaign.campaign_id,
+        campaignId: call.campaignId,
         leadId: lead.lead_id,
         phoneNumber: lead.phone_number,
         firstName: lead.first_name,
@@ -814,7 +924,12 @@ export default function DialerPage() {
     // guard; this just prevents the same action if somehow triggered
     // another way (e.g. dev tools) while not actually Not Ready.
     if (isCallActive || agentStatus?.status !== "NOT_READY") return;
+    // Both cleared, even though this page no longer READS either —
+    // CampaignSelectPage.jsx still writes both for backward
+    // compatibility with anything else that might read them, so both
+    // get cleaned up together here.
     localStorage.removeItem("cmx_dialer_campaign");
+    localStorage.removeItem("cmx_dialer_working_campaigns");
     navigate("/select-campaign");
   }
 
@@ -869,16 +984,20 @@ export default function DialerPage() {
       <div className="page-content page-content-wide">
         <div className="dialer-topbar">
           <div>
-            <h2 style={{ marginBottom: 4 }}>{campaign ? campaign.campaign_name : "…"}</h2>
-            {/* Per explicit request — for a multi-campaign agent
-                (workingCampaigns.length > 1), show every campaign
-                they're currently working, bolding/highlighting
-                whichever one an active inbound call actually came
-                from (inboundCall.campaignId — see
-                inboundCallService.js's broadcastInboundStatus). A
-                single-campaign agent sees no change at all; the plain
-                <h2> above already covers that case. */}
-            {workingCampaigns.length > 1 && (
+            {/* REMOVED, per explicit request — the old single "Main
+                Campaign" header (campaign.campaign_name, sourced from
+                localStorage) is retired. The badge row below is now
+                the ONLY campaign display, for both single- and
+                multi-campaign agents alike — always shown whenever
+                there's at least one working campaign, not just when
+                there's more than one. */}
+            <h2 style={{ marginBottom: 4 }}>Dialer</h2>
+            {/* Bolds/highlights whichever campaign an active inbound
+                call actually came from (inboundCall.campaignId — see
+                inboundCallService.js's broadcastInboundStatus), so the
+                agent knows at a glance which campaign's call they're
+                about to answer. */}
+            {workingCampaigns.length > 0 && (
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
                 {workingCampaigns.map((c) => {
                   const isActiveCallCampaign = Boolean(inboundCall) && inboundCall.campaignId === c.campaign_id;
@@ -922,7 +1041,7 @@ export default function DialerPage() {
                 pointing at the wrong server/path, secret needs
                 confirming). Re-enable once that's fixed — see Phase 7
                 doc, targeted for Monday.
-            {campaign?.campaign_id === "CMXBSMSC" && (
+            {workingCampaigns.length === 1 && workingCampaigns[0].campaign_id === "CMXBSMSC" && (
               <button
                 type="button"
                 className="button-secondary"
@@ -931,6 +1050,7 @@ export default function DialerPage() {
               >
                 Open Screening Form
               </button>
+
             )}
             */}
           </div>
@@ -986,7 +1106,7 @@ export default function DialerPage() {
             <MiniPhone
               agentStatus={agentStatus?.status}
               hasActiveCall={Boolean(call || inboundCall)}
-              campaignId={campaign?.campaign_id}
+              campaignId={outboundCampaign?.campaign_id}
               canHold={Boolean(
                 (call && call.status === "customer_connected") ||
                   (inboundCall && inboundCall.status === "agent_connected")
@@ -1070,7 +1190,7 @@ export default function DialerPage() {
             {inboundCall.status === "ended" && (
               <form onSubmit={handleSaveInboundDisposition} style={{ marginTop: 14 }}>
                 <h3 style={{ marginBottom: 8 }}>Disposition</h3>
-                {getInboundDispositionsForCampaign(campaign?.campaign_id).map((d) => (
+                {getInboundDispositionsForCampaign(inboundCall?.campaignId).map((d) => (
                   <label key={d.value} className="disposition-row">
                     <input
                       type="radio"
@@ -1122,16 +1242,19 @@ export default function DialerPage() {
                 stays hidden for them entirely, rather than showing a
                 technically-true-but-meaningless "No leads to dial"
                 message on a campaign that was never supposed to have
-                any. */}
+                any. Also hidden entirely whenever outboundCampaign is
+                null (working 2+ blended campaigns at once) — there's
+                no single dialing context to speak of in that state. */}
             {(() => {
-              const isBlendedCampaign = campaign?.campaign_type === "BLENDED";
+              if (!outboundCampaign) return null;
+              const isBlendedCampaign = outboundCampaign.campaign_type === "BLENDED";
               return (
                 <>
                   {agentStatus?.status === "READY" &&
                     !call &&
                     hasLeads &&
                     !isBlendedCampaign &&
-                    campaign?.dial_method !== "RATIO" && (
+                    outboundCampaign.dial_method !== "RATIO" && (
                       <div className="card">
                         <button
                           className="primary"
@@ -1148,7 +1271,7 @@ export default function DialerPage() {
                     !call &&
                     hasLeads &&
                     !isBlendedCampaign &&
-                    campaign?.dial_method === "RATIO" && (
+                    outboundCampaign.dial_method === "RATIO" && (
                       <div className="card">
                         <span className="badge">{busy ? "Dialing…" : "Auto Dial Active"}</span>
                       </div>
@@ -1244,7 +1367,7 @@ export default function DialerPage() {
               <div className="card">
                 <h3>Disposition</h3>
                 <form onSubmit={handleSaveDisposition}>
-                  {getOutboundDispositionsForCampaign(campaign?.campaign_id).map((d) => (
+                  {getOutboundDispositionsForCampaign(call?.campaignId).map((d) => (
                     <label key={d.value} className="disposition-row">
                       <input
                         type="radio"
@@ -1308,19 +1431,69 @@ export default function DialerPage() {
               </div>
             )}
 
+            {/* Stats/Call Log filter — per explicit request, shows
+                ALL campaigns this agent has touched today by default
+                ("" = All), with this dropdown narrowing both to one
+                specific campaign. Options come from myCampaigns (every
+                real assignment, not just the currently-selected
+                working set) — an agent may have switched their
+                working-campaign selection earlier today and still want
+                to review that campaign's numbers. */}
+            {myCampaigns.length > 1 && (
+              <div className="card" style={{ marginBottom: 12 }}>
+                <label className="comments-label">Show Stats/Call Log For</label>
+                <select value={statsCampaignFilter} onChange={(e) => setStatsCampaignFilter(e.target.value)}>
+                  <option value="">All Campaigns</option>
+                  {myCampaigns.map((c) => (
+                    <option key={c.campaign_id} value={c.campaign_id}>
+                      {c.campaign_name} ({c.campaign_id})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
             {/* Stats moved here per redesign request — right column,
                 above Call Logs, each stat as its own card. */}
-            <StatsPanel refreshKey={callLogVersion} campaignId={campaign?.campaign_id} />
+            <StatsPanel refreshKey={callLogVersion} campaignId={statsCampaignFilter} />
 
             <CallLogTable
               refreshKey={callLogVersion}
-              campaignId={campaign?.campaign_id}
+              campaignId={statsCampaignFilter}
               onCallBack={handleCallBack}
               canCallBack={agentStatus?.status === "READY"}
             />
           </div>
         </div>
       </div>
+
+      {/* Per explicit request — manual dial while working 2+ blended
+          campaigns needs to ask which one to call from, since there's
+          no originating call to infer it from (unlike Callback, which
+          never shows this — see handleCallBack). Skipped entirely
+          while working a single campaign; see handleManualDial. */}
+      {pendingManualDialNumber && (
+        <div className="modal-overlay" onClick={handleCancelManualDialCampaign}>
+          <div className="modal-card" style={{ width: "min(90vw, 420px)" }} onClick={(e) => e.stopPropagation()}>
+            <h3 style={{ marginTop: 0 }}>Call from which campaign?</h3>
+            <p style={{ fontSize: 14, color: "#667085" }}>Calling {pendingManualDialNumber}</p>
+            {workingCampaigns.map((c) => (
+              <button
+                key={c.campaign_id}
+                type="button"
+                className="button-secondary"
+                style={{ display: "block", width: "100%", marginBottom: 8 }}
+                onClick={() => handleConfirmManualDialCampaign(c.campaign_id)}
+              >
+                {c.campaign_name} ({c.campaign_id})
+              </button>
+            ))}
+            <button type="button" className="link" onClick={handleCancelManualDialCampaign}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
     </>
   );
 }

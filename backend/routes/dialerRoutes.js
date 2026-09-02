@@ -770,6 +770,14 @@ router.get("/dialer/inbound/current", requireAuth, async (req, res) => {
         room: current.room,
         callerIdNumber: current.callerIdNumber,
         onHold: current.onHold,
+        // NEW — same gap this route had as the WS broadcast originally
+        // did (see inboundCallService.js's broadcastInboundStatus):
+        // without this, a page refresh mid-call would restore
+        // inboundCall with no campaignId, silently breaking the
+        // disposition-options-by-active-campaign feature specifically
+        // after a refresh, even though it worked fine for the
+        // original live WS-driven session.
+        campaignId: current.campaignId,
       },
     });
   } catch (error) {
@@ -1031,13 +1039,24 @@ router.post("/dialer/inbound/unhold", requireAuth, async (req, res) => {
 CALL LOG / STATS
 ==================================================
 */
+/*
+==================================================
+GET /api/dialer/call-log?campaignId=optional
+==================================================
+UPDATED — campaignId is now OPTIONAL, per explicit request: omitted
+means "every campaign this agent has touched today," not an error.
+Previously required, since this route only ever existed to power a
+single-campaign "Main Campaign" view — that concept is retired now
+that an agent can genuinely work more than one campaign at once (see
+CampaignSelectPage.jsx's multi-select). Still always scoped to THIS
+agent (req.session.agent.username) regardless — "all campaigns" never
+means "all agents."
+==================================================
+*/
 router.get("/dialer/call-log", requireAuth, async (req, res) => {
   try {
     const { campaignId } = req.query;
-    if (!campaignId) {
-      return res.status(400).json({ success: false, message: "campaignId query param is required." });
-    }
-    const rows = await dialerService.getCallLog(req.session.agent.username, campaignId);
+    const rows = await dialerService.getCallLog(req.session.agent.username, campaignId || undefined);
     return res.json({ success: true, callLog: rows });
   } catch (error) {
     console.error("GET /api/dialer/call-log failed:", error);
@@ -1045,14 +1064,23 @@ router.get("/dialer/call-log", requireAuth, async (req, res) => {
   }
 });
 
+/*
+==================================================
+GET /api/dialer/stats/today?campaignId=optional
+==================================================
+UPDATED — same treatment as call-log above: campaignId is now
+optional. statsService.getTodayStats already passed campaignId
+straight through to computeDirectionStats, which has treated a falsy
+campaignId as "no filter" since it was first written for the Reports
+page's "All Campaigns" option — this route was just never allowed to
+actually take advantage of that itself, until now.
+==================================================
+*/
 router.get("/dialer/stats/today", requireAuth, async (req, res) => {
   try {
     const { campaignId } = req.query;
-    if (!campaignId) {
-      return res.status(400).json({ success: false, message: "campaignId query param is required." });
-    }
     const { appUserId, username: agentUser } = req.session.agent;
-    const stats = await statsService.getTodayStats(appUserId, agentUser, campaignId);
+    const stats = await statsService.getTodayStats(appUserId, agentUser, campaignId || undefined);
     return res.json({ success: true, stats });
   } catch (error) {
     console.error("GET /api/dialer/stats/today failed:", error);

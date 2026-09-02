@@ -25,7 +25,10 @@ export default function StatsPanel({ refreshKey, campaignId }) {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    if (!campaignId) return;
+    // UPDATED — same reasoning as CallLogTable.jsx: campaignId is now
+    // genuinely optional (all campaigns), not "not ready yet" — the
+    // old guard here is retired along with the single "Main Campaign"
+    // concept it used to depend on.
     api
       .getTodayStats(campaignId)
       .then((data) => setStats(data.stats))
