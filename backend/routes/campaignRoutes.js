@@ -489,9 +489,24 @@ function buildCampaignDialplanBlock({
       `exten => ${afterhoursExten},n,GotoIf($["\${CMXVMCHOICE}" = "1"]?${afterhoursVmRecordLabel},1)`,
       `exten => ${afterhoursExten},n(${afterhoursEndLabel}),Hangup()`,
       `exten => ${afterhoursVmRecordLabel},1,NoOp(CMX Campaign ${campaignId} inbound voicemail - after hours)`,
+      // REAL BUG FIX, confirmed via a real test call: ${UNIQUEID}
+      // always contains a literal period (epoch.sequence, e.g.
+      // "1788309161.321") — Record()'s own filename:format parsing
+      // splits on that period, not the ":wav" colon, so the actual
+      // call became Record(".../1788309161:321:wav") -> Asterisk
+      // logged "No such format '321:wav'" and never created a file at
+      // all. ${ROOM} (business hours) has no period in it, so the
+      // exact same ":wav" syntax works fine there — this bug is
+      // specific to UNIQUEID. Fixed by replacing the period with a
+      // dash via CUT() BEFORE ever using it in a filename, and using
+      // that same sanitized value consistently in both the Record()
+      // path and the uniqueId param sent to voicemail-recorded, so
+      // the backend looks for the exact file that was actually
+      // written.
+      `exten => ${afterhoursVmRecordLabel},n,Set(CMXAHKEY=\${CUT(UNIQUEID,.,1)}-\${CUT(UNIQUEID,.,2)})`,
       `exten => ${afterhoursVmRecordLabel},n(${afterhoursVmRecordStartLabel}),Playback(${VOICEMAIL_LEAVE_MESSAGE_SOUND})`,
       `exten => ${afterhoursVmRecordLabel},n,Playback(beep)`,
-      `exten => ${afterhoursVmRecordLabel},n,Record(${VOICEMAIL_SPOOL_DIR}/\${UNIQUEID}:wav,3,300,k)`,
+      `exten => ${afterhoursVmRecordLabel},n,Record(${VOICEMAIL_SPOOL_DIR}/\${CMXAHKEY}:wav,3,300,k)`,
       `exten => ${afterhoursVmRecordLabel},n,Read(CMXVMCONFIRM,,1,,,45)`,
       `exten => ${afterhoursVmRecordLabel},n,GotoIf($["\${CMXVMCONFIRM}" = "1"]?${afterhoursVmRecordSaveLabel})`,
       `exten => ${afterhoursVmRecordLabel},n,GotoIf($["\${CMXVMCONFIRM}" = "2"]?${afterhoursVmRecordStartLabel})`
@@ -501,7 +516,7 @@ function buildCampaignDialplanBlock({
     }
     lines.push(
       `exten => ${afterhoursVmRecordLabel},n,Goto(${afterhoursVmRecordStartLabel})`,
-      `exten => ${afterhoursVmRecordLabel},n(${afterhoursVmRecordSaveLabel}),Set(CMXDISCARD=\${CURL(${INTERNAL_API_BASE_URL}/internal/voicemail-recorded?secret=${INTERNAL_API_SECRET}&campaignId=${campaignId}&callerId=\${CALLERID(num)}&isAfterHours=1&uniqueId=\${UNIQUEID})})`,
+      `exten => ${afterhoursVmRecordLabel},n(${afterhoursVmRecordSaveLabel}),Set(CMXDISCARD=\${CURL(${INTERNAL_API_BASE_URL}/internal/voicemail-recorded?secret=${INTERNAL_API_SECRET}&campaignId=${campaignId}&callerId=\${CALLERID(num)}&isAfterHours=1&uniqueId=\${CMXAHKEY})})`,
       `exten => ${afterhoursVmRecordLabel},n,Hangup()`
     );
   } else {
