@@ -138,6 +138,7 @@ export default function AdminCampaignsSection() {
   const [campaignName, setCampaignName] = useState("");
   const [did, setDid] = useState("");
   const [callerId, setCallerId] = useState("");
+  const [outboundTrunk, setOutboundTrunk] = useState("CMXCallSuite");
   const [campaignType, setCampaignType] = useState("OUTBOUND");
   const [blendedFallbackCampaignId, setBlendedFallbackCampaignId] = useState("");
   const [dialMethod, setDialMethod] = useState("MANUAL");
@@ -186,6 +187,7 @@ export default function AdminCampaignsSection() {
     setCampaignName("");
     setDid("");
     setCallerId("");
+    setOutboundTrunk("CMXCallSuite");
     setCampaignType("OUTBOUND");
     setBlendedFallbackCampaignId("");
     setDialMethod("MANUAL");
@@ -212,6 +214,7 @@ export default function AdminCampaignsSection() {
     setCampaignName(c.campaign_name || "");
     setDid(c.did || "");
     setCallerId(c.campaign_cid && c.campaign_cid !== c.did ? c.campaign_cid : "");
+    setOutboundTrunk(c.outbound_trunk || "CMXCallSuite");
     setCampaignType(c.campaign_type || "OUTBOUND");
     setBlendedFallbackCampaignId(c.blended_fallback_campaign_id || "");
     setDialMethod(c.dial_method === "MANUAL" ? "MANUAL" : "AUTO");
@@ -287,6 +290,7 @@ export default function AdminCampaignsSection() {
     const formData = new FormData();
     formData.append("campaignName", campaignName);
     formData.append("callerId", callerId);
+    formData.append("outboundTrunk", outboundTrunk);
     formData.append("campaignType", campaignType);
     formData.append("dialMethod", campaignType === "OUTBOUND" ? dialMethod : "MANUAL");
     formData.append("blendedFallbackCampaignId", campaignType === "OUTBOUND" ? blendedFallbackCampaignId : "");
@@ -393,6 +397,23 @@ export default function AdminCampaignsSection() {
                   onChange={(e) => setCallerId(e.target.value)}
                   placeholder="Leave blank to spoof the DID as the outbound Caller ID"
                 />
+
+                {/* NEW — per explicit request: which trunk this
+                    campaign's outbound calls actually go out through.
+                    QuestBlue (CMXCallSuite) is the existing default;
+                    Telpeer is a second trunk added specifically for
+                    campaigns that need Caller ID spoofing (QuestBlue
+                    rejects a non-provisioned Caller ID with a real SIP
+                    403, confirmed via a real test call). */}
+                <label className="comments-label">Outbound Trunk</label>
+                <select value={outboundTrunk} onChange={(e) => setOutboundTrunk(e.target.value)}>
+                  <option value="CMXCallSuite">QuestBlue (default)</option>
+                  <option value="Telpeer">Telpeer</option>
+                </select>
+                <p style={{ fontSize: 13, color: "#888", marginTop: 4 }}>
+                  Telpeer supports Caller ID spoofing; QuestBlue requires the Caller ID above to be
+                  a number they've explicitly authorized on your account.
+                </p>
 
                 <label className="comments-label">Campaign Type</label>
                 <select value={campaignType} onChange={(e) => setCampaignType(e.target.value)}>

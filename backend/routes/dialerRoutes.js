@@ -862,7 +862,7 @@ router.post("/dialer/start-call", requireAuth, async (req, res) => {
 
     const [campaignRows] = await db.execute(
       `
-        SELECT c.campaign_cid, s.campaign_type
+        SELECT c.campaign_cid, s.campaign_type, s.outbound_trunk
         FROM asterisk.vicidial_campaigns c
         LEFT JOIN cmx_dialer.campaign_settings s ON s.campaign_id = c.campaign_id
         WHERE c.campaign_id = ? AND c.active = 'Y'
@@ -874,7 +874,7 @@ router.post("/dialer/start-call", requireAuth, async (req, res) => {
       return res.status(404).json({ success: false, message: "Campaign not found or inactive." });
     }
 
-    const { campaign_cid: campaignCid, campaign_type: campaignType } = campaignRows[0];
+    const { campaign_cid: campaignCid, campaign_type: campaignType, outbound_trunk: outboundTrunk } = campaignRows[0];
     const { appUserId, username: agentUser, extension: agentExtension } = req.session.agent;
 
     // Per explicit request — AMD must only run on OUTBOUND campaigns
@@ -939,6 +939,7 @@ router.post("/dialer/start-call", requireAuth, async (req, res) => {
       campaignId,
       callType,
       shouldRunAmd,
+      outboundTrunk,
     });
 
     return res.json({ success: true, ...result });

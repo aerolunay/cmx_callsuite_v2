@@ -399,7 +399,29 @@ function normalizePhoneNumber(phoneNumber) {
   return digits;
 }
 
-function startCall({ appUserId, agentUser, agentExtension, lead, leadId, phoneNumber, campaignCid, campaignId, callType = "REGULAR", shouldRunAmd = true }) {
+function startCall({
+  appUserId,
+  agentUser,
+  agentExtension,
+  lead,
+  leadId,
+  phoneNumber,
+  campaignCid,
+  campaignId,
+  callType = "REGULAR",
+  shouldRunAmd = true,
+  outboundTrunk,
+}) {
+  // NEW — per explicit request, per-campaign outbound trunk selection
+  // (Telpeer, for campaigns that need Caller ID spoofing, alongside
+  // the existing default QuestBlue trunk/CMXCallSuite). Defense in
+  // depth: campaignRoutes.js already validates this against
+  // ALLOWED_OUTBOUND_TRUNKS before it's ever saved, but this value
+  // ends up directly inside a dialplan channel string
+  // (PJSIP/${EXTEN}@${CMXTRUNK}, see extensions.conf), so it's
+  // re-validated here too rather than trusted from a single layer up
+  // the call chain.
+  const resolvedOutboundTrunk = outboundTrunk === "Telpeer" ? "Telpeer" : "CMXCallSuite";
   phoneNumber = normalizePhoneNumber(phoneNumber);
   return new Promise(async (resolve, reject) => {
     let suffix;
@@ -498,7 +520,20 @@ function startCall({ appUserId, agentUser, agentExtension, lead, leadId, phoneNu
           // _NXXNXXXXXX patterns — they check this exact variable
           // before deciding whether to include U(amd-check) in the
           // Dial() options string at all.
-          Variable: `SKIP_AMD=${shouldRunAmd ? "0" : "1"}`,
+          //
+          // CMXTRUNK — NEW, per explicit request: tells those same
+          // dialplan patterns which trunk to actually dial through
+          // (defaults to CMXCallSuite there if this is ever blank —
+          // see extensions.conf's own GotoIf check — so this stays
+          // fully backward-compatible even if something upstream ever
+          // fails to pass it).
+          //
+          // Both variables combined into ONE pipe-delimited Variable
+          // header (AMI's own long-standing multi-variable syntax) —
+          // NOT two separate "Variable" keys, which isn't possible in
+          // a plain JS object (the second would just silently
+          // overwrite the first, quietly breaking AMD entirely).
+          Variable: `SKIP_AMD=${shouldRunAmd ? "0" : "1"}|CMXTRUNK=${resolvedOutboundTrunk}`,
         });
 
         callState.status = "ringing_customer";

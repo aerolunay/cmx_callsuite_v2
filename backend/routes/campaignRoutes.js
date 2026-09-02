@@ -90,6 +90,17 @@ FIELD MAPPING — what this app's UI concept maps to on each real table
 */
 
 const SOUNDS_CUSTOM_DIR = process.env.SOUNDS_CUSTOM_DIR || "/var/lib/asterisk/sounds/custom";
+
+// Per explicit request — a campaign can place outbound calls through
+// either trunk (QuestBlue's CMXCallSuite, the existing default, or the
+// newly added Telpeer trunk, which supports Caller ID spoofing).
+// Deliberately a strict whitelist, NOT free text — this value flows
+// directly into a dialplan channel string
+// (PJSIP/${EXTEN}@${CMXTRUNK}, see extensions.conf's
+// _1NXXNXXXXXX/_NXXNXXXXXX patterns), so it must be validated here,
+// at the one place it's ever written, rather than trusted as
+// arbitrary input this deep into the call-placing pipeline.
+const ALLOWED_OUTBOUND_TRUNKS = ["CMXCallSuite", "Telpeer"];
 const CAMPAIGN_DIALPLAN_CONF_PATH =
   process.env.CAMPAIGN_DIALPLAN_CONF_PATH || "/etc/asterisk/extensions-campaigns-cmxdialer.conf";
 const CAMPAIGN_AUDIO_STAGING_DIR = path.join(__dirname, "..", "tmp", "campaign-audio-staging");
@@ -630,7 +641,7 @@ router.get("/", requireAdmin, async (req, res) => {
           s.campaign_type, s.welcome_greeting_filename, s.afterhours_audio_filename,
           s.business_hours_start, s.business_hours_end, s.business_days, s.blended_fallback_campaign_id,
           s.voicemail_business_hours_enabled, s.voicemail_afterhours_enabled, s.voicemail_prompt_audio_filename, s.afterhours_voicemail_prompt_audio_filename,
-          s.voicemail_invalid_option_audio_filename, s.voicemail_wait_seconds
+          s.voicemail_invalid_option_audio_filename, s.voicemail_wait_seconds, s.outbound_trunk
         FROM asterisk.vicidial_campaigns c
         LEFT JOIN asterisk.vicidial_inbound_dids d ON d.campaign_id = c.campaign_id
         LEFT JOIN cmx_dialer.campaign_settings s ON s.campaign_id = c.campaign_id
@@ -690,6 +701,7 @@ router.post(
       voicemailBusinessHoursEnabled,
       voicemailAfterhoursEnabled,
       voicemailWaitSeconds,
+      outboundTrunk,
     } = req.body;
 
     if (!campaignId || !campaignName) {
@@ -722,6 +734,12 @@ router.post(
     const resolvedVoicemailAfterhoursEnabled = voicemailAfterhoursEnabled === "true" ? "Y" : "N";
     const resolvedVoicemailWaitSeconds = Math.max(40, parseInt(voicemailWaitSeconds, 10) || 40);
 
+    // Per explicit request — which trunk this campaign's outbound
+    // calls go out through. Strict whitelist, not free text — see
+    // ALLOWED_OUTBOUND_TRUNKS's own comment for why this matters more
+    // than a typical form field.
+    const resolvedOutboundTrunk = ALLOWED_OUTBOUND_TRUNKS.includes(outboundTrunk) ? outboundTrunk : "CMXCallSuite";
+
     const connection = await db.getConnection();
     try {
       await connection.beginTransaction();
@@ -749,8 +767,8 @@ router.post(
       await connection.execute(
         `
           INSERT INTO cmx_dialer.campaign_settings
-            (campaign_id, campaign_type, business_hours_start, business_hours_end, business_days, blended_fallback_campaign_id, voicemail_business_hours_enabled, voicemail_afterhours_enabled, voicemail_wait_seconds)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (campaign_id, campaign_type, business_hours_start, business_hours_end, business_days, blended_fallback_campaign_id, voicemail_business_hours_enabled, voicemail_afterhours_enabled, voicemail_wait_seconds, outbound_trunk)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
         [
           campaignId,
@@ -762,6 +780,7 @@ router.post(
           resolvedVoicemailBusinessHoursEnabled,
           resolvedVoicemailAfterhoursEnabled,
           resolvedVoicemailWaitSeconds,
+          resolvedOutboundTrunk,
         ]
       );
 
@@ -880,6 +899,7 @@ router.put(
       voicemailBusinessHoursEnabled,
       voicemailAfterhoursEnabled,
       voicemailWaitSeconds,
+      outboundTrunk,
     } = req.body;
 
     if (!["OUTBOUND", "BLENDED"].includes(campaignType)) {
@@ -900,6 +920,9 @@ router.put(
     const resolvedVoicemailBusinessHoursEnabled = voicemailBusinessHoursEnabled === "true" ? "Y" : "N";
     const resolvedVoicemailAfterhoursEnabled = voicemailAfterhoursEnabled === "true" ? "Y" : "N";
     const resolvedVoicemailWaitSeconds = Math.max(40, parseInt(voicemailWaitSeconds, 10) || 40);
+
+    // Per explicit request — same validation as the create route above.
+    const resolvedOutboundTrunk = ALLOWED_OUTBOUND_TRUNKS.includes(outboundTrunk) ? outboundTrunk : "CMXCallSuite";
 
     const connection = await db.getConnection();
     try {
@@ -947,8 +970,8 @@ router.put(
       await connection.execute(
         `
           INSERT INTO cmx_dialer.campaign_settings
-            (campaign_id, campaign_type, business_hours_start, business_hours_end, business_days, blended_fallback_campaign_id, voicemail_business_hours_enabled, voicemail_afterhours_enabled, voicemail_wait_seconds)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (campaign_id, campaign_type, business_hours_start, business_hours_end, business_days, blended_fallback_campaign_id, voicemail_business_hours_enabled, voicemail_afterhours_enabled, voicemail_wait_seconds, outbound_trunk)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON DUPLICATE KEY UPDATE
             campaign_type = VALUES(campaign_type),
             business_hours_start = VALUES(business_hours_start),
@@ -957,7 +980,8 @@ router.put(
             blended_fallback_campaign_id = VALUES(blended_fallback_campaign_id),
             voicemail_business_hours_enabled = VALUES(voicemail_business_hours_enabled),
             voicemail_afterhours_enabled = VALUES(voicemail_afterhours_enabled),
-            voicemail_wait_seconds = VALUES(voicemail_wait_seconds)
+            voicemail_wait_seconds = VALUES(voicemail_wait_seconds),
+            outbound_trunk = VALUES(outbound_trunk)
         `,
         [
           campaignId,
@@ -969,6 +993,7 @@ router.put(
           resolvedVoicemailBusinessHoursEnabled,
           resolvedVoicemailAfterhoursEnabled,
           resolvedVoicemailWaitSeconds,
+          resolvedOutboundTrunk,
         ]
       );
 
