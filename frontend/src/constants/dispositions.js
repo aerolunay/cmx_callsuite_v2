@@ -34,6 +34,24 @@ export const BSMSC_OUTBOUND_DISPOSITIONS = [
 
 /*
 ==================================================
+BSCSR_OUTBOUND_DISPOSITIONS
+==================================================
+Per explicit request — CMXBSCSR gets "Screening Completed" added
+ALONGSIDE the generic outbound list, same treatment as BSMSC's own
+outbound list above (an addition, not a full override). Reuses the
+same "SCREENING_COMPLETED" value as every other list below it, for
+the same reason: keeps the underlying value consistent across
+campaigns/inbound-outbound for anywhere disposition values get
+aggregated later.
+==================================================
+*/
+export const BSCSR_OUTBOUND_DISPOSITIONS = [
+  { value: "SCREENING_COMPLETED", label: "Screening Completed" },
+  ...DISPOSITIONS,
+];
+
+/*
+==================================================
 getOutboundDispositionsForCampaign
 ==================================================
 Mirrors getInboundDispositionsForCampaign's own pattern below — single
@@ -43,16 +61,21 @@ this instead of referencing DISPOSITIONS directly.
 */
 export function getOutboundDispositionsForCampaign(campaignId) {
   if (campaignId === "CMXBSMSC") return BSMSC_OUTBOUND_DISPOSITIONS;
+  if (campaignId === "CMXBSCSR") return BSCSR_OUTBOUND_DISPOSITIONS;
   return DISPOSITIONS;
 }
 
-// Merges BOTH outbound lists — same reasoning as inbound's own
+// Merges ALL outbound lists — same reasoning as inbound's own
 // INBOUND_LABEL_BY_VALUE below: a stored disposition value in the
-// database could have come from either list, so a lookup-by-value
+// database could have come from any of them, so a lookup-by-value
 // needs to resolve correctly regardless of which one it came from.
-// (BSMSC_OUTBOUND_DISPOSITIONS already contains everything in
-// DISPOSITIONS plus the one new entry, so this alone covers both.)
-const LABEL_BY_VALUE = Object.fromEntries(BSMSC_OUTBOUND_DISPOSITIONS.map((d) => [d.value, d.label]));
+// (BSMSC_OUTBOUND_DISPOSITIONS and BSCSR_OUTBOUND_DISPOSITIONS each
+// already contain everything in DISPOSITIONS plus their own one new
+// entry, so merging all three still just resolves to DISPOSITIONS +
+// SCREENING_COMPLETED — no duplicate-key issue.)
+const LABEL_BY_VALUE = Object.fromEntries(
+  [...BSMSC_OUTBOUND_DISPOSITIONS, ...BSCSR_OUTBOUND_DISPOSITIONS].map((d) => [d.value, d.label])
+);
 
 export function dispositionLabel(value) {
   return LABEL_BY_VALUE[value] || value;
@@ -111,6 +134,25 @@ export const BSMSC_INBOUND_DISPOSITIONS = [
 
 /*
 ==================================================
+BSCSR_INBOUND_DISPOSITIONS
+==================================================
+Per explicit request — CMXBSCSR gets "Screening Completed" added
+ALONGSIDE the generic inbound list, NOT a full override like BSMSC's
+own inbound list above. The ask for CMXBSCSR was specifically "include
+Screening Completed", not "replace the whole list", so this deliberately
+mirrors BSCSR_OUTBOUND_DISPOSITIONS's own "alongside" pattern instead of
+BSMSC_INBOUND_DISPOSITIONS's "replacement" one. Reuses the same
+"SCREENING_COMPLETED" value for the same cross-list consistency reason
+documented above.
+==================================================
+*/
+export const BSCSR_INBOUND_DISPOSITIONS = [
+  { value: "SCREENING_COMPLETED", label: "Screening Completed" },
+  ...INBOUND_DISPOSITIONS,
+];
+
+/*
+==================================================
 getInboundDispositionsForCampaign
 ==================================================
 Single place this campaign-scoping decision lives — DialerPage.jsx
@@ -121,16 +163,17 @@ this one function, not hunting through the page's JSX.
 */
 export function getInboundDispositionsForCampaign(campaignId) {
   if (campaignId === "CMXBSMSC") return BSMSC_INBOUND_DISPOSITIONS;
+  if (campaignId === "CMXBSCSR") return BSCSR_INBOUND_DISPOSITIONS;
   return INBOUND_DISPOSITIONS;
 }
 
-// Merges BOTH inbound lists — a stored disposition value in the
-// database could have come from either campaign's list, so any
+// Merges ALL inbound lists — a stored disposition value in the
+// database could have come from any campaign's list, so any
 // lookup-by-value (e.g. displaying past dispositions in a Call Logs
 // table) needs to resolve correctly regardless of which list it was
 // originally selected from.
 const INBOUND_LABEL_BY_VALUE = Object.fromEntries(
-  [...INBOUND_DISPOSITIONS, ...BSMSC_INBOUND_DISPOSITIONS].map((d) => [d.value, d.label])
+  [...INBOUND_DISPOSITIONS, ...BSMSC_INBOUND_DISPOSITIONS, ...BSCSR_INBOUND_DISPOSITIONS].map((d) => [d.value, d.label])
 );
 
 export function inboundDispositionLabel(value) {

@@ -3,6 +3,7 @@ import { useNavigate, Navigate } from "react-router-dom";
 import Header from "../components/Header";
 import ContactDetailsCard from "../components/ContactDetailsCard";
 import CallLogTable from "../components/CallLogTable";
+import AbandonedVoicemailTable from "../components/AbandonedVoicemailTable";
 import StatsPanel from "../components/StatsPanel";
 import { api } from "../api";
 import { useAuth } from "../context/AuthContext";
@@ -116,6 +117,11 @@ export default function DialerPage() {
   const [callbackAt, setCallbackAt] = useState("");
   const [setNotReadyAfterSave, setSetNotReadyAfterSave] = useState(false);
   const [callLogVersion, setCallLogVersion] = useState(0);
+  // Which tab of the Call Logs / Abandoned & Voicemail container is
+  // showing — see the browser-tab-style card right above CallLogTable
+  // below. Per explicit request: the two live in the same container,
+  // switched between rather than both always showing at once.
+  const [callLogTab, setCallLogTab] = useState("callLog"); // "callLog" | "abandonedVoicemail"
 
   const [error, setError] = useState("");
   // Per explicit request — AMD/Busy/No Answer end the call
@@ -1457,12 +1463,57 @@ export default function DialerPage() {
                 above Call Logs, each stat as its own card. */}
             <StatsPanel refreshKey={callLogVersion} campaignId={statsCampaignFilter} />
 
-            <CallLogTable
-              refreshKey={callLogVersion}
-              campaignId={statsCampaignFilter}
-              onCallBack={handleCallBack}
-              canCallBack={agentStatus?.status === "READY"}
-            />
+            {/* Browser-tab-style switcher between Call Logs and the
+                combined Abandoned & Voicemail feed — per explicit
+                request, these live in one container rather than two
+                always-visible cards. Both tabs share the same
+                statsCampaignFilter as StatsPanel above, so switching
+                tabs doesn't reset the campaign filter. */}
+            <div className="card" style={{ padding: 0, marginBottom: 0 }}>
+              <div style={{ display: "flex", borderBottom: "1px solid #e5e7eb" }}>
+                <button
+                  type="button"
+                  onClick={() => setCallLogTab("callLog")}
+                  style={{
+                    flex: 1,
+                    padding: "10px 16px",
+                    border: "none",
+                    background: "transparent",
+                    cursor: "pointer",
+                    fontWeight: callLogTab === "callLog" ? 600 : 400,
+                    borderBottom: callLogTab === "callLog" ? "2px solid #1e7e34" : "2px solid transparent",
+                  }}
+                >
+                  Call Logs
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCallLogTab("abandonedVoicemail")}
+                  style={{
+                    flex: 1,
+                    padding: "10px 16px",
+                    border: "none",
+                    background: "transparent",
+                    cursor: "pointer",
+                    fontWeight: callLogTab === "abandonedVoicemail" ? 600 : 400,
+                    borderBottom: callLogTab === "abandonedVoicemail" ? "2px solid #1e7e34" : "2px solid transparent",
+                  }}
+                >
+                  Abandoned & Voicemail
+                </button>
+              </div>
+            </div>
+
+            {callLogTab === "callLog" ? (
+              <CallLogTable
+                refreshKey={callLogVersion}
+                campaignId={statsCampaignFilter}
+                onCallBack={handleCallBack}
+                canCallBack={agentStatus?.status === "READY"}
+              />
+            ) : (
+              <AbandonedVoicemailTable campaignId={statsCampaignFilter} />
+            )}
           </div>
         </div>
       </div>

@@ -131,12 +131,13 @@ router.post("/users", requireAdmin, async (req, res) => {
     return res.status(400).json({ success: false, message: "accessLevel must be agent, supervisor, or admin." });
   }
 
-  // Priority: 1 (default), 2, or 3 — see agentStatusService.js's
+  // Priority: 1 (default), 2, 3, or 4 — see agentStatusService.js's
   // getAnyReadyAgentWithExtension for what these actually do to
   // inbound queue matching. Defaults to 1 (strict FIFO) if omitted.
+  // 4 is a hard opt-out — that agent never receives inbound calls.
   const resolvedPriority = priority ? Number(priority) : 1;
-  if (![1, 2, 3].includes(resolvedPriority)) {
-    return res.status(400).json({ success: false, message: "priority must be 1, 2, or 3." });
+  if (![1, 2, 3, 4].includes(resolvedPriority)) {
+    return res.status(400).json({ success: false, message: "priority must be 1, 2, 3, or 4." });
   }
 
   const connection = await db.getConnection();
@@ -1417,7 +1418,7 @@ router.patch("/users/:appUserId/priority", requireAdmin, async (req, res) => {
     return res.json({ success: true, priority: Number(priority) });
   } catch (error) {
     console.error(`PATCH /api/admin/users/${appUserId}/priority failed:`, error);
-    if (error.message === "priority must be 1, 2, or 3.") {
+    if (error.message === "priority must be 1, 2, 3, or 4.") {
       return res.status(400).json({ success: false, message: error.message });
     }
     return res.status(500).json({ success: false, message: "Failed to update priority." });

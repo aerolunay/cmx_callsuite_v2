@@ -260,6 +260,17 @@ selected), the "unless no other agents are available" carve-out always
 wins — someone gets selected rather than letting the call wait
 indefinitely for a priority tier that never comes due.
 
+Priority 4 (per explicit request) is a HARD exclusion, categorically
+different from 1/2/3 above: it opts an agent OUT of inbound call
+routing entirely, with no "unless no one else is available" carve-out
+at all. Priority 3 agents can still be selected as a last resort if
+they're genuinely the only one around — priority 4 agents never are,
+even if they're the sole READY agent for the campaign. Enforced by
+filtering priority-4 rows out of the eligible pool itself (below),
+before the "only one real candidate" fallback even gets a chance to
+see them — so they're invisible to this whole matching function, not
+just heavily deprioritized within it.
+
 priority_skip_count lives on cmx_dialer.app_users (not
 agent_status_log) — it's a running counter tied to the agent, meant to
 persist across status changes within a shift, not reset every time
@@ -347,6 +358,11 @@ async function getAnyReadyAgentWithExtension(campaignId, excludeAppUserIds = [])
     if (!agentUser) continue;
     if (excludeSet.has(appUserId)) continue;
     if (!ws.isConnected(appUserId)) continue;
+    // Priority 4 — hard exclusion, see this function's own comment
+    // above. Filtered out here, before eligible.length is even
+    // computed, so a lone priority-4 agent can never trigger the
+    // "only one real candidate" fallback either.
+    if (priority === 4) continue;
 
     const [extRows] = await db.execute(
       `
@@ -419,8 +435,8 @@ before.
 */
 async function setPriority(appUserId, priority) {
   const numericPriority = Number(priority);
-  if (![1, 2, 3].includes(numericPriority)) {
-    throw new Error("priority must be 1, 2, or 3.");
+  if (![1, 2, 3, 4].includes(numericPriority)) {
+    throw new Error("priority must be 1, 2, 3, or 4.");
   }
   await db.execute(
     `UPDATE cmx_dialer.app_users SET priority = ?, priority_skip_count = 0 WHERE app_user_id = ?`,

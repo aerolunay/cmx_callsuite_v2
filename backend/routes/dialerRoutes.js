@@ -1067,6 +1067,160 @@ router.get("/dialer/call-log", requireAuth, async (req, res) => {
 
 /*
 ==================================================
+GET /api/dialer/abandoned-voicemail?campaignId=optional&startDate=optional&endDate=optional
+==================================================
+New — powers the "Abandoned & Voicemail" tab on DialerPage (see
+CallLogTable's own tab, added alongside it). Deliberately its own
+route rather than reusing GET /admin/abandoned-calls or
+GET /voicemails — both of those are gated to
+supervisor/account_manager/training_quality/admin (see
+voicemailRoutes.js's own documented access matrix), and a regular
+agent has neither of those roles. This route is scoped differently:
+any authenticated agent, but only for campaigns THEY'RE assigned to
+(cmx_dialer.agent_campaign_assignments, via the same
+getAssignedCampaignIds already used for the agent-facing "campaigns
+mine" picker elsewhere) — not the admin-side supervisor/account-
+manager campaign scoping.
+
+Combines BOTH abandoned calls and voicemails into one list (per
+explicit request — "have Abandoned and Voicemail combined"), each row
+tagged with a `type` field so the frontend can render an icon/badge
+per row and still sort them together by timestamp. Defaults to today
+(both startDate/endDate omitted) — same "today" definition used
+everywhere else in this app (see statsService's Eastern-day-boundary
+helper) — but accepts an explicit ?startDate=&endDate= range instead,
+same shape as VoicemailsPage.jsx's own admin-side date filter.
+
+campaignId omitted means "every campaign this agent is assigned to,"
+matching call-log's own "omitted = all" treatment above. Provided
+means just that one campaign, but only if the agent is actually
+assigned to it — same 403 pattern used elsewhere for cross-campaign
+access attempts.
+==================================================
+*/
+router.get("/dialer/abandoned-voicemail", requireAuth, async (req, res) => {
+  try {
+    const { campaignId, startDate, endDate } = req.query;
+    const { appUserId } = req.session.agent;
+
+    const assignedIds = await getAssignedCampaignIds(appUserId);
+    if (assignedIds.length === 0) {
+      return res.json({ success: true, rows: [] });
+    }
+
+    let campaignScope;
+    if (campaignId) {
+      if (!assignedIds.includes(campaignId)) {
+        return res.status(403).json({ success: false, message: "You are not assigned to that campaign." });
+      }
+      campaignScope = [campaignId];
+    } else {
+      campaignScope = assignedIds;
+    }
+
+    // Resolved ONCE here and reused for the voicemail query below —
+    // inboundCallService.getAbandonedCallsToday resolves the same
+    // bounds internally from the raw startDate/endDate strings, so
+    // both queries end up looking at the identical window without
+    // duplicating the "today vs explicit range" branch twice.
+    const { start, end } =
+      startDate && endDate
+        ? await statsService.getEasternRangeBoundsForServerClock(startDate, endDate)
+        : await statsService.getEasternDayBoundsForServerClock();
+
+    const abandoned = await inboundCallService.getAbandonedCallsToday(
+      campaignScope,
+      startDate || undefined,
+      endDate || undefined
+    );
+
+    const placeholders = campaignScope.map(() => "?").join(",");
+    const [voicemailRows] = await db.execute(
+      `
+        SELECT
+          vl.voicemail_log_id, vl.campaign_id, c.campaign_name, vl.caller_id_number,
+          vl.call_started_at, vl.left_at, vl.duration_seconds, vl.recording_key, vl.is_after_hours
+        FROM cmx_dialer.voicemail_log vl
+        LEFT JOIN asterisk.vicidial_campaigns c ON c.campaign_id = vl.campaign_id
+        WHERE vl.left_at >= ? AND vl.left_at <= ? AND vl.campaign_id IN (${placeholders})
+        ORDER BY vl.left_at DESC
+        LIMIT 200
+      `,
+      [start, end, ...campaignScope]
+    );
+
+    const combined = [
+      ...abandoned.map((a) => ({
+        type: "abandoned",
+        campaignId: a.campaignId,
+        campaignName: a.campaignName,
+        callerIdNumber: a.callerIdNumber,
+        timestamp: a.callStartedAt,
+        waitSeconds: a.waitSeconds,
+      })),
+      ...voicemailRows.map((v) => ({
+        type: "voicemail",
+        voicemailLogId: v.voicemail_log_id,
+        campaignId: v.campaign_id,
+        campaignName: v.campaign_name,
+        callerIdNumber: v.caller_id_number,
+        timestamp: v.left_at,
+        callStartedAt: v.call_started_at,
+        durationSeconds: v.duration_seconds,
+        hasRecording: Boolean(v.recording_key),
+        isAfterHours: v.is_after_hours === "Y",
+      })),
+    ].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+    return res.json({ success: true, rows: combined });
+  } catch (error) {
+    console.error("GET /api/dialer/abandoned-voicemail failed:", error);
+    return res.status(500).json({ success: false, message: "Failed to load abandoned calls / voicemails." });
+  }
+});
+
+/*
+==================================================
+GET /api/dialer/voicemail/:voicemailLogId/playback-url
+==================================================
+Agent-facing equivalent of voicemailRoutes.js's own playback-url
+route, but scoped to agent_campaign_assignments (via
+getAssignedCampaignIds) instead of that file's supervisor/account-
+manager/training_quality/admin role gate — same reasoning as the list
+route above. No download-url equivalent here, on purpose: same as
+VoicemailsPage.jsx's own admin-only download restriction, agents can
+play a voicemail from this tab but not download the audio file.
+==================================================
+*/
+router.get("/dialer/voicemail/:voicemailLogId/playback-url", requireAuth, async (req, res) => {
+  try {
+    const { voicemailLogId } = req.params;
+    const { appUserId } = req.session.agent;
+
+    const [rows] = await db.execute(
+      `SELECT recording_key, campaign_id FROM cmx_dialer.voicemail_log WHERE voicemail_log_id = ?`,
+      [voicemailLogId]
+    );
+
+    if (!rows.length || !rows[0].recording_key) {
+      return res.status(404).json({ success: false, message: "No recording found for this voicemail." });
+    }
+
+    const assignedIds = await getAssignedCampaignIds(appUserId);
+    if (!assignedIds.includes(rows[0].campaign_id)) {
+      return res.status(403).json({ success: false, message: "You are not assigned to that campaign." });
+    }
+
+    const url = await recordingUploadService.getPlaybackUrl(rows[0].recording_key);
+    return res.json({ success: true, url });
+  } catch (error) {
+    console.error(`GET /api/dialer/voicemail/${req.params.voicemailLogId}/playback-url failed:`, error);
+    return res.status(500).json({ success: false, message: "Failed to generate playback URL." });
+  }
+});
+
+/*
+==================================================
 GET /api/dialer/stats/today?campaignId=optional
 ==================================================
 UPDATED — same treatment as call-log above: campaignId is now

@@ -75,6 +75,20 @@ export const api = {
   getTodayStats: (campaignId) =>
     request(`/dialer/stats/today${campaignId ? `?campaignId=${encodeURIComponent(campaignId)}` : ""}`),
 
+  // Abandoned & Voicemail tab on DialerPage — combined feed, scoped to
+  // the agent's own assigned campaigns server-side. campaignId omitted
+  // means "all my campaigns" (same convention as getCallLog above);
+  // startDate/endDate omitted means "today."
+  getAbandonedVoicemail: (params) => {
+    const query = new URLSearchParams();
+    if (params?.campaignId) query.set("campaignId", params.campaignId);
+    if (params?.startDate) query.set("startDate", params.startDate);
+    if (params?.endDate) query.set("endDate", params.endDate);
+    const qs = query.toString();
+    return request(`/dialer/abandoned-voicemail${qs ? `?${qs}` : ""}`);
+  },
+  getAgentVoicemailPlaybackUrl: (voicemailLogId) => request(`/dialer/voicemail/${voicemailLogId}/playback-url`),
+
   // Agent status
   getStatus: () => request("/dialer/status"),
   getWebrtcCredentials: () => request("/dialer/webrtc-credentials"),

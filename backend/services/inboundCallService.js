@@ -1203,26 +1203,43 @@ circular require, since statsService.js doesn't require this file back
 so it's not strictly necessary, but keeps this one lazy/local to where
 it's actually used, matching the pattern already used for ws.js's
 lazy requires elsewhere in this codebase.
+
+UPDATED — campaignId now also accepts an array (e.g. every campaign an
+agent is assigned to, for DialerPage's own Abandoned/Voicemail tab —
+see dialerRoutes.js's GET /dialer/abandoned-voicemail), not just a
+single id or null. Also accepts an optional startDate/endDate
+("yyyy-MM-dd" strings) for that same tab's date-range filter — when
+both are given, uses statsService's already-existing
+getEasternRangeBoundsForServerClock (built for Reports' own date-range
+filter) instead of "today" only. Existing single-campaign/no-date
+callers (admin's own GET /admin/abandoned-calls) are unaffected —
+omitting startDate/endDate still means "today," exactly as before.
 ==================================================
 */
-async function getAbandonedCallsToday(campaignId) {
+async function getAbandonedCallsToday(campaignId, startDate, endDate) {
   const statsService = require("./statsService");
-  const { start, end } = await statsService.getEasternDayBoundsForServerClock();
+  const { start, end } =
+    startDate && endDate
+      ? await statsService.getEasternRangeBoundsForServerClock(startDate, endDate)
+      : await statsService.getEasternDayBoundsForServerClock();
+
+  const campaignIds = Array.isArray(campaignId) ? campaignId : campaignId ? [campaignId] : [];
 
   const params = [start, end];
   let campaignFilter = "";
-  if (campaignId) {
-    campaignFilter = "AND campaign_id = ?";
-    params.push(campaignId);
+  if (campaignIds.length) {
+    campaignFilter = `AND campaign_id IN (${campaignIds.map(() => "?").join(",")})`;
+    params.push(...campaignIds);
   }
 
   const [rows] = await db.execute(
     `
-      SELECT campaign_id, caller_id_number, call_started_at, wait_seconds
-      FROM cmx_dialer.abandoned_call_log
-      WHERE call_started_at >= ? AND call_started_at <= ?
-      ${campaignFilter}
-      ORDER BY call_started_at DESC
+      SELECT acl.campaign_id, c.campaign_name, acl.caller_id_number, acl.call_started_at, acl.wait_seconds
+      FROM cmx_dialer.abandoned_call_log acl
+      LEFT JOIN asterisk.vicidial_campaigns c ON c.campaign_id = acl.campaign_id
+      WHERE acl.call_started_at >= ? AND acl.call_started_at <= ?
+      ${campaignFilter.replace("campaign_id", "acl.campaign_id")}
+      ORDER BY acl.call_started_at DESC
       LIMIT 200
     `,
     params
@@ -1230,6 +1247,7 @@ async function getAbandonedCallsToday(campaignId) {
 
   return rows.map((r) => ({
     campaignId: r.campaign_id,
+    campaignName: r.campaign_name,
     callerIdNumber: r.caller_id_number,
     callStartedAt: r.call_started_at,
     waitSeconds: r.wait_seconds,
