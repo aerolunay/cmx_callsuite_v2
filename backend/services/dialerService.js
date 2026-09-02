@@ -533,7 +533,27 @@ function startCall({
           // NOT two separate "Variable" keys, which isn't possible in
           // a plain JS object (the second would just silently
           // overwrite the first, quietly breaking AMD entirely).
-          Variable: `SKIP_AMD=${shouldRunAmd ? "0" : "1"}|CMXTRUNK=${resolvedOutboundTrunk}`,
+          // FIX — confirmed via direct inspection of asterisk-manager's
+          // own source (lib/ami.js): a plain STRING value here is sent
+          // completely literally as one line; the library does NOT
+          // split on "|" at all, unlike the legacy AMI convention I'd
+          // assumed. Asterisk itself then parses everything after the
+          // FIRST "=" as SKIP_AMD's own value — meaning CMXTRUNK was
+          // NEVER actually created as its own variable, confirmed live
+          // via a real test call (every attempt showed "Using outbound
+          // trunk: CMXCallSuite", never Telpeer, regardless of the
+          // campaign's real saved setting). A plain OBJECT here is
+          // what the library actually needs — its own source shows it
+          // emits one correct "Variable: name=value" line per key
+          // automatically. This also fixes a real, previously
+          // unnoticed side effect: SKIP_AMD's value was never cleanly
+          // "0" or "1" either, meaning the AMD-skip dialplan check
+          // likely never actually skipped AMD for manual dials/blended
+          // campaigns as intended.
+          Variable: {
+            SKIP_AMD: shouldRunAmd ? "0" : "1",
+            CMXTRUNK: resolvedOutboundTrunk,
+          },
         });
 
         callState.status = "ringing_customer";
