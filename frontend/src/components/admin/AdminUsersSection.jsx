@@ -252,7 +252,7 @@ export default function AdminUsersSection() {
                   <option value="1">1</option>
                   <option value="2">2</option>
                   <option value="3">3</option>
-                  <option value="4">4 (no inbound calls)</option>
+                  <option value="4">4</option>
                 </select>
 
                 <label className="disposition-row" style={{ marginTop: 10 }}>
