@@ -20,23 +20,49 @@ export default function LandingPage() {
   // back into the app instead of making the agent click "Start
   // working a campaign" again every single time they reopen the page.
   //
-  // Deliberately always /dialer, never re-deriving status here:
-  // DialerPage's own mount logic already handles both rehydrating an
-  // in-progress call AND bouncing to /select-campaign if no campaign
-  // is stored yet, so sending everyone there is safe regardless of
-  // which case actually applies — this only needs to decide whether
-  // to skip itself, not re-implement that logic.
+  // REAL BUG FIX, confirmed via a real reproduction: this used to
+  // unconditionally send EVERY role to /dialer here, on the assumption
+  // ("DialerPage's own mount logic already handles... so sending
+  // everyone there is safe regardless") that predates DialerPage.jsx
+  // later being restricted to only agent/supervisor/training_quality.
+  // For any OTHER role, that assumption became actively wrong:
+  // DialerPage.jsx bounces them straight back to "/" with a fresh
+  // <Navigate> (no justLoggedIn state on that bounce-back), which
+  // immediately re-triggered THIS effect, which sent them back to
+  // /dialer again — a genuine, confirmed infinite redirect loop,
+  // reproduced live with an account_manager login, that Chrome's own
+  // navigation-throttling protection eventually flooded the console
+  // over ("Throttling navigation to prevent the browser from
+  // hanging").
   //
-  // A session that was genuinely killed (past the reconnect window)
-  // forces a real login through LoginPage again either way, which DOES
-  // set justLoggedIn — so this content correctly still shows in
-  // exactly that one case, matching the "only after the window passed"
-  // requirement.
+  // Fixed by making this redirect role-aware, per explicit request:
+  //   - agent/supervisor -> /dialer (they actively work campaigns —
+  //     the dialer IS their default landing spot)
+  //   - training_quality -> /live-status ("Agent Status" — lands here
+  //     by default even though, per CampaignSelectPage.jsx's own new
+  //     role guard below, they CAN still navigate to /dialer and
+  //     select campaigns to work when needed; this only decides where
+  //     they land automatically on login, not what they're allowed to
+  //     do)
+  //   - admin/wfm -> /admin
+  //   - everyone else (account_manager, and any future role not yet
+  //     covered above) -> /live-status (matches
+  //     LiveStatusDashboard.jsx's own allow-list, which already
+  //     explicitly includes account_manager)
   useEffect(() => {
-    if (!location.state?.justLoggedIn) {
+    if (location.state?.justLoggedIn) return;
+    if (!agent) return;
+
+    if (["agent", "supervisor"].includes(agent.accessLevel)) {
       navigate("/dialer", { replace: true });
+    } else if (["admin", "wfm"].includes(agent.accessLevel)) {
+      navigate("/admin", { replace: true });
+    } else {
+      // training_quality, account_manager, and anything else not
+      // covered above.
+      navigate("/live-status", { replace: true });
     }
-  }, [location.state, navigate]);
+  }, [location.state, agent, navigate]);
 
   if (!location.state?.justLoggedIn) {
     return null; // redirecting — nothing to render

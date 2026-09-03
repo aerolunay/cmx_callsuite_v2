@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, Navigate } from "react-router-dom";
 import Header from "../components/Header";
 import { useAuth } from "../context/AuthContext";
 import { api } from "../api";
@@ -150,6 +150,24 @@ export default function CampaignSelectPage() {
   function handleContinue() {
     if (selectedIds.length === 0) return;
     finishSelection(campaigns, selectedIds);
+  }
+
+  // NEW — per explicit request: only agent/supervisor/training_quality
+  // ever work a campaign at all, so only they should ever land here.
+  // Matches DialerPage.jsx's own exact role restriction (the two pages
+  // exist as a pair — there's no reason to let someone select a
+  // campaign to work if they can't actually reach the dialer to work
+  // it). Redirects everyone else the same way LandingPage.jsx's own
+  // post-login redirect does, so there's no risk of a second bounce-
+  // back loop: admin/wfm -> /admin, everyone else (account_manager) ->
+  // /live-status. Placed after all hooks above (React rules — hooks
+  // must run unconditionally every render), same pattern already used
+  // in DialerPage.jsx/LiveStatusDashboard.jsx for their own guards.
+  if (agent && !["agent", "supervisor", "training_quality"].includes(agent.accessLevel)) {
+    if (["admin", "wfm"].includes(agent.accessLevel)) {
+      return <Navigate to="/admin" replace />;
+    }
+    return <Navigate to="/live-status" replace />;
   }
 
   return (

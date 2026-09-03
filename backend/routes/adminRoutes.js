@@ -914,6 +914,20 @@ AFTER_CALL_WORK/ON_HOLD — NOT_READY/READY/AD_HOC/LUNCH_BREAK/
 BIO_BREAK/ADMIN/MEETING/TRAINING have no call to tag
 at all, so filtering by that column would hide those agents entirely
 under any specific campaign filter). "All Campaigns" (no campaignId)
+
+REAL BUG FIX, per explicit request — this list previously excluded
+only 'admin', letting account_manager and wfm rows show up here
+despite neither role ever making or receiving a call at all (confirmed
+directly: no dialer/call-placing route in this app restricts by role
+in any way, but account_manager/wfm are never even given access to
+DialerPage.jsx or CampaignSelectPage.jsx's UI in the first place — see
+their own role guards — so they'd never realistically show anything
+but LOGGED_OUT/NOT_READY here regardless). training_quality
+deliberately STAYS visible — confirmed it genuinely can make/receive
+calls today (DialerPage.jsx and CampaignSelectPage.jsx both explicitly
+include it alongside agent/supervisor, and no backend route blocks it
+either), so it's a real potential call-handler worth monitoring here,
+not just noise to hide.
 shows every active agent regardless of assignment.
 ==================================================
 */
@@ -959,7 +973,7 @@ router.get(
           GROUP BY app_user_id
         ) working ON working.app_user_id = au.app_user_id
         WHERE au.active = 1
-          AND au.access_level != 'admin'
+          AND au.access_level NOT IN ('admin', 'account_manager', 'wfm')
           AND (
             ? IS NULL OR EXISTS (
               SELECT 1 FROM cmx_dialer.agent_campaign_assignments aca
