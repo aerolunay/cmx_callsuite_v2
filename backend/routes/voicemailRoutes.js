@@ -34,7 +34,18 @@ of which were asked for here.
 ==================================================
 */
 const VOICEMAIL_ROLES = ["supervisor", "account_manager", "training_quality", "admin"];
-const VOICEMAIL_UNRESTRICTED_ROLES = ["admin"];
+// wfm ADDED — per explicit request, WFM can now view the Live Status
+// Dashboard's own Voicemails card (see the manual role check on
+// GET /voicemails below, which is the ONLY route wfm can actually
+// reach — every other voicemail route below still uses
+// requireRoles(...VOICEMAIL_ROLES), unchanged, which never included
+// wfm and still doesn't). Adding wfm here gives it the SAME
+// unrestricted, all-campaign treatment admin already gets — matches
+// how wfm is already treated everywhere else in this app (e.g.
+// LiveStatusDashboard.jsx's own isUnrestrictedCampaignAccess check) —
+// rather than requiring wfm to have individual
+// agent_campaign_assignments rows, which it was never meant to need.
+const VOICEMAIL_UNRESTRICTED_ROLES = ["admin", "wfm"];
 
 async function requireVoicemailCampaignAccess(req, res, next) {
   const { accessLevel, appUserId } = req.session.agent;
@@ -125,7 +136,30 @@ frontend calls the dedicated playback-url route below, on demand, only
 when a row's Play button is actually clicked.
 ==================================================
 */
-router.get("/voicemails", requireRoles(...VOICEMAIL_ROLES), requireVoicemailCampaignAccess, async (req, res) => {
+router.get(
+  "/voicemails",
+  (req, res, next) => {
+    const { accessLevel } = req.session.agent;
+    const { window } = req.query;
+    // Manual role check, REPLACING requireRoles(...VOICEMAIL_ROLES)
+    // directly on this ONE route — per explicit request, wfm can view
+    // the Live Dashboard's own dashboard-scoped voicemail card
+    // (?window=dashboard), but gains no access to anything else
+    // voicemail-related: the standalone VoicemailsPage.jsx never sends
+    // that flag at all, so its own request pattern is still fully
+    // blocked for wfm here, and every OTHER voicemail route below
+    // (playback-url, download-url, single-record fetch, the new
+    // status-update route) still uses the completely untouched
+    // requireRoles(...VOICEMAIL_ROLES) check, which never included wfm
+    // and still doesn't.
+    const isWfmDashboardRequest = accessLevel === "wfm" && window === "dashboard";
+    if (!VOICEMAIL_ROLES.includes(accessLevel) && !isWfmDashboardRequest) {
+      return res.status(403).json({ success: false, message: "Access denied for this role." });
+    }
+    return next();
+  },
+  requireVoicemailCampaignAccess,
+  async (req, res) => {
   try {
     const { startDate, endDate, campaignId, window } = req.query;
 
@@ -164,7 +198,7 @@ router.get("/voicemails", requireRoles(...VOICEMAIL_ROLES), requireVoicemailCamp
       `
         SELECT
           vl.voicemail_log_id, vl.campaign_id, c.campaign_name, vl.caller_id_number,
-          vl.call_started_at, vl.left_at, vl.duration_seconds, vl.recording_key,
+          vl.call_started_at, vl.left_at, vl.duration_seconds, vl.recording_key, vl.status,
           vl.is_after_hours, vl.reviewed, vl.reviewed_by, vl.reviewed_at, vl.created_at
         FROM cmx_dialer.voicemail_log vl
         LEFT JOIN asterisk.vicidial_campaigns c ON c.campaign_id = vl.campaign_id
@@ -255,6 +289,62 @@ router.get("/voicemails/:voicemailLogId/playback-url", requireRoles(...VOICEMAIL
   } catch (error) {
     console.error(`GET /api/voicemails/${req.params.voicemailLogId}/playback-url failed:`, error);
     return res.status(500).json({ success: false, message: "Failed to generate playback URL." });
+  }
+});
+
+/*
+==================================================
+PATCH /api/voicemails/:voicemailLogId/status
+==================================================
+NEW — per explicit request: show (and let supervisor/account_manager/
+training_quality/admin actually update) whether a voicemail's been
+attended to, directly from this standalone page AND the Live Status
+Dashboard's own Voicemails card. This is the SAME New/Resolved/
+Unreachable/Left VM status already tracked via dialerRoutes.js's own
+agent-facing PATCH /dialer/voicemail/:id/status (DialerPage's
+Abandoned & Voicemail tab) — same column, same allowed values — just
+a second, separately-scoped route for these non-agent roles, using
+THIS file's own existing checkVoicemailOwnership helper (campaign-
+scoped for supervisor/account_manager/training_quality, unrestricted
+for admin) instead of dialerRoutes.js's agent-assignment-based check,
+which doesn't apply to these roles at all.
+
+Deliberately uses the UNCHANGED requireRoles(...VOICEMAIL_ROLES) here
+— wfm does NOT get this. Per explicit request, wfm can only VIEW the
+dashboard's voicemail card; updating status is a step further than
+"view calls," so it stays out of scope for wfm specifically.
+==================================================
+*/
+const VOICEMAIL_STATUSES = ["NEW", "RESOLVED", "UNREACHABLE", "LEFT_VM"];
+
+router.patch("/voicemails/:voicemailLogId/status", requireRoles(...VOICEMAIL_ROLES), async (req, res) => {
+  try {
+    const { voicemailLogId } = req.params;
+    const { status } = req.body;
+
+    if (!VOICEMAIL_STATUSES.includes(status)) {
+      return res.status(400).json({ success: false, message: `status must be one of: ${VOICEMAIL_STATUSES.join(", ")}.` });
+    }
+
+    const [rows] = await db.execute(`SELECT campaign_id FROM cmx_dialer.voicemail_log WHERE voicemail_log_id = ?`, [
+      voicemailLogId,
+    ]);
+    if (!rows.length) {
+      return res.status(404).json({ success: false, message: "Voicemail not found." });
+    }
+
+    const ok = await checkVoicemailOwnership(req, res, rows[0].campaign_id);
+    if (!ok) return; // response already sent by checkVoicemailOwnership
+
+    await db.execute(`UPDATE cmx_dialer.voicemail_log SET status = ? WHERE voicemail_log_id = ?`, [
+      status,
+      voicemailLogId,
+    ]);
+
+    return res.json({ success: true, status });
+  } catch (error) {
+    console.error(`PATCH /api/voicemails/${req.params.voicemailLogId}/status failed:`, error);
+    return res.status(500).json({ success: false, message: "Failed to update voicemail status." });
   }
 });
 

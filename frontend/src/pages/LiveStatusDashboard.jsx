@@ -51,15 +51,26 @@ const STATE_LABELS = {
 
 const DIRECTION_LABELS = { inbound: "Inbound", outbound: "Outbound" };
 
-// Voicemails card — deliberately a NARROWER role set than this whole
-// page's own access (supervisor/training_quality/account_manager/wfm/
-// admin). Per explicit request, wfm has no voicemail access at all
-// ("WFM is just call queue monitoring") — same VOICEMAIL_ROLES set
-// voicemailRoutes.js/VoicemailsPage.jsx already enforce server-side.
-// Gated here too so wfm's dashboard simply never attempts the fetch
-// (and never shows the card) rather than firing a request that's
-// certain to 403.
-const VOICEMAIL_ROLES = ["supervisor", "account_manager", "training_quality", "admin"];
+// Voicemails card — per explicit request, wfm NOW gets access here
+// too (previously excluded entirely — "WFM is just call queue
+// monitoring" — but that's been revised: wfm can view this card, just
+// not the standalone VoicemailsPage.jsx at all, and can't update a
+// voicemail's status either — see voicemailRoutes.js's own manual
+// role check on GET /voicemails, which enforces this exact split
+// server-side: wfm is only ever let through for THIS dashboard-scoped
+// request pattern, never for the standalone page's own request shape).
+const VOICEMAIL_ROLES = ["supervisor", "account_manager", "training_quality", "wfm", "admin"];
+// Separate, NARROWER set — who can actually change a voicemail's
+// status from this card, as opposed to just viewing it. wfm
+// deliberately excluded here even though it's now in VOICEMAIL_ROLES
+// above.
+const VOICEMAIL_STATUS_EDIT_ROLES = ["supervisor", "account_manager", "training_quality", "admin"];
+const VOICEMAIL_STATUS_OPTIONS = [
+  { value: "NEW", label: "New" },
+  { value: "RESOLVED", label: "Resolved" },
+  { value: "UNREACHABLE", label: "Unreachable" },
+  { value: "LEFT_VM", label: "Left VM" },
+];
 
 const REFRESH_INTERVAL_MS = 5000;
 
@@ -87,6 +98,11 @@ export default function LiveStatusDashboard() {
   const [totalCalls, setTotalCalls] = useState([]);
   const [summary, setSummary] = useState(null);
   const [voicemails, setVoicemails] = useState([]);
+  // Per explicit request — tracks whether a voicemail's been attended
+  // to, directly from this card. Keyed by voicemail_log_id so only the
+  // one row's dropdown shows "Saving…" while its own update is in
+  // flight.
+  const [savingVoicemailStatusId, setSavingVoicemailStatusId] = useState(null);
   const [error, setError] = useState("");
   const [kickingId, setKickingId] = useState(null);
   const [priorityUpdatingId, setPriorityUpdatingId] = useState(null);
@@ -162,11 +178,15 @@ export default function LiveStatusDashboard() {
       api.getReportingSummary(campaignId || undefined),
     ];
     // Voicemails — only fetched for roles that actually have access
-    // (see VOICEMAIL_ROLES above); wfm would just get a guaranteed 403
-    // from the backend otherwise. campaignId is required for every
+    // (see VOICEMAIL_ROLES above). campaignId is required for every
     // scoped role here (supervisor/account_manager/training_quality) —
     // already guaranteed non-blank by the earlier per-role campaign
-    // auto-select effect before this ever runs.
+    // auto-select effect before this ever runs. wfm is unrestricted
+    // (matches admin/wfm's existing all-campaign treatment everywhere
+    // else in this app) — see voicemailRoutes.js's own manual role
+    // check on GET /voicemails, which only ever lets wfm through for
+    // THIS dashboard-scoped request (window=dashboard below), never
+    // for the standalone VoicemailsPage.jsx's own request shape.
     //
     // window=dashboard — per explicit request: this card only ever
     // shows "5 PM yesterday through now" (see
@@ -191,6 +211,32 @@ export default function LiveStatusDashboard() {
       })
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
+  }
+
+  // Per explicit request — updates immediately reflect in the
+  // dropdown itself (optimistic-ish: only reverts on a genuine
+  // failure) rather than needing a full reload just to see the change
+  // take. Not reachable by wfm at all — VOICEMAIL_STATUS_EDIT_ROLES
+  // gates the dropdown itself from ever rendering for that role (see
+  // the table below), so this only ever fires for a role the backend
+  // already allows too.
+  async function handleVoicemailStatusChange(voicemail, newStatus) {
+    const previousStatus = voicemail.status;
+    setVoicemails((prev) =>
+      prev.map((v) => (v.voicemail_log_id === voicemail.voicemail_log_id ? { ...v, status: newStatus } : v))
+    );
+    setSavingVoicemailStatusId(voicemail.voicemail_log_id);
+    setError("");
+    try {
+      await api.updateVoicemailStatusAsSupervisor(voicemail.voicemail_log_id, newStatus);
+    } catch (err) {
+      setError(err.message);
+      setVoicemails((prev) =>
+        prev.map((v) => (v.voicemail_log_id === voicemail.voicemail_log_id ? { ...v, status: previousStatus } : v))
+      );
+    } finally {
+      setSavingVoicemailStatusId(null);
+    }
   }
 
   async function handleKickAgent(agentRow) {
@@ -808,12 +854,13 @@ export default function LiveStatusDashboard() {
                         <th>Caller</th>
                         <th>Left At</th>
                         <th>When</th>
+                        <th>Status</th>
                       </tr>
                     </thead>
                     <tbody>
                       {voicemails.length === 0 ? (
                         <tr>
-                          <td colSpan={4} style={{ color: "#888" }}>
+                          <td colSpan={5} style={{ color: "#888" }}>
                             No voicemails today.
                           </td>
                         </tr>
@@ -824,6 +871,25 @@ export default function LiveStatusDashboard() {
                             <td>{v.caller_id_number || "Unknown"}</td>
                             <td>{formatDate(v.left_at)}</td>
                             <td>{v.is_after_hours === "Y" ? "After Hours" : "Business Hours"}</td>
+                            <td>
+                              {VOICEMAIL_STATUS_EDIT_ROLES.includes(agent.accessLevel) ? (
+                                <select
+                                  value={v.status || "NEW"}
+                                  disabled={savingVoicemailStatusId === v.voicemail_log_id}
+                                  onChange={(e) => handleVoicemailStatusChange(v, e.target.value)}
+                                >
+                                  {VOICEMAIL_STATUS_OPTIONS.map((opt) => (
+                                    <option key={opt.value} value={opt.value}>
+                                      {opt.label}
+                                    </option>
+                                  ))}
+                                </select>
+                              ) : (
+                                // wfm — view only, per explicit request.
+                                VOICEMAIL_STATUS_OPTIONS.find((opt) => opt.value === (v.status || "NEW"))?.label ||
+                                v.status
+                              )}
+                            </td>
                           </tr>
                         ))
                       )}

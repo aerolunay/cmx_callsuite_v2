@@ -259,6 +259,17 @@ export const api = {
     request(`/voicemails/${encodeURIComponent(voicemailLogId)}/playback-url`),
   getVoicemailDownloadUrl: (voicemailLogId) =>
     request(`/voicemails/${encodeURIComponent(voicemailLogId)}/download-url`),
+  // NEW — admin-scoped voicemail status update (Live Dashboard's own
+  // card + the standalone VoicemailsPage.jsx). Distinct from the
+  // agent-facing updateVoicemailStatus above — hits voicemailRoutes.js
+  // (campaign-ownership-scoped) rather than dialerRoutes.js (agent-
+  // assignment-scoped), since these roles aren't "agents assigned to
+  // a campaign" in that sense.
+  updateVoicemailStatusAsSupervisor: (voicemailLogId, status) =>
+    request(`/voicemails/${encodeURIComponent(voicemailLogId)}/status`, {
+      method: "PATCH",
+      body: JSON.stringify({ status }),
+    }),
 
   // Outbound Auto-Dial, Phase 1 — lead upload, DNC management, and
   // per-campaign autodial rules. Template downloads are plain GET
