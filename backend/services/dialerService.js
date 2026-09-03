@@ -1190,6 +1190,14 @@ const DISPOSITION_TO_VICIDIAL_STATUS = {
   // required for THIS app's own logic to work (it never queries that
   // table for validation — everything here is this hardcoded map).
   SCREENING_COMPLETED: "SCRN",
+  // Per explicit request — same reasoning as SCREENING_COMPLETED right
+  // above: no real ViciDial-native equivalent, so a new, dedicated
+  // status code rather than reusing an unrelated existing one. Same
+  // caveat applies too — asterisk.vicidial_statuses doesn't have a
+  // corresponding row for this either, but that table is never
+  // queried for validation here, so it's not required for this app's
+  // own logic to work.
+  NOT_ELIGIBLE: "NOTELIG",
 };
 
 async function saveDisposition({
