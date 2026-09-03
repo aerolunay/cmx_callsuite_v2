@@ -574,31 +574,58 @@ export default function LiveStatusDashboard() {
                               {a.elapsedSeconds !== null ? formatDurationHMS(a.elapsedSeconds) : "—"}
                             </td>
                             <td>
-                              {/* "Set Prio" — real-time, per explicit
-                                  request. TODO: gate this to
-                                  admin/WFM once the WFM role exists —
-                                  currently this whole page is
-                                  admin-only already (see the
-                                  accessLevel Navigate guard above), so
-                                  no separate check is needed yet. */}
-                              <select
-                                value={a.priority ?? 1}
-                                disabled={priorityUpdatingId === a.appUserId}
-                                onChange={(e) => handleSetPriority(a, e.target.value)}
-                                style={{ fontSize: 13 }}
-                              >
-                                <option value={1}>1</option>
-                                <option value={2}>2</option>
-                                <option value={3}>3</option>
-                                <option value={4}>4</option>
-                              </select>
+                              {/* REAL BUG FOUND AND FIXED, per final
+                                  review: the comment this replaced was
+                                  stale — it assumed this whole page
+                                  was still admin-only, but it's since
+                                  opened up to supervisor/
+                                  training_quality/account_manager/wfm/
+                                  admin. The backend action this hits
+                                  (PATCH /users/:id/priority) is gated
+                                  by requireAdmin (admin/wfm only,
+                                  confirmed directly) — meaning
+                                  supervisor/training_quality/
+                                  account_manager could see and click
+                                  an interactive control that would
+                                  always fail with a 403. Now matches
+                                  the Kick action right below, which
+                                  already correctly followed this same
+                                  "never show an action that would just
+                                  fail" principle. */}
+                              {["admin", "wfm"].includes(agent?.accessLevel) ? (
+                                <select
+                                  value={a.priority ?? 1}
+                                  disabled={priorityUpdatingId === a.appUserId}
+                                  onChange={(e) => handleSetPriority(a, e.target.value)}
+                                  style={{ fontSize: 13 }}
+                                >
+                                  <option value={1}>1</option>
+                                  <option value={2}>2</option>
+                                  <option value={3}>3</option>
+                                  <option value={4}>4</option>
+                                </select>
+                              ) : (
+                                a.priority ?? 1
+                              )}
                             </td>
                             <td>
-                              {/* Matches the backend's own restriction
-                                  exactly (POST /users/:id/kick's
-                                  KICKABLE_STATUSES) — never shows an
-                                  action that would just fail. */}
-                              {["NOT_READY", "LUNCH_BREAK", "BIO_BREAK", "ADMIN", "MEETING", "TRAINING"].includes(
+                              {/* REAL BUG FOUND AND FIXED, per final
+                                  review, same class of issue as Set
+                                  Prio right above: this only ever
+                                  checked the TARGET agent's status
+                                  (KICKABLE_STATUSES), never the
+                                  VIEWER's own role — but the backend
+                                  action (POST /users/:id/kick) is ALSO
+                                  gated by requireAdmin (admin/wfm
+                                  only, confirmed directly). Silent
+                                  Listen right below this was already
+                                  correctly gated to its own real
+                                  backend restriction
+                                  (training_quality/supervisor/admin) —
+                                  this one and Set Prio above were the
+                                  two that weren't. */}
+                              {["admin", "wfm"].includes(agent?.accessLevel) &&
+                                ["NOT_READY", "LUNCH_BREAK", "BIO_BREAK", "ADMIN", "MEETING", "TRAINING"].includes(
                                 a.status
                               ) && (
                                 <button
