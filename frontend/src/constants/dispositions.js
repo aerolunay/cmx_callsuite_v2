@@ -29,6 +29,7 @@ inbound/outbound for anywhere disposition values get aggregated later.
 */
 export const BSMSC_OUTBOUND_DISPOSITIONS = [
   { value: "SCREENING_COMPLETED", label: "Screening Completed" },
+  { value: "NOT_ELIGIBLE", label: "Not Eligible" },
   ...DISPOSITIONS,
 ];
 
