@@ -1198,6 +1198,19 @@ const DISPOSITION_TO_VICIDIAL_STATUS = {
   // queried for validation here, so it's not required for this app's
   // own logic to work.
   NOT_ELIGIBLE: "NOTELIG",
+  // REAL BUG FOUND AND FIXED, per final review: XFER_CONF has always
+  // been part of the base outbound DISPOSITIONS list on the frontend
+  // (dispositions.js) — offered to agents on every single campaign —
+  // but had no entry here at all, meaning selecting "Transferred Call
+  // / Conference Call" as a disposition would throw "Unknown
+  // disposition code: XFER_CONF" and fail to save, exactly the same
+  // class of bug found earlier for NOT_ELIGIBLE. Pre-existing, not
+  // introduced by tonight's own work — just never caught until this
+  // review compared the frontend's full disposition value set against
+  // this map's own keys directly. Same reasoning as the other two
+  // custom codes above: no real ViciDial-native equivalent, so a
+  // dedicated new status code rather than reusing an unrelated one.
+  XFER_CONF: "XFERCONF",
 };
 
 async function saveDisposition({
