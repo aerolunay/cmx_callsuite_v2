@@ -1227,8 +1227,8 @@ router.put("/users/:appUserId", requireAdmin, async (req, res) => {
   }
 
   const resolvedPriority = priority ? Number(priority) : 1;
-  if (![1, 2, 3].includes(resolvedPriority)) {
-    return res.status(400).json({ success: false, message: "priority must be 1, 2, or 3." });
+  if (![1, 2, 3, 4].includes(resolvedPriority)) {
+    return res.status(400).json({ success: false, message: "priority must be 1, 2, 3, or 4." });
   }
 
   const connection = await db.getConnection();
