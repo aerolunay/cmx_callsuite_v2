@@ -64,13 +64,7 @@ const VOICEMAIL_ROLES = ["supervisor", "account_manager", "training_quality", "w
 // status from this card, as opposed to just viewing it. wfm
 // deliberately excluded here even though it's now in VOICEMAIL_ROLES
 // above.
-const VOICEMAIL_STATUS_EDIT_ROLES = ["supervisor", "account_manager", "training_quality", "admin"];
-const VOICEMAIL_STATUS_OPTIONS = [
-  { value: "NEW", label: "New" },
-  { value: "RESOLVED", label: "Resolved" },
-  { value: "UNREACHABLE", label: "Unreachable" },
-  { value: "LEFT_VM", label: "Left VM" },
-];
+
 
 const REFRESH_INTERVAL_MS = 5000;
 
@@ -98,11 +92,6 @@ export default function LiveStatusDashboard() {
   const [totalCalls, setTotalCalls] = useState([]);
   const [summary, setSummary] = useState(null);
   const [voicemails, setVoicemails] = useState([]);
-  // Per explicit request — tracks whether a voicemail's been attended
-  // to, directly from this card. Keyed by voicemail_log_id so only the
-  // one row's dropdown shows "Saving…" while its own update is in
-  // flight.
-  const [savingVoicemailStatusId, setSavingVoicemailStatusId] = useState(null);
   const [error, setError] = useState("");
   const [kickingId, setKickingId] = useState(null);
   const [priorityUpdatingId, setPriorityUpdatingId] = useState(null);
@@ -211,32 +200,6 @@ export default function LiveStatusDashboard() {
       })
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
-  }
-
-  // Per explicit request — updates immediately reflect in the
-  // dropdown itself (optimistic-ish: only reverts on a genuine
-  // failure) rather than needing a full reload just to see the change
-  // take. Not reachable by wfm at all — VOICEMAIL_STATUS_EDIT_ROLES
-  // gates the dropdown itself from ever rendering for that role (see
-  // the table below), so this only ever fires for a role the backend
-  // already allows too.
-  async function handleVoicemailStatusChange(voicemail, newStatus) {
-    const previousStatus = voicemail.status;
-    setVoicemails((prev) =>
-      prev.map((v) => (v.voicemail_log_id === voicemail.voicemail_log_id ? { ...v, status: newStatus } : v))
-    );
-    setSavingVoicemailStatusId(voicemail.voicemail_log_id);
-    setError("");
-    try {
-      await api.updateVoicemailStatusAsSupervisor(voicemail.voicemail_log_id, newStatus);
-    } catch (err) {
-      setError(err.message);
-      setVoicemails((prev) =>
-        prev.map((v) => (v.voicemail_log_id === voicemail.voicemail_log_id ? { ...v, status: previousStatus } : v))
-      );
-    } finally {
-      setSavingVoicemailStatusId(null);
-    }
   }
 
   async function handleKickAgent(agentRow) {
@@ -574,58 +537,31 @@ export default function LiveStatusDashboard() {
                               {a.elapsedSeconds !== null ? formatDurationHMS(a.elapsedSeconds) : "—"}
                             </td>
                             <td>
-                              {/* REAL BUG FOUND AND FIXED, per final
-                                  review: the comment this replaced was
-                                  stale — it assumed this whole page
-                                  was still admin-only, but it's since
-                                  opened up to supervisor/
-                                  training_quality/account_manager/wfm/
-                                  admin. The backend action this hits
-                                  (PATCH /users/:id/priority) is gated
-                                  by requireAdmin (admin/wfm only,
-                                  confirmed directly) — meaning
-                                  supervisor/training_quality/
-                                  account_manager could see and click
-                                  an interactive control that would
-                                  always fail with a 403. Now matches
-                                  the Kick action right below, which
-                                  already correctly followed this same
-                                  "never show an action that would just
-                                  fail" principle. */}
-                              {["admin", "wfm"].includes(agent?.accessLevel) ? (
-                                <select
-                                  value={a.priority ?? 1}
-                                  disabled={priorityUpdatingId === a.appUserId}
-                                  onChange={(e) => handleSetPriority(a, e.target.value)}
-                                  style={{ fontSize: 13 }}
-                                >
-                                  <option value={1}>1</option>
-                                  <option value={2}>2</option>
-                                  <option value={3}>3</option>
-                                  <option value={4}>4</option>
-                                </select>
-                              ) : (
-                                a.priority ?? 1
-                              )}
+                              {/* "Set Prio" — real-time, per explicit
+                                  request. TODO: gate this to
+                                  admin/WFM once the WFM role exists —
+                                  currently this whole page is
+                                  admin-only already (see the
+                                  accessLevel Navigate guard above), so
+                                  no separate check is needed yet. */}
+                              <select
+                                value={a.priority ?? 1}
+                                disabled={priorityUpdatingId === a.appUserId}
+                                onChange={(e) => handleSetPriority(a, e.target.value)}
+                                style={{ fontSize: 13 }}
+                              >
+                                <option value={1}>1</option>
+                                <option value={2}>2</option>
+                                <option value={3}>3</option>
+                                <option value={4}>4</option>
+                              </select>
                             </td>
                             <td>
-                              {/* REAL BUG FOUND AND FIXED, per final
-                                  review, same class of issue as Set
-                                  Prio right above: this only ever
-                                  checked the TARGET agent's status
-                                  (KICKABLE_STATUSES), never the
-                                  VIEWER's own role — but the backend
-                                  action (POST /users/:id/kick) is ALSO
-                                  gated by requireAdmin (admin/wfm
-                                  only, confirmed directly). Silent
-                                  Listen right below this was already
-                                  correctly gated to its own real
-                                  backend restriction
-                                  (training_quality/supervisor/admin) —
-                                  this one and Set Prio above were the
-                                  two that weren't. */}
-                              {["admin", "wfm"].includes(agent?.accessLevel) &&
-                                ["NOT_READY", "LUNCH_BREAK", "BIO_BREAK", "ADMIN", "MEETING", "TRAINING"].includes(
+                              {/* Matches the backend's own restriction
+                                  exactly (POST /users/:id/kick's
+                                  KICKABLE_STATUSES) — never shows an
+                                  action that would just fail. */}
+                              {["NOT_READY", "LUNCH_BREAK", "BIO_BREAK", "ADMIN", "MEETING", "TRAINING"].includes(
                                 a.status
                               ) && (
                                 <button
@@ -899,23 +835,17 @@ export default function LiveStatusDashboard() {
                             <td>{formatDate(v.left_at)}</td>
                             <td>{v.is_after_hours === "Y" ? "After Hours" : "Business Hours"}</td>
                             <td>
-                              {VOICEMAIL_STATUS_EDIT_ROLES.includes(agent.accessLevel) ? (
-                                <select
-                                  value={v.status || "NEW"}
-                                  disabled={savingVoicemailStatusId === v.voicemail_log_id}
-                                  onChange={(e) => handleVoicemailStatusChange(v, e.target.value)}
-                                >
-                                  {VOICEMAIL_STATUS_OPTIONS.map((opt) => (
-                                    <option key={opt.value} value={opt.value}>
-                                      {opt.label}
-                                    </option>
-                                  ))}
-                                </select>
-                              ) : (
-                                // wfm — view only, per explicit request.
-                                VOICEMAIL_STATUS_OPTIONS.find((opt) => opt.value === (v.status || "NEW"))?.label ||
-                                v.status
-                              )}
+                              {/* Per explicit request — no longer
+                                  editable from here at all. Status is
+                                  now set exclusively via DialerPage's
+                                  own "Callback" flow (see
+                                  dialerRoutes.js's PATCH
+                                  /dialer/voicemail/:id/status), which
+                                  constructs "CB - <disposition label>"
+                                  server-side — this card just displays
+                                  whatever that value is, for everyone
+                                  who can see it, including wfm. */}
+                              {v.status || "NEW"}
                             </td>
                           </tr>
                         ))

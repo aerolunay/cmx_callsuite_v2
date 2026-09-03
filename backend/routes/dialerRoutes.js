@@ -1128,10 +1128,21 @@ router.get("/dialer/abandoned-voicemail", requireAuth, async (req, res) => {
         ? await statsService.getEasternRangeBoundsForServerClock(startDate, endDate)
         : await statsService.getEasternDayBoundsForServerClock();
 
+    // NEW — per explicit request: only status = 'NEW' rows are ever
+    // shown on this agent-facing tab now. An agent clicks "Callback",
+    // picks a disposition, and the row's status becomes
+    // "CB - <disposition label>" — at that point it's no longer 'NEW'
+    // and correctly disappears from here, both immediately (the
+    // frontend removes it from local state right after a successful
+    // save) and on any later reload (this WHERE clause). Admin-facing
+    // surfaces (Live Dashboard, VoicemailsPage.jsx) are completely
+    // unaffected — they call a different route entirely and still see
+    // every status.
     const abandoned = await inboundCallService.getAbandonedCallsToday(
       campaignScope,
       startDate || undefined,
-      endDate || undefined
+      endDate || undefined,
+      "NEW"
     );
 
     const placeholders = campaignScope.map(() => "?").join(",");
@@ -1142,7 +1153,7 @@ router.get("/dialer/abandoned-voicemail", requireAuth, async (req, res) => {
           vl.call_started_at, vl.left_at, vl.duration_seconds, vl.recording_key, vl.is_after_hours, vl.status
         FROM cmx_dialer.voicemail_log vl
         LEFT JOIN asterisk.vicidial_campaigns c ON c.campaign_id = vl.campaign_id
-        WHERE vl.left_at >= ? AND vl.left_at <= ? AND vl.campaign_id IN (${placeholders})
+        WHERE vl.left_at >= ? AND vl.left_at <= ? AND vl.campaign_id IN (${placeholders}) AND vl.status = 'NEW'
         ORDER BY vl.left_at DESC
         LIMIT 200
       `,
@@ -1152,11 +1163,13 @@ router.get("/dialer/abandoned-voicemail", requireAuth, async (req, res) => {
     const combined = [
       ...abandoned.map((a) => ({
         type: "abandoned",
+        abandonedCallLogId: a.abandonedCallLogId,
         campaignId: a.campaignId,
         campaignName: a.campaignName,
         callerIdNumber: a.callerIdNumber,
         timestamp: a.callStartedAt,
         waitSeconds: a.waitSeconds,
+        status: a.status,
       })),
       ...voicemailRows.map((v) => ({
         type: "voicemail",
@@ -1224,25 +1237,46 @@ router.get("/dialer/voicemail/:voicemailLogId/playback-url", requireAuth, async 
 ==================================================
 PATCH /api/dialer/voicemail/:voicemailLogId/status
 ==================================================
-NEW — per explicit request: track whether a voicemail has been
-attended to. Defaults to NEW (see 008_voicemail_status.sql); an agent
-picks RESOLVED, UNREACHABLE, or LEFT_VM from the dropdown on
-DialerPage's Abandoned & Voicemail tab (AbandonedVoicemailTable.jsx).
-Same access scoping as the playback-url route right above — any
+REDESIGNED — per explicit request: no more picking a status directly
+(NEW/RESOLVED/UNREACHABLE/LEFT_VM) from a dropdown on DialerPage's
+Abandoned & Voicemail tab. Instead, an agent clicks "Callback", picks
+a real disposition, and this constructs "CB - <disposition label>" as
+the new status server-side — the frontend never sends a raw status
+string at all anymore. Once set, the row is no longer 'NEW' and
+correctly disappears from GET /dialer/abandoned-voicemail above.
+
+dispositionValue is validated against dialerService's own
+KNOWN_DISPOSITION_VALUES (the exact same set saveDisposition() already
+trusts elsewhere in this app) — never a raw, unchecked value.
+dispositionLabel is the human-readable text actually stored in the
+status column; only lightly sanitized (length-capped, trimmed) since
+it's just a display string, not something branched on anywhere.
+
+Same access scoping as the playback-url route above — any
 authenticated agent, but only for a voicemail belonging to a campaign
-they're actually assigned to.
+they're actually assigned to. Admin-facing surfaces (Live Dashboard,
+VoicemailsPage.jsx) use a COMPLETELY SEPARATE route
+(voicemailRoutes.js's own PATCH /voicemails/:id/status) which still
+accepts the original plain status values, untouched by this redesign.
 ==================================================
 */
-const VOICEMAIL_STATUSES = ["NEW", "RESOLVED", "UNREACHABLE", "LEFT_VM"];
+function buildCallbackStatus(dispositionValue, dispositionLabel) {
+  if (!dispositionValue || !dialerService.KNOWN_DISPOSITION_VALUES.includes(dispositionValue)) {
+    return null;
+  }
+  const safeLabel = String(dispositionLabel || dispositionValue).trim().slice(0, 40);
+  return `CB - ${safeLabel}`;
+}
 
 router.patch("/dialer/voicemail/:voicemailLogId/status", requireAuth, async (req, res) => {
   try {
     const { voicemailLogId } = req.params;
-    const { status } = req.body;
+    const { dispositionValue, dispositionLabel } = req.body;
     const { appUserId } = req.session.agent;
 
-    if (!VOICEMAIL_STATUSES.includes(status)) {
-      return res.status(400).json({ success: false, message: `status must be one of: ${VOICEMAIL_STATUSES.join(", ")}.` });
+    const status = buildCallbackStatus(dispositionValue, dispositionLabel);
+    if (!status) {
+      return res.status(400).json({ success: false, message: "A valid dispositionValue is required." });
     }
 
     const [rows] = await db.execute(`SELECT campaign_id FROM cmx_dialer.voicemail_log WHERE voicemail_log_id = ?`, [
@@ -1266,6 +1300,136 @@ router.patch("/dialer/voicemail/:voicemailLogId/status", requireAuth, async (req
   } catch (error) {
     console.error(`PATCH /api/dialer/voicemail/${req.params.voicemailLogId}/status failed:`, error);
     return res.status(500).json({ success: false, message: "Failed to update voicemail status." });
+  }
+});
+
+/*
+==================================================
+PATCH /api/dialer/abandoned-call/:abandonedCallLogId/status
+==================================================
+NEW — per explicit request: same "Callback" flow as the voicemail
+route right above, now available for abandoned calls too. Identical
+disposition validation and "CB - <label>" construction, identical
+per-row campaign-assignment scoping — abandoned_call_log never had a
+status column or any update route at all before this.
+==================================================
+*/
+router.patch("/dialer/abandoned-call/:abandonedCallLogId/status", requireAuth, async (req, res) => {
+  try {
+    const { abandonedCallLogId } = req.params;
+    const { dispositionValue, dispositionLabel } = req.body;
+    const { appUserId } = req.session.agent;
+
+    const status = buildCallbackStatus(dispositionValue, dispositionLabel);
+    if (!status) {
+      return res.status(400).json({ success: false, message: "A valid dispositionValue is required." });
+    }
+
+    const [rows] = await db.execute(
+      `SELECT campaign_id FROM cmx_dialer.abandoned_call_log WHERE abandoned_call_log_id = ?`,
+      [abandonedCallLogId]
+    );
+    if (!rows.length) {
+      return res.status(404).json({ success: false, message: "Abandoned call not found." });
+    }
+
+    const assignedIds = await getAssignedCampaignIds(appUserId);
+    if (!assignedIds.includes(rows[0].campaign_id)) {
+      return res.status(403).json({ success: false, message: "You are not assigned to that campaign." });
+    }
+
+    await db.execute(`UPDATE cmx_dialer.abandoned_call_log SET status = ? WHERE abandoned_call_log_id = ?`, [
+      status,
+      abandonedCallLogId,
+    ]);
+
+    return res.json({ success: true, status });
+  } catch (error) {
+    console.error(`PATCH /api/dialer/abandoned-call/${req.params.abandonedCallLogId}/status failed:`, error);
+    return res.status(500).json({ success: false, message: "Failed to update abandoned call status." });
+  }
+});
+
+/*
+==================================================
+GET /api/dialer/check-callback-pending?phoneNumber=X
+==================================================
+NEW — per explicit request: before placing a MANUAL dial (agent typed
+a number and clicked Call — never for outbound campaign/lead auto-
+dialing, which never calls this at all), DialerPage checks whether
+this exact number already has a pending (status = 'NEW') entry in
+either voicemail_log or abandoned_call_log, scoped to the agent's own
+assigned campaigns. If found, the call is blocked client-side and the
+agent is redirected to the Abandoned & Voicemail tab instead, with
+that row highlighted — the intent being "handle the existing callback
+from the log, don't place a brand new untracked call to the same
+number."
+
+Matches on the LAST 10 digits only, both sides — real-world caller ID
+values inconsistently include or omit a leading '1' (confirmed
+repeatedly elsewhere in this app's own outbound Caller ID work
+tonight), so a strict full-string match would silently miss genuine
+matches. Normalizing to the last 10 digits sidesteps that without
+needing a MySQL version-dependent regex function.
+==================================================
+*/
+router.get("/dialer/check-callback-pending", requireAuth, async (req, res) => {
+  try {
+    const { phoneNumber } = req.query;
+    const { appUserId } = req.session.agent;
+
+    if (!phoneNumber) {
+      return res.status(400).json({ success: false, message: "phoneNumber is required." });
+    }
+
+    const digitsOnly = String(phoneNumber).replace(/\D/g, "");
+    const last10 = digitsOnly.slice(-10);
+    if (last10.length < 10) {
+      return res.json({ success: true, pending: null });
+    }
+
+    const assignedIds = await getAssignedCampaignIds(appUserId);
+    if (assignedIds.length === 0) {
+      return res.json({ success: true, pending: null });
+    }
+    const placeholders = assignedIds.map(() => "?").join(",");
+
+    const [voicemailMatch] = await db.execute(
+      `
+        SELECT voicemail_log_id FROM cmx_dialer.voicemail_log
+        WHERE status = 'NEW' AND campaign_id IN (${placeholders}) AND RIGHT(caller_id_number, 10) = ?
+        ORDER BY left_at DESC
+        LIMIT 1
+      `,
+      [...assignedIds, last10]
+    );
+    if (voicemailMatch.length) {
+      return res.json({
+        success: true,
+        pending: { type: "voicemail", voicemailLogId: voicemailMatch[0].voicemail_log_id },
+      });
+    }
+
+    const [abandonedMatch] = await db.execute(
+      `
+        SELECT abandoned_call_log_id FROM cmx_dialer.abandoned_call_log
+        WHERE status = 'NEW' AND campaign_id IN (${placeholders}) AND RIGHT(caller_id_number, 10) = ?
+        ORDER BY call_started_at DESC
+        LIMIT 1
+      `,
+      [...assignedIds, last10]
+    );
+    if (abandonedMatch.length) {
+      return res.json({
+        success: true,
+        pending: { type: "abandoned", abandonedCallLogId: abandonedMatch[0].abandoned_call_log_id },
+      });
+    }
+
+    return res.json({ success: true, pending: null });
+  } catch (error) {
+    console.error("GET /api/dialer/check-callback-pending failed:", error);
+    return res.status(500).json({ success: false, message: "Failed to check pending callback." });
   }
 });
 

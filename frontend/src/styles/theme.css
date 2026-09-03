@@ -810,6 +810,26 @@ away from the screen at that exact moment.
   background: var(--cmx-gray-bg);
 }
 
+/* NEW — per explicit request: briefly draws the eye to a specific row
+   on DialerPage's Abandoned & Voicemail tab, when an agent's manual
+   dial gets blocked because that exact number already has a pending
+   callback logged here (see DialerPage.jsx's manual-dial handler and
+   AbandonedVoicemailTable.jsx's own highlightKey prop). A pulsing
+   background rather than a static one, so it's noticeable even if the
+   agent doesn't immediately look at the right spot. */
+.call-log-row-highlighted {
+  animation: cmx-row-highlight-pulse 1.6s ease-in-out 3;
+}
+
+@keyframes cmx-row-highlight-pulse {
+  0%, 100% {
+    background: transparent;
+  }
+  50% {
+    background: #fff3cd;
+  }
+}
+
 .callback-popup {
   position: fixed;
   z-index: 1000;

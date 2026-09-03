@@ -30,20 +30,6 @@ roles.
 */
 const VOICEMAIL_ROLES = ["supervisor", "account_manager", "training_quality", "admin"];
 const VOICEMAIL_UNRESTRICTED_ROLES = ["admin"];
-// Per explicit request — same New/Resolved/Unreachable/Left VM status
-// already tracked from DialerPage's Abandoned & Voicemail tab and the
-// Live Status Dashboard's own Voicemails card, now shown (and
-// editable) here too. Every role that can reach this page at all
-// (supervisor/account_manager/training_quality/admin) can update it —
-// wfm never has access to this standalone page in the first place, so
-// there's no read-only variant needed here the way the Dashboard's
-// card needs one.
-const VOICEMAIL_STATUS_OPTIONS = [
-  { value: "NEW", label: "New" },
-  { value: "RESOLVED", label: "Resolved" },
-  { value: "UNREACHABLE", label: "Unreachable" },
-  { value: "LEFT_VM", label: "Left VM" },
-];
 
 export default function VoicemailsPage() {
   const { agent } = useAuth();
@@ -61,10 +47,6 @@ export default function VoicemailsPage() {
   const [downloadingId, setDownloadingId] = useState(null);
   const [modalVoicemail, setModalVoicemail] = useState(null);
   const [modalUrl, setModalUrl] = useState(null);
-  // Per explicit request — tracks whether a voicemail's been attended
-  // to. Keyed by voicemail_log_id so only the one row's dropdown shows
-  // "Saving…" while its own update is in flight.
-  const [savingStatusId, setSavingStatusId] = useState(null);
 
   const isUnrestrictedCampaignAccess = VOICEMAIL_UNRESTRICTED_ROLES.includes(agent?.accessLevel);
 
@@ -168,29 +150,6 @@ export default function VoicemailsPage() {
     setModalUrl(null);
   }
 
-  // Per explicit request — updates immediately reflect in the
-  // dropdown itself (optimistic-ish: only reverts on a genuine
-  // failure) rather than needing a full reload just to see the change
-  // take.
-  async function handleStatusChange(voicemail, newStatus) {
-    const previousStatus = voicemail.status;
-    setVoicemails((prev) =>
-      prev.map((v) => (v.voicemail_log_id === voicemail.voicemail_log_id ? { ...v, status: newStatus } : v))
-    );
-    setSavingStatusId(voicemail.voicemail_log_id);
-    setError("");
-    try {
-      await api.updateVoicemailStatusAsSupervisor(voicemail.voicemail_log_id, newStatus);
-    } catch (err) {
-      setError(err.message);
-      setVoicemails((prev) =>
-        prev.map((v) => (v.voicemail_log_id === voicemail.voicemail_log_id ? { ...v, status: previousStatus } : v))
-      );
-    } finally {
-      setSavingStatusId(null);
-    }
-  }
-
   function formatDateTime(value) {
     if (!value) return "—";
     return new Date(value).toLocaleString(undefined, { timeZone: "America/New_York" });
@@ -263,17 +222,15 @@ export default function VoicemailsPage() {
                     <td>{v.is_after_hours === "Y" ? "After Hours" : "Business Hours"}</td>
                     <td>{v.duration_seconds != null ? formatDurationHMS(v.duration_seconds) : "—"}</td>
                     <td>
-                      <select
-                        value={v.status || "NEW"}
-                        disabled={savingStatusId === v.voicemail_log_id}
-                        onChange={(e) => handleStatusChange(v, e.target.value)}
-                      >
-                        {VOICEMAIL_STATUS_OPTIONS.map((opt) => (
-                          <option key={opt.value} value={opt.value}>
-                            {opt.label}
-                          </option>
-                        ))}
-                      </select>
+                      {/* Per explicit request — no longer editable
+                          from here. Status is set exclusively via
+                          DialerPage's "Callback" flow (see
+                          dialerRoutes.js's PATCH
+                          /dialer/voicemail/:id/status), which
+                          constructs "CB - <disposition label>"
+                          server-side — this page just displays
+                          whatever that value is. */}
+                      {v.status || "NEW"}
                     </td>
                     <td>
                       <button

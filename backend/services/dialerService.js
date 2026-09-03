@@ -1456,6 +1456,16 @@ module.exports = {
   holdCall,
   unholdCall,
   saveDisposition,
+  // NEW — exported per explicit request: the new agent-facing
+  // callback-disposition routes (see dialerRoutes.js's PATCH
+  // /dialer/voicemail/:id/status and PATCH /dialer/abandoned-call/:id/
+  // status) need a real, known list of valid disposition VALUES to
+  // validate against before constructing a "CB - <label>" status
+  // string — this map's own keys are exactly that list, already
+  // proven correct elsewhere in this file (saveDisposition's own
+  // lookup). Exporting the KEYS only, not the whole map, since nothing
+  // outside this file needs the ViciDial-status side of it.
+  KNOWN_DISPOSITION_VALUES: Object.keys(DISPOSITION_TO_VICIDIAL_STATUS),
   getCallLog,
   recordingPathForCall,
   allocateRoomSuffix,

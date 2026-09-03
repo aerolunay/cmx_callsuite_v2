@@ -122,6 +122,20 @@ export default function DialerPage() {
   // below. Per explicit request: the two live in the same container,
   // switched between rather than both always showing at once.
   const [callLogTab, setCallLogTab] = useState("callLog"); // "callLog" | "abandonedVoicemail"
+  // NEW — per explicit request: manual-dial callback blocking. When a
+  // manually-dialed number already has a pending (status = 'NEW')
+  // entry in the Abandoned & Voicemail tab, the call is blocked
+  // entirely and this holds enough info to show the explanatory modal
+  // and, once dismissed, switch to that tab with the matching row
+  // highlighted. Never checked for outbound campaign/lead dialing —
+  // only handleManualDial calls checkCallbackPending at all.
+  const [callbackBlockKey, setCallbackBlockKey] = useState(null);
+  // Separate from callbackBlockKey above — controls only the modal's
+  // own visibility. callbackBlockKey needs to stay set AFTER dismissal
+  // too (that's what actually drives AbandonedVoicemailTable's
+  // highlight), so clearing both together on dismiss would mean the
+  // highlight never actually shows.
+  const [showCallbackBlockModal, setShowCallbackBlockModal] = useState(false);
 
   const [error, setError] = useState("");
   // Per explicit request — AMD/Busy/No Answer end the call
@@ -706,7 +720,7 @@ export default function DialerPage() {
   // a small "Call from which campaign?" popup (see the JSX near the
   // bottom of this file) and defers the actual dial to
   // handleConfirmManualDialCampaign below, once the agent picks one.
-  function handleManualDial(phoneNumber) {
+  async function handleManualDial(phoneNumber) {
     if (agentStatus?.status !== "READY") {
       setError("You must be Ready to place a call.");
       return;
@@ -716,6 +730,25 @@ export default function DialerPage() {
       return;
     }
     if (pendingManualDialNumber) return; // popup already open for a previous attempt
+
+    // NEW — per explicit request: block a manual dial outright if this
+    // exact number already has a pending callback logged in Abandoned
+    // & Voicemail, rather than letting the agent place an untracked
+    // second call to the same person. Deliberately fails OPEN (lets
+    // the call through) if this check itself errors — a transient
+    // failure here shouldn't block the agent's actual job.
+    try {
+      const { pending } = await api.checkCallbackPending(phoneNumber);
+      if (pending) {
+        const key =
+          pending.type === "voicemail" ? `voicemail-${pending.voicemailLogId}` : `abandoned-${pending.abandonedCallLogId}`;
+        setCallbackBlockKey(key);
+        setShowCallbackBlockModal(true);
+        return;
+      }
+    } catch (err) {
+      console.error("checkCallbackPending failed:", err.message);
+    }
 
     if (outboundCampaign) {
       placeManualDial(outboundCampaign.campaign_id, phoneNumber);
@@ -728,6 +761,11 @@ export default function DialerPage() {
     }
 
     setError("No working campaign selected — please select a campaign first.");
+  }
+
+  function handleDismissCallbackBlock() {
+    setShowCallbackBlockModal(false);
+    setCallLogTab("abandonedVoicemail");
   }
 
   function handleConfirmManualDialCampaign(campaignId) {
@@ -1512,7 +1550,7 @@ export default function DialerPage() {
                 canCallBack={agentStatus?.status === "READY"}
               />
             ) : (
-              <AbandonedVoicemailTable campaignId={statsCampaignFilter} />
+              <AbandonedVoicemailTable campaignId={statsCampaignFilter} highlightKey={callbackBlockKey} />
             )}
           </div>
         </div>
@@ -1541,6 +1579,27 @@ export default function DialerPage() {
             ))}
             <button type="button" className="link" onClick={handleCancelManualDialCampaign}>
               Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* NEW — per explicit request: blocks a manual dial outright
+          when this exact number already has a pending callback logged
+          in Abandoned & Voicemail. Dismissing switches to that tab
+          (see handleDismissCallbackBlock) — the row itself gets
+          highlighted there via callbackBlockKey, passed down as
+          AbandonedVoicemailTable's highlightKey prop above. */}
+      {showCallbackBlockModal && (
+        <div className="modal-overlay" onClick={handleDismissCallbackBlock}>
+          <div className="modal-card" style={{ width: "min(90vw, 420px)" }} onClick={(e) => e.stopPropagation()}>
+            <h3 style={{ marginTop: 0 }}>Pending callback found</h3>
+            <p style={{ fontSize: 14, color: "#667085" }}>
+              This number already has a pending callback logged in Abandoned & Voicemail. Please initiate the
+              callback from there instead of placing a new call.
+            </p>
+            <button type="button" className="button-secondary" onClick={handleDismissCallbackBlock}>
+              Go to Abandoned &amp; Voicemail
             </button>
           </div>
         </div>

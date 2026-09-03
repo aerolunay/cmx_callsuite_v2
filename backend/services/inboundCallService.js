@@ -1216,7 +1216,7 @@ callers (admin's own GET /admin/abandoned-calls) are unaffected —
 omitting startDate/endDate still means "today," exactly as before.
 ==================================================
 */
-async function getAbandonedCallsToday(campaignId, startDate, endDate) {
+async function getAbandonedCallsToday(campaignId, startDate, endDate, statusFilter) {
   const statsService = require("./statsService");
   const { start, end } =
     startDate && endDate
@@ -1232,13 +1232,27 @@ async function getAbandonedCallsToday(campaignId, startDate, endDate) {
     params.push(...campaignIds);
   }
 
+  // NEW — optional, per explicit request: DialerPage's own Abandoned &
+  // Voicemail tab only ever wants status = 'NEW' rows (anything else
+  // has already been called back — see dialerRoutes.js's own
+  // GET /dialer/abandoned-voicemail, the only caller that passes this).
+  // Left undefined by every other caller (e.g. GET /admin/abandoned-
+  // calls), which still sees every row regardless of status, matching
+  // its existing, unchanged reporting behavior.
+  let statusClause = "";
+  if (statusFilter) {
+    statusClause = "AND acl.status = ?";
+    params.push(statusFilter);
+  }
+
   const [rows] = await db.execute(
     `
-      SELECT acl.campaign_id, c.campaign_name, acl.caller_id_number, acl.call_started_at, acl.wait_seconds
+      SELECT acl.abandoned_call_log_id, acl.campaign_id, c.campaign_name, acl.caller_id_number, acl.call_started_at, acl.wait_seconds, acl.status
       FROM cmx_dialer.abandoned_call_log acl
       LEFT JOIN asterisk.vicidial_campaigns c ON c.campaign_id = acl.campaign_id
       WHERE acl.call_started_at >= ? AND acl.call_started_at <= ?
       ${campaignFilter.replace("campaign_id", "acl.campaign_id")}
+      ${statusClause}
       ORDER BY acl.call_started_at DESC
       LIMIT 200
     `,
@@ -1246,11 +1260,13 @@ async function getAbandonedCallsToday(campaignId, startDate, endDate) {
   );
 
   return rows.map((r) => ({
+    abandonedCallLogId: r.abandoned_call_log_id,
     campaignId: r.campaign_id,
     campaignName: r.campaign_name,
     callerIdNumber: r.caller_id_number,
     callStartedAt: r.call_started_at,
     waitSeconds: r.wait_seconds,
+    status: r.status,
   }));
 }
 

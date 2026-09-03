@@ -1,38 +1,46 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { formatDate, formatDurationHMS } from "../utils/format";
 import VoicemailPlaybackModal from "../modals/VoicemailPlaybackModal";
+import { getOutboundDispositionsForCampaign } from "../constants/dispositions";
 
 /*
 ==================================================
 ABANDONED / VOICEMAIL TABLE
 ==================================================
-Combined feed for DialerPage's new "Abandoned & Voicemail" tab (sits
+Combined feed for DialerPage's "Abandoned & Voicemail" tab (sits
 alongside CallLogTable's own "Call Logs" tab — see DialerPage.jsx's
-tab container). Per explicit request: Abandoned and Voicemail rows are
-merged into ONE list (not two separate tables), each row tagged with
-its `type` so the badge/action column can render appropriately, sorted
-together by timestamp.
+tab container). Abandoned and Voicemail rows are merged into ONE list,
+each row tagged with its `type`, sorted together by timestamp.
 
-Defaults to today, same as CallLogTable, but — per explicit request —
-also exposes a date-range filter (mirrors VoicemailsPage.jsx's own
-admin-side From/To inputs) so an agent can look further back than just
-today when they need to.
+REDESIGNED — per explicit request: the old New/Resolved/Unreachable/
+Left VM status dropdown is gone. Instead, each row (voicemail AND
+abandoned now, not just voicemail) gets a "Callback" action. Clicking
+it reveals an inline disposition picker (the SAME outbound disposition
+list an agent sees ending a real outbound call, via
+getOutboundDispositionsForCampaign — a callback is inherently an
+outbound action). Picking one saves "CB - <disposition label>" as the
+row's status (constructed server-side — see dialerRoutes.js's
+buildCallbackStatus) and the row is immediately removed from view.
+Only status = 'NEW' rows are ever shown here at all — the backend
+itself only returns those (see GET /dialer/abandoned-voicemail), and
+this component also removes a row locally the instant its own Callback
+save succeeds, so there's no flash of a stale row before the next
+reload.
 
-campaignId is passed in from DialerPage (the same statsCampaignFilter
-already shared with StatsPanel/CallLogTable) — kept as one shared
-filter across all three rather than a fourth, separate dropdown.
+highlightKey (optional prop) — per explicit request, supports
+DialerPage's manual-dial-block flow: if an agent tries to manually
+dial a number that already has a pending (status = 'NEW') entry here,
+DialerPage switches to this tab and passes down a key identifying that
+exact row (e.g. "voicemail-123" or "abandoned-45"), which this
+component scrolls into view and highlights briefly.
 
-Voicemail playback reuses VoicemailPlaybackModal as-is (same waveform
-player already used by the admin-side VoicemailsPage) — this table
-just adapts the combined row's camelCase shape into the snake_case
-shape that modal expects. No download action here, matching the
-agent-facing playback-url route's own restriction (see
-dialerRoutes.js's comment on that route) — agents can listen, not
-download.
+Voicemail playback reuses VoicemailPlaybackModal as-is. No download
+action here, matching the agent-facing playback-url route's own
+restriction — agents can listen, not download.
 ==================================================
 */
-export default function AbandonedVoicemailTable({ campaignId }) {
+export default function AbandonedVoicemailTable({ campaignId, highlightKey }) {
   const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" }); // yyyy-MM-dd
 
   const [startDate, setStartDate] = useState(today);
@@ -43,18 +51,18 @@ export default function AbandonedVoicemailTable({ campaignId }) {
   const [playingId, setPlayingId] = useState(null);
   const [modalVoicemail, setModalVoicemail] = useState(null);
   const [modalUrl, setModalUrl] = useState(null);
-  // Per explicit request — tracks whether a voicemail's been attended
-  // to. Keyed by voicemailLogId so only the one row's dropdown shows
-  // "Saving…" while its own update is in flight, not every row at
-  // once.
-  const [savingStatusId, setSavingStatusId] = useState(null);
+  // Which row's inline disposition picker is currently open — a
+  // string key ("voicemail-123" / "abandoned-45"), or null.
+  const [activeCallbackKey, setActiveCallbackKey] = useState(null);
+  // Which row's Callback save is currently in flight, so its picker
+  // shows "Saving…" and can't be double-submitted.
+  const [savingCallbackKey, setSavingCallbackKey] = useState(null);
 
-  const VOICEMAIL_STATUS_OPTIONS = [
-    { value: "NEW", label: "New" },
-    { value: "RESOLVED", label: "Resolved" },
-    { value: "UNREACHABLE", label: "Unreachable" },
-    { value: "LEFT_VM", label: "Left VM" },
-  ];
+  const highlightRef = useRef(null);
+
+  function rowKey(row) {
+    return row.type === "voicemail" ? `voicemail-${row.voicemailLogId}` : `abandoned-${row.abandonedCallLogId}`;
+  }
 
   function load() {
     setLoading(true);
@@ -70,6 +78,15 @@ export default function AbandonedVoicemailTable({ campaignId }) {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [campaignId]);
+
+  // Per explicit request — scrolls the highlighted row into view the
+  // moment it's known (either on initial load with a highlightKey
+  // already set, or if it's set slightly after rows finish loading).
+  useEffect(() => {
+    if (highlightKey && highlightRef.current) {
+      highlightRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }, [highlightKey, rows]);
 
   function handleFilterSubmit(e) {
     e.preventDefault();
@@ -107,24 +124,29 @@ export default function AbandonedVoicemailTable({ campaignId }) {
     setModalUrl(null);
   }
 
-  // Per explicit request — updates immediately reflect in the
-  // dropdown itself (optimistic-ish: only reverts on a genuine
-  // failure) rather than needing a full table reload just to see the
-  // change take.
-  async function handleStatusChange(row, newStatus) {
-    const previousStatus = row.status;
-    setRows((prev) => prev.map((r) => (r.voicemailLogId === row.voicemailLogId ? { ...r, status: newStatus } : r)));
-    setSavingStatusId(row.voicemailLogId);
+  // Per explicit request — picking a disposition immediately saves
+  // "CB - <label>" and removes the row from view, rather than needing
+  // a second confirm step or a full reload to see it disappear.
+  async function handleCallbackDispositionSelect(row, dispositionValue) {
+    const key = rowKey(row);
+    const dispositions = getOutboundDispositionsForCampaign(row.campaignId);
+    const disposition = dispositions.find((d) => d.value === dispositionValue);
+    if (!disposition) return;
+
+    setSavingCallbackKey(key);
     setError("");
     try {
-      await api.updateVoicemailStatus(row.voicemailLogId, newStatus);
+      if (row.type === "voicemail") {
+        await api.setVoicemailCallback(row.voicemailLogId, disposition.value, disposition.label);
+      } else {
+        await api.setAbandonedCallCallback(row.abandonedCallLogId, disposition.value, disposition.label);
+      }
+      setRows((prev) => prev.filter((r) => rowKey(r) !== key));
+      setActiveCallbackKey(null);
     } catch (err) {
       setError(err.message);
-      setRows((prev) =>
-        prev.map((r) => (r.voicemailLogId === row.voicemailLogId ? { ...r, status: previousStatus } : r))
-      );
     } finally {
-      setSavingStatusId(null);
+      setSavingCallbackKey(null);
     }
   }
 
@@ -169,60 +191,75 @@ export default function AbandonedVoicemailTable({ campaignId }) {
               <th>Date</th>
               <th>Caller</th>
               <th>Details</th>
-              <th>Status</th>
+              <th>Callback</th>
               <th>Action</th>
             </tr>
           </thead>
           <tbody>
-            {rows.map((row, i) => (
-              <tr key={`${row.type}-${row.voicemailLogId || i}-${row.timestamp}`}>
-                <td>
-                  <span className={`direction-badge direction-${row.type === "voicemail" ? "callback" : "inbound"}`}>
-                    {row.type === "voicemail" ? "Voicemail" : "Abandoned"}
-                  </span>
-                </td>
-                <td>{row.campaignName || row.campaignId || "—"}</td>
-                <td>{formatDate(row.timestamp)}</td>
-                <td>{row.callerIdNumber || "Unknown"}</td>
-                <td>
-                  {row.type === "voicemail"
-                    ? `${row.durationSeconds != null ? formatDurationHMS(row.durationSeconds) : "—"}${
-                        row.isAfterHours ? " · After Hours" : ""
-                      }`
-                    : `Waited ${row.waitSeconds != null ? formatDurationHMS(row.waitSeconds) : "—"}`}
-                </td>
-                <td>
-                  {row.type === "voicemail" ? (
-                    <select
-                      value={row.status || "NEW"}
-                      disabled={savingStatusId === row.voicemailLogId}
-                      onChange={(e) => handleStatusChange(row, e.target.value)}
-                    >
-                      {VOICEMAIL_STATUS_OPTIONS.map((opt) => (
-                        <option key={opt.value} value={opt.value}>
-                          {opt.label}
+            {rows.map((row, i) => {
+              const key = rowKey(row);
+              const isHighlighted = highlightKey === key;
+              return (
+                <tr
+                  key={`${key}-${row.timestamp}`}
+                  ref={isHighlighted ? highlightRef : null}
+                  className={isHighlighted ? "call-log-row-highlighted" : undefined}
+                >
+                  <td>
+                    <span className={`direction-badge direction-${row.type === "voicemail" ? "callback" : "inbound"}`}>
+                      {row.type === "voicemail" ? "Voicemail" : "Abandoned"}
+                    </span>
+                  </td>
+                  <td>{row.campaignName || row.campaignId || "—"}</td>
+                  <td>{formatDate(row.timestamp)}</td>
+                  <td>{row.callerIdNumber || "Unknown"}</td>
+                  <td>
+                    {row.type === "voicemail"
+                      ? `${row.durationSeconds != null ? formatDurationHMS(row.durationSeconds) : "—"}${
+                          row.isAfterHours ? " · After Hours" : ""
+                        }`
+                      : `Waited ${row.waitSeconds != null ? formatDurationHMS(row.waitSeconds) : "—"}`}
+                  </td>
+                  <td>
+                    {activeCallbackKey === key ? (
+                      <select
+                        autoFocus
+                        defaultValue=""
+                        disabled={savingCallbackKey === key}
+                        onChange={(e) => handleCallbackDispositionSelect(row, e.target.value)}
+                        onBlur={() => setActiveCallbackKey((prev) => (prev === key ? null : prev))}
+                      >
+                        <option value="" disabled>
+                          {savingCallbackKey === key ? "Saving…" : "Select disposition…"}
                         </option>
-                      ))}
-                    </select>
-                  ) : (
-                    "—"
-                  )}
-                </td>
-                <td>
-                  {row.type === "voicemail" && row.hasRecording && (
-                    <button
-                      type="button"
-                      className="link"
-                      disabled={playingId === row.voicemailLogId}
-                      onClick={() => handlePlay(row)}
-                    >
-                      {playingId === row.voicemailLogId ? "Loading…" : "Play"}
-                    </button>
-                  )}
-                  {row.type === "voicemail" && !row.hasRecording && "—"}
-                </td>
-              </tr>
-            ))}
+                        {getOutboundDispositionsForCampaign(row.campaignId).map((d) => (
+                          <option key={d.value} value={d.value}>
+                            {d.label}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <button type="button" className="link" onClick={() => setActiveCallbackKey(key)}>
+                        Callback
+                      </button>
+                    )}
+                  </td>
+                  <td>
+                    {row.type === "voicemail" && row.hasRecording && (
+                      <button
+                        type="button"
+                        className="link"
+                        disabled={playingId === row.voicemailLogId}
+                        onClick={() => handlePlay(row)}
+                      >
+                        {playingId === row.voicemailLogId ? "Loading…" : "Play"}
+                      </button>
+                    )}
+                    {row.type === "voicemail" && !row.hasRecording && "—"}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       )}

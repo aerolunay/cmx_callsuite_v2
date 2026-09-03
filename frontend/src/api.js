@@ -88,8 +88,27 @@ export const api = {
     return request(`/dialer/abandoned-voicemail${qs ? `?${qs}` : ""}`);
   },
   getAgentVoicemailPlaybackUrl: (voicemailLogId) => request(`/dialer/voicemail/${voicemailLogId}/playback-url`),
-  updateVoicemailStatus: (voicemailLogId, status) =>
-    request(`/dialer/voicemail/${voicemailLogId}/status`, { method: "PATCH", body: JSON.stringify({ status }) }),
+  // UPDATED — per explicit request: the "Callback" flow now sends a
+  // real disposition (validated server-side against
+  // dialerService.KNOWN_DISPOSITION_VALUES), not a raw status string.
+  // The backend constructs "CB - <label>" itself — see dialerRoutes.js's
+  // buildCallbackStatus().
+  setVoicemailCallback: (voicemailLogId, dispositionValue, dispositionLabel) =>
+    request(`/dialer/voicemail/${voicemailLogId}/status`, {
+      method: "PATCH",
+      body: JSON.stringify({ dispositionValue, dispositionLabel }),
+    }),
+  // NEW — same Callback flow, for abandoned calls.
+  setAbandonedCallCallback: (abandonedCallLogId, dispositionValue, dispositionLabel) =>
+    request(`/dialer/abandoned-call/${abandonedCallLogId}/status`, {
+      method: "PATCH",
+      body: JSON.stringify({ dispositionValue, dispositionLabel }),
+    }),
+  // NEW — checked before placing a MANUAL dial only (never for
+  // outbound campaign/lead auto-dialing) — see DialerPage.jsx's own
+  // manual-dial handler.
+  checkCallbackPending: (phoneNumber) =>
+    request(`/dialer/check-callback-pending?phoneNumber=${encodeURIComponent(phoneNumber)}`),
   // NEW — outbound trunk management (Admin -> DID/Trunk Setup). Lets
   // an admin add/edit/remove a SIP trunk directly through the app,
   // instead of hand-writing pjsip.conf over SSH.
@@ -259,17 +278,6 @@ export const api = {
     request(`/voicemails/${encodeURIComponent(voicemailLogId)}/playback-url`),
   getVoicemailDownloadUrl: (voicemailLogId) =>
     request(`/voicemails/${encodeURIComponent(voicemailLogId)}/download-url`),
-  // NEW — admin-scoped voicemail status update (Live Dashboard's own
-  // card + the standalone VoicemailsPage.jsx). Distinct from the
-  // agent-facing updateVoicemailStatus above — hits voicemailRoutes.js
-  // (campaign-ownership-scoped) rather than dialerRoutes.js (agent-
-  // assignment-scoped), since these roles aren't "agents assigned to
-  // a campaign" in that sense.
-  updateVoicemailStatusAsSupervisor: (voicemailLogId, status) =>
-    request(`/voicemails/${encodeURIComponent(voicemailLogId)}/status`, {
-      method: "PATCH",
-      body: JSON.stringify({ status }),
-    }),
 
   // Outbound Auto-Dial, Phase 1 — lead upload, DNC management, and
   // per-campaign autodial rules. Template downloads are plain GET
