@@ -4,6 +4,7 @@ const express = require("express");
 const db = require("../config/db");
 const recordingUploadService = require("../services/recordingUploadService");
 const { requireRoles, getAssignedCampaignIds } = require("../services/accessControlService");
+const statsService = require("../services/statsService");
 
 const router = express.Router();
 
@@ -126,17 +127,31 @@ when a row's Play button is actually clicked.
 */
 router.get("/voicemails", requireRoles(...VOICEMAIL_ROLES), requireVoicemailCampaignAccess, async (req, res) => {
   try {
-    const { startDate, endDate, campaignId } = req.query;
+    const { startDate, endDate, campaignId, window } = req.query;
 
     const params = [];
     let dateFilter = "";
-    if (startDate) {
-      dateFilter += " AND vl.left_at >= ?";
-      params.push(`${startDate} 00:00:00`);
-    }
-    if (endDate) {
-      dateFilter += " AND vl.left_at <= ?";
-      params.push(`${endDate} 23:59:59`);
+    // NEW — per explicit request: the Live Status Dashboard's own
+    // Voicemails card passes ?window=dashboard to get a specific
+    // computed window ("5 PM yesterday through now" — see
+    // statsService.getVoicemailDashboardWindowForServerClock), taking
+    // priority over any explicit startDate/endDate. The standalone
+    // VoicemailsPage.jsx never sends this flag at all, so its own
+    // explicit-date-or-show-everything behavior is completely
+    // unaffected either way.
+    if (window === "dashboard") {
+      const { start, end } = await statsService.getVoicemailDashboardWindowForServerClock();
+      dateFilter = " AND vl.left_at >= ? AND vl.left_at <= ?";
+      params.push(start, end);
+    } else {
+      if (startDate) {
+        dateFilter += " AND vl.left_at >= ?";
+        params.push(`${startDate} 00:00:00`);
+      }
+      if (endDate) {
+        dateFilter += " AND vl.left_at <= ?";
+        params.push(`${endDate} 23:59:59`);
+      }
     }
 
     let campaignFilter = "";

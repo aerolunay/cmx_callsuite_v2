@@ -100,7 +100,23 @@ const SOUNDS_CUSTOM_DIR = process.env.SOUNDS_CUSTOM_DIR || "/var/lib/asterisk/so
 // _1NXXNXXXXXX/_NXXNXXXXXX patterns), so it must be validated here,
 // at the one place it's ever written, rather than trusted as
 // arbitrary input this deep into the call-placing pipeline.
-const ALLOWED_OUTBOUND_TRUNKS = ["CMXCallSuite", "Telpeer"];
+// UPDATED — per explicit request: the outbound trunk whitelist is no
+// longer a fixed, hardcoded array requiring a code deploy every time a
+// new trunk is added. "CMXCallSuite" stays a permanent, built-in
+// allowance (the hand-maintained default trunk, never part of the new
+// dynamic Trunk Setup admin feature — see adminRoutes.js). Anything
+// else is validated against cmx_dialer.outbound_trunks — an admin
+// adding a trunk there (Admin → DID/Trunk Setup) makes it immediately
+// usable here too, with zero code changes.
+async function isValidOutboundTrunk(trunkName) {
+  if (trunkName === "CMXCallSuite") return true;
+  if (!trunkName) return false;
+  const [rows] = await db.execute(
+    `SELECT 1 FROM cmx_dialer.outbound_trunks WHERE trunk_name = ? AND active = 1`,
+    [trunkName]
+  );
+  return rows.length > 0;
+}
 const CAMPAIGN_DIALPLAN_CONF_PATH =
   process.env.CAMPAIGN_DIALPLAN_CONF_PATH || "/etc/asterisk/extensions-campaigns-cmxdialer.conf";
 const CAMPAIGN_AUDIO_STAGING_DIR = path.join(__dirname, "..", "tmp", "campaign-audio-staging");
@@ -738,7 +754,7 @@ router.post(
     // calls go out through. Strict whitelist, not free text — see
     // ALLOWED_OUTBOUND_TRUNKS's own comment for why this matters more
     // than a typical form field.
-    const resolvedOutboundTrunk = ALLOWED_OUTBOUND_TRUNKS.includes(outboundTrunk) ? outboundTrunk : "CMXCallSuite";
+    const resolvedOutboundTrunk = (await isValidOutboundTrunk(outboundTrunk)) ? outboundTrunk : "CMXCallSuite";
 
     const connection = await db.getConnection();
     try {
@@ -922,7 +938,7 @@ router.put(
     const resolvedVoicemailWaitSeconds = Math.max(40, parseInt(voicemailWaitSeconds, 10) || 40);
 
     // Per explicit request — same validation as the create route above.
-    const resolvedOutboundTrunk = ALLOWED_OUTBOUND_TRUNKS.includes(outboundTrunk) ? outboundTrunk : "CMXCallSuite";
+    const resolvedOutboundTrunk = (await isValidOutboundTrunk(outboundTrunk)) ? outboundTrunk : "CMXCallSuite";
 
     const connection = await db.getConnection();
     try {

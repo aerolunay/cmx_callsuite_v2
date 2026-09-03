@@ -43,6 +43,18 @@ export default function AbandonedVoicemailTable({ campaignId }) {
   const [playingId, setPlayingId] = useState(null);
   const [modalVoicemail, setModalVoicemail] = useState(null);
   const [modalUrl, setModalUrl] = useState(null);
+  // Per explicit request — tracks whether a voicemail's been attended
+  // to. Keyed by voicemailLogId so only the one row's dropdown shows
+  // "Saving…" while its own update is in flight, not every row at
+  // once.
+  const [savingStatusId, setSavingStatusId] = useState(null);
+
+  const VOICEMAIL_STATUS_OPTIONS = [
+    { value: "NEW", label: "New" },
+    { value: "RESOLVED", label: "Resolved" },
+    { value: "UNREACHABLE", label: "Unreachable" },
+    { value: "LEFT_VM", label: "Left VM" },
+  ];
 
   function load() {
     setLoading(true);
@@ -95,6 +107,27 @@ export default function AbandonedVoicemailTable({ campaignId }) {
     setModalUrl(null);
   }
 
+  // Per explicit request — updates immediately reflect in the
+  // dropdown itself (optimistic-ish: only reverts on a genuine
+  // failure) rather than needing a full table reload just to see the
+  // change take.
+  async function handleStatusChange(row, newStatus) {
+    const previousStatus = row.status;
+    setRows((prev) => prev.map((r) => (r.voicemailLogId === row.voicemailLogId ? { ...r, status: newStatus } : r)));
+    setSavingStatusId(row.voicemailLogId);
+    setError("");
+    try {
+      await api.updateVoicemailStatus(row.voicemailLogId, newStatus);
+    } catch (err) {
+      setError(err.message);
+      setRows((prev) =>
+        prev.map((r) => (r.voicemailLogId === row.voicemailLogId ? { ...r, status: previousStatus } : r))
+      );
+    } finally {
+      setSavingStatusId(null);
+    }
+  }
+
   return (
     <div className="card call-log-card">
       <h3>Abandoned & Voicemail</h3>
@@ -136,6 +169,7 @@ export default function AbandonedVoicemailTable({ campaignId }) {
               <th>Date</th>
               <th>Caller</th>
               <th>Details</th>
+              <th>Status</th>
               <th>Action</th>
             </tr>
           </thead>
@@ -156,6 +190,23 @@ export default function AbandonedVoicemailTable({ campaignId }) {
                         row.isAfterHours ? " · After Hours" : ""
                       }`
                     : `Waited ${row.waitSeconds != null ? formatDurationHMS(row.waitSeconds) : "—"}`}
+                </td>
+                <td>
+                  {row.type === "voicemail" ? (
+                    <select
+                      value={row.status || "NEW"}
+                      disabled={savingStatusId === row.voicemailLogId}
+                      onChange={(e) => handleStatusChange(row, e.target.value)}
+                    >
+                      {VOICEMAIL_STATUS_OPTIONS.map((opt) => (
+                        <option key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    "—"
+                  )}
                 </td>
                 <td>
                   {row.type === "voicemail" && row.hasRecording && (

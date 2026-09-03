@@ -6,6 +6,7 @@ import AdminUsersSection from "../components/admin/AdminUsersSection";
 import AdminVicidialUsersSection from "../components/admin/AdminVicidialUsersSection";
 import AdminCampaignsSection from "../components/admin/AdminCampaignsSection";
 import AdminLeadsSection from "../components/admin/AdminLeadsSection";
+import AdminTrunksSection from "../components/admin/AdminTrunksSection";
 
 /*
 ==================================================
@@ -79,17 +80,7 @@ export default function AdminPage() {
             {activeSection === "campaigns" && <AdminCampaignsSection />}
             {activeSection === "leads" && <AdminLeadsSection />}
 
-            {activeSection === "trunks" && (
-              <div className="card">
-                <h3>DID / Trunk Setup</h3>
-                <p>
-                  Trunk/Carrier setup isn't built yet. This is deliberately saved for last in the
-                  migration sequence — it writes Asterisk config files directly and triggers a
-                  live reload, meaningfully more complex than the other sections, which are all
-                  plain database CRUD.
-                </p>
-              </div>
-            )}
+            {activeSection === "trunks" && <AdminTrunksSection />}
           </div>
         </div>
       </div>

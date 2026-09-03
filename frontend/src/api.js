@@ -88,6 +88,16 @@ export const api = {
     return request(`/dialer/abandoned-voicemail${qs ? `?${qs}` : ""}`);
   },
   getAgentVoicemailPlaybackUrl: (voicemailLogId) => request(`/dialer/voicemail/${voicemailLogId}/playback-url`),
+  updateVoicemailStatus: (voicemailLogId, status) =>
+    request(`/dialer/voicemail/${voicemailLogId}/status`, { method: "PATCH", body: JSON.stringify({ status }) }),
+  // NEW — outbound trunk management (Admin -> DID/Trunk Setup). Lets
+  // an admin add/edit/remove a SIP trunk directly through the app,
+  // instead of hand-writing pjsip.conf over SSH.
+  getTrunks: () => request("/admin/trunks"),
+  createTrunk: (payload) => request("/admin/trunks", { method: "POST", body: JSON.stringify(payload) }),
+  updateTrunk: (trunkId, payload) =>
+    request(`/admin/trunks/${trunkId}`, { method: "PUT", body: JSON.stringify(payload) }),
+  deleteTrunk: (trunkId) => request(`/admin/trunks/${trunkId}`, { method: "DELETE" }),
 
   // Agent status
   getStatus: () => request("/dialer/status"),

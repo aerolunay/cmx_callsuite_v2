@@ -167,8 +167,17 @@ export default function LiveStatusDashboard() {
     // scoped role here (supervisor/account_manager/training_quality) —
     // already guaranteed non-blank by the earlier per-role campaign
     // auto-select effect before this ever runs.
+    //
+    // window=dashboard — per explicit request: this card only ever
+    // shows "5 PM yesterday through now" (see
+    // statsService.getVoicemailDashboardWindowForServerClock), not
+    // every voicemail ever recorded like the previous no-filter
+    // default did. The standalone VoicemailsPage.jsx never sends this
+    // flag, so its own default view is completely unaffected.
     if (includeVoicemails) {
-      promises.push(api.getVoicemails(campaignId ? `campaignId=${encodeURIComponent(campaignId)}` : ""));
+      const qs = new URLSearchParams({ window: "dashboard" });
+      if (campaignId) qs.set("campaignId", campaignId);
+      promises.push(api.getVoicemails(qs.toString()));
     }
 
     Promise.all(promises)

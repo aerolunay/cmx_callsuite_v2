@@ -76,7 +76,18 @@ export default function LandingPage() {
         <span className="badge">{agent.accessLevel}</span>
 
         <div className="card" style={{ marginTop: 20 }}>
-          {agent.extension ? (
+          {/* REAL FIX, per explicit request: this used to show "Start
+              working a campaign" purely based on whether the account
+              happened to have a phone extension bound at all —
+              admin/account_manager/wfm accounts CAN have one bound
+              (nothing in this app's data model prevents it), but per
+              this same page's own role-aware redirect above (and
+              CampaignSelectPage.jsx's own role guard, which would
+              immediately bounce them right back out anyway), none of
+              these three roles are ever meant to work a campaign —
+              having an extension bound doesn't change that. Now
+              explicitly excludes these three regardless of extension. */}
+          {agent.extension && !["admin", "account_manager", "wfm"].includes(agent.accessLevel) ? (
             <>
               <p>
                 Your phone extension: <strong>{agent.extension}</strong>
@@ -85,6 +96,8 @@ export default function LandingPage() {
                 <button className="button-secondary">Start working a campaign</button>
               </Link>
             </>
+          ) : ["admin", "account_manager", "wfm"].includes(agent.accessLevel) ? (
+            <p>Your account doesn't work campaigns directly — see the nav above for what's available to you.</p>
           ) : (
             <p>
               Your account has no phone extension assigned — you're set up as an admin/support

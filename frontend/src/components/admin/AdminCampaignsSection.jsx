@@ -137,8 +137,8 @@ export default function AdminCampaignsSection() {
   const [campaignId, setCampaignId] = useState("");
   const [campaignName, setCampaignName] = useState("");
   const [did, setDid] = useState("");
-  const [callerId, setCallerId] = useState("");
   const [outboundTrunk, setOutboundTrunk] = useState("CMXCallSuite");
+  const [availableTrunks, setAvailableTrunks] = useState([]);
   const [campaignType, setCampaignType] = useState("OUTBOUND");
   const [blendedFallbackCampaignId, setBlendedFallbackCampaignId] = useState("");
   const [dialMethod, setDialMethod] = useState("MANUAL");
@@ -175,6 +175,16 @@ export default function AdminCampaignsSection() {
       .then((data) => setCampaigns(data.campaigns))
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
+    // Outbound Trunk options — fetched live from Admin -> DID/Trunk
+    // Setup (see AdminTrunksSection.jsx). Fails open (empty list)
+    // rather than blocking campaign management entirely if this one
+    // fetch has a problem — CMXCallSuite is always available
+    // regardless, hardcoded in the JSX since it's the permanent
+    // built-in default outside this dynamic system.
+    api
+      .getTrunks()
+      .then((data) => setAvailableTrunks((data.trunks || []).filter((t) => t.active)))
+      .catch(() => {});
   }
 
   useEffect(() => {
@@ -186,7 +196,6 @@ export default function AdminCampaignsSection() {
     setCampaignId("");
     setCampaignName("");
     setDid("");
-    setCallerId("");
     setOutboundTrunk("CMXCallSuite");
     setCampaignType("OUTBOUND");
     setBlendedFallbackCampaignId("");
@@ -213,7 +222,6 @@ export default function AdminCampaignsSection() {
     setCampaignId(c.campaign_id);
     setCampaignName(c.campaign_name || "");
     setDid(c.did || "");
-    setCallerId(c.campaign_cid && c.campaign_cid !== c.did ? c.campaign_cid : "");
     setOutboundTrunk(c.outbound_trunk || "CMXCallSuite");
     setCampaignType(c.campaign_type || "OUTBOUND");
     setBlendedFallbackCampaignId(c.blended_fallback_campaign_id || "");
@@ -289,7 +297,6 @@ export default function AdminCampaignsSection() {
   function buildFormData() {
     const formData = new FormData();
     formData.append("campaignName", campaignName);
-    formData.append("callerId", callerId);
     formData.append("outboundTrunk", outboundTrunk);
     formData.append("campaignType", campaignType);
     formData.append("dialMethod", campaignType === "OUTBOUND" ? dialMethod : "MANUAL");
@@ -390,29 +397,34 @@ export default function AdminCampaignsSection() {
                   </p>
                 )}
 
-                <label className="comments-label">Caller ID</label>
-                <input
-                  type="text"
-                  value={callerId}
-                  onChange={(e) => setCallerId(e.target.value)}
-                  placeholder="Leave blank to spoof the DID as the outbound Caller ID"
-                />
-
-                {/* NEW — per explicit request: which trunk this
-                    campaign's outbound calls actually go out through.
-                    QuestBlue (CMXCallSuite) is the existing default;
-                    Telpeer is a second trunk added specifically for
-                    campaigns that need Caller ID spoofing (QuestBlue
-                    rejects a non-provisioned Caller ID with a real SIP
-                    403, confirmed via a real test call). */}
+                {/* Which trunk this campaign's outbound calls actually
+                    go out through. QuestBlue (CMXCallSuite) is the
+                    existing, always-available default and always uses
+                    this campaign's own DID as its Caller ID — the old
+                    Caller ID override field was retired now that
+                    Telpeer handles Caller ID spoofing entirely on its
+                    own portal, per extension (QuestBlue itself rejects
+                    any non-provisioned Caller ID outright with a real
+                    SIP 403, confirmed via a real test call, so an
+                    override field never made sense for it anyway).
+                    Options below are fetched live from Admin ->
+                    DID/Trunk Setup — adding a trunk there makes it
+                    immediately selectable here, no code change or
+                    redeploy needed. */}
                 <label className="comments-label">Outbound Trunk</label>
                 <select value={outboundTrunk} onChange={(e) => setOutboundTrunk(e.target.value)}>
                   <option value="CMXCallSuite">QuestBlue (default)</option>
-                  <option value="Telpeer">Telpeer</option>
+                  {availableTrunks.map((t) => (
+                    <option key={t.trunk_id} value={t.trunk_name}>
+                      {t.trunk_name}
+                      {t.description ? ` — ${t.description}` : ""}
+                    </option>
+                  ))}
                 </select>
                 <p style={{ fontSize: 13, color: "#888", marginTop: 4 }}>
-                  Telpeer supports Caller ID spoofing; QuestBlue requires the Caller ID above to be
-                  a number they've explicitly authorized on your account.
+                  Additional trunks are managed under Admin → DID/Trunk Setup. Telpeer's Caller ID
+                  is controlled entirely on Telpeer's own portal, per trunk. QuestBlue always uses
+                  this campaign's DID as its Caller ID.
                 </p>
 
                 <label className="comments-label">Campaign Type</label>

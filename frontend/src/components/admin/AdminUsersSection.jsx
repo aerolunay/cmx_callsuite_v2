@@ -43,6 +43,12 @@ export default function AdminUsersSection() {
   const [success, setSuccess] = useState("");
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
+  // NEW — per explicit request: the create/edit form is now a modal
+  // instead of sitting permanently alongside the table, so Existing
+  // Users can use the full page width (it was visibly cramped in the
+  // old side-by-side layout, being the narrower of the two columns
+  // despite having 10 real columns of its own to show).
+  const [showModal, setShowModal] = useState(false);
 
   function loadAll() {
     setLoading(true);
@@ -89,6 +95,18 @@ export default function AdminUsersSection() {
     setMultiCampaignEnabled(false);
   }
 
+  function handleOpenCreate() {
+    resetForm();
+    setError("");
+    setSuccess("");
+    setShowModal(true);
+  }
+
+  function handleCloseModal() {
+    setShowModal(false);
+    resetForm();
+  }
+
   function handleStartEdit(u) {
     setEditingUserId(u.app_user_id);
     setEmail(u.email);
@@ -101,6 +119,7 @@ export default function AdminUsersSection() {
     setMultiCampaignEnabled(Boolean(u.multi_campaign_enabled));
     setError("");
     setSuccess("");
+    setShowModal(true);
   }
 
   async function handleDelete(u) {
@@ -111,7 +130,10 @@ export default function AdminUsersSection() {
     setBusy(true);
     try {
       await api.deleteAdminUser(u.app_user_id);
-      if (editingUserId === u.app_user_id) resetForm();
+      if (editingUserId === u.app_user_id) {
+        setShowModal(false);
+        resetForm();
+      }
       loadAll();
     } catch (err) {
       setError(err.message);
@@ -146,6 +168,7 @@ export default function AdminUsersSection() {
       }
 
       resetForm();
+      setShowModal(false);
       loadAll();
     } catch (err) {
       setError(err.message);
@@ -164,7 +187,7 @@ export default function AdminUsersSection() {
 
   return (
     <>
-      <h3>{editingUserId ? "Edit User" : "Create User"}</h3>
+      <h3>Users</h3>
 
       {error && <div className="error">{error}</div>}
       {success && <div className="success">{success}</div>}
@@ -172,159 +195,173 @@ export default function AdminUsersSection() {
       {loading ? (
         <p>Loading…</p>
       ) : (
-        <div className="dialer-layout">
-          <div className="dialer-main">
-            <div className="card">
-              <form onSubmit={handleSubmit}>
-                <label className="comments-label">Email</label>
-                <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
-
-                <label className="comments-label">Full Name</label>
-                <input type="text" value={fullName} onChange={(e) => setFullName(e.target.value)} required />
-
-                <label className="comments-label">Access Level</label>
-                <select value={accessLevel} onChange={(e) => setAccessLevel(e.target.value)}>
-                  <option value="agent">Agent</option>
-                  <option value="supervisor">Supervisor</option>
-                  <option value="training_quality">Training &amp; Quality</option>
-                  <option value="account_manager">Account Manager</option>
-                  <option value="wfm">WFM</option>
-                  <option value="admin">Admin</option>
-                </select>
-
-                <label className="comments-label">Phone Login (phone binding)</label>
-                <select value={vicidialUser} onChange={(e) => setVicidialUser(e.target.value)}>
-                  <option value="">— None / Release —</option>
-                  {vicidialOptions.map((vu) => (
-                    <option key={vu.vicidial_user} value={vu.vicidial_user}>
-                      {vu.vicidial_user} — {vu.full_name} (phone {vu.phone_login})
-                    </option>
-                  ))}
-                </select>
-                {vicidialOptions.length === 0 && (
-                  <p style={{ fontSize: 13, color: "#888" }}>
-                    No unclaimed Phone Logins available — create one under "Phone Login"
-                    first, or every active one already has an app account.
-                  </p>
-                )}
-
-                {/* WFM and Admin get implicit access to ALL campaigns
-                    (see accessControlService.js's
-                    UNRESTRICTED_CAMPAIGN_ROLES) — per explicit request,
-                    no need to check individual campaigns to bind when
-                    either of those is selected, so this section hides
-                    itself entirely rather than showing a checkbox list
-                    that wouldn't do anything meaningful for these two
-                    roles. */}
-                {!["wfm", "admin"].includes(accessLevel) && (
-                  <>
-                    <label className="comments-label">Campaign Access</label>
-                    {campaigns.map((c) => (
-                      <label key={c.campaign_id} className="disposition-row">
-                        <input
-                          type="checkbox"
-                          checked={selectedCampaigns.includes(c.campaign_id)}
-                          onChange={() => toggleCampaign(c.campaign_id)}
-                        />
-                        {c.campaign_name} ({c.campaign_id})
-                      </label>
-                    ))}
-
-                    <label className="disposition-row" style={{ marginTop: 10 }}>
-                      <input
-                        type="checkbox"
-                        checked={multiCampaignEnabled}
-                        onChange={(e) => setMultiCampaignEnabled(e.target.checked)}
-                      />
-                      Allow Multiple Blended Campaigns
-                    </label>
-                    <p style={{ fontSize: 13, color: "#888", marginTop: 4 }}>
-                      Lets this agent select more than one blended campaign to work on
-                      simultaneously (receiving inbound calls from any of them while Ready).
-                      Selecting an outbound campaign always stays exclusive, regardless of this
-                      setting.
-                    </p>
-                  </>
-                )}
-
-                <label className="comments-label">Priority</label>
-                <select value={priority} onChange={(e) => setPriority(e.target.value)}>
-                  <option value="1">1</option>
-                  <option value="2">2</option>
-                  <option value="3">3</option>
-                  <option value="4">4</option>
-                </select>
-
-                <label className="disposition-row" style={{ marginTop: 10 }}>
-                  <input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} />
-                  Active (unchecked = blocked from logging into the app entirely)
-                </label>
-
-                <div style={{ marginTop: 14, display: "flex", gap: 8 }}>
-                  <button className="button-secondary" type="submit" disabled={busy}>
-                    {busy ? "Saving…" : editingUserId ? "Save Changes" : "Create User"}
-                  </button>
-                  {editingUserId && (
-                    <button type="button" className="link" onClick={resetForm} disabled={busy}>
-                      Cancel Edit
-                    </button>
-                  )}
-                </div>
-              </form>
-            </div>
+        <>
+          <div style={{ marginBottom: 12 }}>
+            <button className="button-secondary" type="button" onClick={handleOpenCreate}>
+              + Add User
+            </button>
           </div>
 
-          <div className="dialer-side">
-            <div className="card call-log-card">
-              <h3>Existing Users</h3>
-              {users.length === 0 && <p>No users yet.</p>}
-              {users.length > 0 && (
-                <table className="call-log-table">
-                  <thead>
-                    <tr>
-                      <th>Email</th>
-                      <th>Name</th>
-                      <th>Access</th>
-                      <th>Active</th>
-                      <th>Priority</th>
-                      <th>Multi-Campaign</th>
-                      <th>Phone Login</th>
-                      <th>Phone</th>
-                      <th>Campaigns</th>
-                      <th>Actions</th>
+          <div className="card call-log-card">
+            <h3>Existing Users</h3>
+            {users.length === 0 && <p>No users yet.</p>}
+            {users.length > 0 && (
+              <table className="call-log-table">
+                <thead>
+                  <tr>
+                    <th>Email</th>
+                    <th>Name</th>
+                    <th>Access</th>
+                    <th>Active</th>
+                    <th>Priority</th>
+                    <th>Multi-Campaign</th>
+                    <th>Phone Login</th>
+                    <th>Phone</th>
+                    <th>Campaigns</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {users.map((u) => (
+                    <tr
+                      key={u.app_user_id}
+                      className="call-log-row"
+                      onDoubleClick={() => handleStartEdit(u)}
+                    >
+                      <td>{u.email}</td>
+                      <td className="admin-name-cell">{u.full_name}</td>
+                      <td>{u.access_level}</td>
+                      <td>{u.active ? "Yes" : "No"}</td>
+                      <td>{u.priority ?? 1}</td>
+                      <td>{u.multi_campaign_enabled ? "Yes" : "No"}</td>
+                      <td>{u.vicidial_user || "—"}</td>
+                      <td>{u.phone_login || "—"}</td>
+                      <td>{u.campaigns || "—"}</td>
+                      <td style={{ whiteSpace: "nowrap" }}>
+                        <button type="button" className="link" onClick={() => handleStartEdit(u)} disabled={busy}>
+                          Edit
+                        </button>
+                        {" · "}
+                        <button type="button" className="link" onClick={() => handleDelete(u)} disabled={busy}>
+                          Delete
+                        </button>
+                      </td>
                     </tr>
-                  </thead>
-                  <tbody>
-                    {users.map((u) => (
-                      <tr
-                        key={u.app_user_id}
-                        className="call-log-row"
-                        onDoubleClick={() => handleStartEdit(u)}
-                      >
-                        <td>{u.email}</td>
-                        <td className="admin-name-cell">{u.full_name}</td>
-                        <td>{u.access_level}</td>
-                        <td>{u.active ? "Yes" : "No"}</td>
-                        <td>{u.priority ?? 1}</td>
-                        <td>{u.multi_campaign_enabled ? "Yes" : "No"}</td>
-                        <td>{u.vicidial_user || "—"}</td>
-                        <td>{u.phone_login || "—"}</td>
-                        <td>{u.campaigns || "—"}</td>
-                        <td style={{ whiteSpace: "nowrap" }}>
-                          <button type="button" className="link" onClick={() => handleStartEdit(u)} disabled={busy}>
-                            Edit
-                          </button>
-                          {" · "}
-                          <button type="button" className="link" onClick={() => handleDelete(u)} disabled={busy}>
-                            Delete
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </>
+      )}
+
+      {/* NEW — per explicit request: the create/edit form is now a
+          modal, opened either by the "+ Add User" button above (create
+          mode) or by clicking Edit on any row (edit mode) — same form,
+          same handleSubmit, just presented differently so Existing
+          Users can use the full page width. Reuses the exact same
+          .modal-overlay/.modal-card classes already used elsewhere in
+          this app (e.g. VoicemailPlaybackModal.jsx) — no new CSS
+          needed. */}
+      {showModal && (
+        <div className="modal-overlay" onClick={handleCloseModal}>
+          <div className="modal-card" style={{ width: "min(90vw, 600px)", maxHeight: "85vh", overflowY: "auto" }} onClick={(e) => e.stopPropagation()}>
+            <h3 style={{ marginTop: 0 }}>{editingUserId ? "Edit User" : "Create User"}</h3>
+
+            <form onSubmit={handleSubmit}>
+              <label className="comments-label">Email</label>
+              <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
+
+              <label className="comments-label">Full Name</label>
+              <input type="text" value={fullName} onChange={(e) => setFullName(e.target.value)} required />
+
+              <label className="comments-label">Access Level</label>
+              <select value={accessLevel} onChange={(e) => setAccessLevel(e.target.value)}>
+                <option value="agent">Agent</option>
+                <option value="supervisor">Supervisor</option>
+                <option value="training_quality">Training &amp; Quality</option>
+                <option value="account_manager">Account Manager</option>
+                <option value="wfm">WFM</option>
+                <option value="admin">Admin</option>
+              </select>
+
+              <label className="comments-label">Phone Login (phone binding)</label>
+              <select value={vicidialUser} onChange={(e) => setVicidialUser(e.target.value)}>
+                <option value="">— None / Release —</option>
+                {vicidialOptions.map((vu) => (
+                  <option key={vu.vicidial_user} value={vu.vicidial_user}>
+                    {vu.vicidial_user} — {vu.full_name} (phone {vu.phone_login})
+                  </option>
+                ))}
+              </select>
+              {vicidialOptions.length === 0 && (
+                <p style={{ fontSize: 13, color: "#888" }}>
+                  No unclaimed Phone Logins available — create one under "Phone Login"
+                  first, or every active one already has an app account.
+                </p>
               )}
-            </div>
+
+              {/* WFM and Admin get implicit access to ALL campaigns
+                  (see accessControlService.js's
+                  UNRESTRICTED_CAMPAIGN_ROLES) — per explicit request,
+                  no need to check individual campaigns to bind when
+                  either of those is selected, so this section hides
+                  itself entirely rather than showing a checkbox list
+                  that wouldn't do anything meaningful for these two
+                  roles. */}
+              {!["wfm", "admin"].includes(accessLevel) && (
+                <>
+                  <label className="comments-label">Campaign Access</label>
+                  {campaigns.map((c) => (
+                    <label key={c.campaign_id} className="disposition-row">
+                      <input
+                        type="checkbox"
+                        checked={selectedCampaigns.includes(c.campaign_id)}
+                        onChange={() => toggleCampaign(c.campaign_id)}
+                      />
+                      {c.campaign_name} ({c.campaign_id})
+                    </label>
+                  ))}
+
+                  <label className="disposition-row" style={{ marginTop: 10 }}>
+                    <input
+                      type="checkbox"
+                      checked={multiCampaignEnabled}
+                      onChange={(e) => setMultiCampaignEnabled(e.target.checked)}
+                    />
+                    Allow Multiple Blended Campaigns
+                  </label>
+                  <p style={{ fontSize: 13, color: "#888", marginTop: 4 }}>
+                    Lets this agent select more than one blended campaign to work on
+                    simultaneously (receiving inbound calls from any of them while Ready).
+                    Selecting an outbound campaign always stays exclusive, regardless of this
+                    setting.
+                  </p>
+                </>
+              )}
+
+              <label className="comments-label">Priority</label>
+              <select value={priority} onChange={(e) => setPriority(e.target.value)}>
+                <option value="1">1</option>
+                <option value="2">2</option>
+                <option value="3">3</option>
+                <option value="4">4</option>
+              </select>
+
+              <label className="disposition-row" style={{ marginTop: 10 }}>
+                <input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} />
+                Active (unchecked = blocked from logging into the app entirely)
+              </label>
+
+              <div style={{ marginTop: 14, display: "flex", gap: 8 }}>
+                <button className="button-secondary" type="submit" disabled={busy}>
+                  {busy ? "Saving…" : editingUserId ? "Save Changes" : "Create User"}
+                </button>
+                <button type="button" className="link" onClick={handleCloseModal} disabled={busy}>
+                  Cancel
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

@@ -1139,7 +1139,7 @@ router.get("/dialer/abandoned-voicemail", requireAuth, async (req, res) => {
       `
         SELECT
           vl.voicemail_log_id, vl.campaign_id, c.campaign_name, vl.caller_id_number,
-          vl.call_started_at, vl.left_at, vl.duration_seconds, vl.recording_key, vl.is_after_hours
+          vl.call_started_at, vl.left_at, vl.duration_seconds, vl.recording_key, vl.is_after_hours, vl.status
         FROM cmx_dialer.voicemail_log vl
         LEFT JOIN asterisk.vicidial_campaigns c ON c.campaign_id = vl.campaign_id
         WHERE vl.left_at >= ? AND vl.left_at <= ? AND vl.campaign_id IN (${placeholders})
@@ -1169,6 +1169,7 @@ router.get("/dialer/abandoned-voicemail", requireAuth, async (req, res) => {
         durationSeconds: v.duration_seconds,
         hasRecording: Boolean(v.recording_key),
         isAfterHours: v.is_after_hours === "Y",
+        status: v.status,
       })),
     ].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
 
@@ -1216,6 +1217,55 @@ router.get("/dialer/voicemail/:voicemailLogId/playback-url", requireAuth, async 
   } catch (error) {
     console.error(`GET /api/dialer/voicemail/${req.params.voicemailLogId}/playback-url failed:`, error);
     return res.status(500).json({ success: false, message: "Failed to generate playback URL." });
+  }
+});
+
+/*
+==================================================
+PATCH /api/dialer/voicemail/:voicemailLogId/status
+==================================================
+NEW — per explicit request: track whether a voicemail has been
+attended to. Defaults to NEW (see 008_voicemail_status.sql); an agent
+picks RESOLVED, UNREACHABLE, or LEFT_VM from the dropdown on
+DialerPage's Abandoned & Voicemail tab (AbandonedVoicemailTable.jsx).
+Same access scoping as the playback-url route right above — any
+authenticated agent, but only for a voicemail belonging to a campaign
+they're actually assigned to.
+==================================================
+*/
+const VOICEMAIL_STATUSES = ["NEW", "RESOLVED", "UNREACHABLE", "LEFT_VM"];
+
+router.patch("/dialer/voicemail/:voicemailLogId/status", requireAuth, async (req, res) => {
+  try {
+    const { voicemailLogId } = req.params;
+    const { status } = req.body;
+    const { appUserId } = req.session.agent;
+
+    if (!VOICEMAIL_STATUSES.includes(status)) {
+      return res.status(400).json({ success: false, message: `status must be one of: ${VOICEMAIL_STATUSES.join(", ")}.` });
+    }
+
+    const [rows] = await db.execute(`SELECT campaign_id FROM cmx_dialer.voicemail_log WHERE voicemail_log_id = ?`, [
+      voicemailLogId,
+    ]);
+    if (!rows.length) {
+      return res.status(404).json({ success: false, message: "Voicemail not found." });
+    }
+
+    const assignedIds = await getAssignedCampaignIds(appUserId);
+    if (!assignedIds.includes(rows[0].campaign_id)) {
+      return res.status(403).json({ success: false, message: "You are not assigned to that campaign." });
+    }
+
+    await db.execute(`UPDATE cmx_dialer.voicemail_log SET status = ? WHERE voicemail_log_id = ?`, [
+      status,
+      voicemailLogId,
+    ]);
+
+    return res.json({ success: true, status });
+  } catch (error) {
+    console.error(`PATCH /api/dialer/voicemail/${req.params.voicemailLogId}/status failed:`, error);
+    return res.status(500).json({ success: false, message: "Failed to update voicemail status." });
   }
 });
 

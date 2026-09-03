@@ -53,6 +53,55 @@ async function getEasternRangeBoundsForServerClock(startDate, endDate) {
 
 /*
 ==================================================
+getVoicemailDashboardWindowForServerClock — NEW, per explicit request
+==================================================
+Powers the Live Status Dashboard's Voicemails card specifically (see
+voicemailRoutes.js's GET /voicemails?window=dashboard) — NOT the
+standalone VoicemailsPage.jsx, which keeps its own explicit
+startDate/endDate filter and its original "no filter = show
+everything" default completely untouched.
+
+Window: 5 PM of the PREVIOUS Eastern calendar day, through right now.
+"Previous day" is anchored to TODAY's calendar date minus one — a
+FIXED point that doesn't itself drift as the current time passes 5 PM
+today; it only advances once the calendar date actually rolls over
+into tomorrow. This means the window keeps growing all day (checked at
+9 AM, it's "since 5 PM yesterday"; checked at 11 PM the same day, it's
+STILL "since 5 PM yesterday," now a ~30-hour window) rather than
+resetting at some other point — the intent, per the request, is that
+an after-hours voicemail from last evening stays visible on the
+dashboard all the way through the current day, not just until midnight.
+
+No explicit upper bound is returned — end is simply "right now," same
+convention as every other place in this app where an omitted upper
+bound already means "up to the current moment" (see voicemailRoutes.js
+itself, which never applies an end-date filter at all when endDate
+isn't given).
+
+Same self-calibrating server-clock-offset technique as
+getEasternRangeBoundsForServerClock above — not duplicated logic by
+coincidence, deliberately mirrors it so this stays consistent with
+every other date-boundary calculation in this app if the server's own
+clock/timezone setup ever changes.
+==================================================
+*/
+async function getVoicemailDashboardWindowForServerClock() {
+  const nowNY = DateTime.now().setZone("America/New_York");
+  const startNY = nowNY.minus({ days: 1 }).set({ hour: 17, minute: 0, second: 0, millisecond: 0 });
+
+  const [rows] = await db.execute(
+    `SELECT TIMESTAMPDIFF(SECOND, UTC_TIMESTAMP(), NOW()) AS offset_seconds`
+  );
+  const offsetSeconds = rows[0].offset_seconds;
+
+  const start = startNY.toUTC().plus({ seconds: offsetSeconds }).toFormat("yyyy-MM-dd HH:mm:ss");
+  const end = nowNY.toUTC().plus({ seconds: offsetSeconds }).toFormat("yyyy-MM-dd HH:mm:ss");
+
+  return { start, end };
+}
+
+/*
+==================================================
 computeDirectionStats — the ONE shared calculation
 ==================================================
 Used by getTodayStats, getTodayStatsAggregate, AND getReportingSummary
@@ -681,6 +730,7 @@ module.exports = {
   getTodayStatsAggregate,
   getEasternDayBoundsForServerClock,
   getEasternRangeBoundsForServerClock,
+  getVoicemailDashboardWindowForServerClock,
   getReportingSummary,
   getCampaignAgentBreakdown,
 };
