@@ -47,6 +47,7 @@ aggregated later.
 */
 export const BSCSR_OUTBOUND_DISPOSITIONS = [
   { value: "SCREENING_COMPLETED", label: "Screening Completed" },
+  { value: "NOT_ELIGIBLE", label: "Not Eligible" },
   ...DISPOSITIONS,
 ];
 
