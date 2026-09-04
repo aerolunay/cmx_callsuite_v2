@@ -14,6 +14,17 @@ export default function CallLogTable({ refreshKey, campaignId, onCallBack, canCa
   const [loading, setLoading] = useState(true);
   const [popup, setPopup] = useState(null); // { row, x, y } | null
 
+  // Per explicit request (custom per-campaign dispositions, see
+  // AdminCampaignsSection.jsx / campaignDispositionService.js) — a
+  // logged call's disposition VALUE might be one that only exists in
+  // some campaign's custom list, not in any of the hardcoded exports
+  // from constants/dispositions.js that resolveDispositionLabel used
+  // to rely on exclusively. Fetched once per distinct campaign_id
+  // actually present in the loaded rows (not every campaign this
+  // agent has ever touched) — a history table showing calls from 3
+  // campaigns only needs 3 lookups, not one per row.
+  const [customDispositionsCache, setCustomDispositionsCache] = useState({});
+
   const popupRef = useRef(null);
 
   useEffect(() => {
@@ -32,6 +43,25 @@ export default function CallLogTable({ refreshKey, campaignId, onCallBack, canCa
       .finally(() => setLoading(false));
   }, [refreshKey, campaignId]);
 
+  // Fetches any not-yet-cached campaign's custom disposition lists,
+  // once rows are in. Fire-and-forget per campaign, silent catch — a
+  // failed lookup just means that campaign's rows keep resolving
+  // against the hardcoded lists only, same as before this feature
+  // existed, never a broken table.
+  useEffect(() => {
+    const uncached = [...new Set(rows.map((r) => r.campaign_id).filter(Boolean))].filter(
+      (id) => !customDispositionsCache[id]
+    );
+    if (uncached.length === 0) return;
+    uncached.forEach((id) => {
+      api
+        .getCampaignDispositionsForAgent(id)
+        .then((data) => setCustomDispositionsCache((prev) => ({ ...prev, [id]: data })))
+        .catch(() => {});
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows]);
+
   // Dismiss the popup on any click outside it.
   useEffect(() => {
     if (!popup) return;
@@ -47,6 +77,18 @@ export default function CallLogTable({ refreshKey, campaignId, onCallBack, canCa
   }, [popup]);
 
   function resolveDispositionLabel(row) {
+    // Custom-list lookup FIRST — a campaign's custom list can reuse a
+    // value that also happens to exist generically (e.g. XFER_CONF),
+    // in which case either lookup would return the same label anyway;
+    // this only actually changes anything for a genuinely new
+    // value/label an admin invented that has no hardcoded match at
+    // all, which otherwise would have fallen through to showing the
+    // raw stored value.
+    const custom = customDispositionsCache[row.campaign_id];
+    const customList = row.direction === "inbound" ? custom?.inbound : custom?.outbound;
+    const customMatch = customList?.find((d) => d.value === row.disposition);
+    if (customMatch) return customMatch.label;
+
     return row.direction === "inbound"
       ? inboundDispositionLabel(row.disposition)
       : dispositionLabel(row.disposition);

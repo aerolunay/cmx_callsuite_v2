@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../../api";
+import { getInboundDispositionsForCampaign, getOutboundDispositionsForCampaign } from "../../constants/dispositions";
 
 /*
 ==================================================
@@ -128,6 +129,229 @@ function daysArrayToString(arr) {
     return `${sorted[0]}-${sorted[sorted.length - 1]}`;
   }
   return sorted.join(",");
+}
+
+// Mirrors campaignDispositionService.js's own slugifyValue on the
+// backend — kept in sync deliberately (same uppercase/underscore
+// rule) so the VALUE code an admin sees while typing a label here is
+// exactly what actually gets saved, not just a client-side preview
+// that might disagree with the server's own derivation.
+function slugifyDispositionValue(label) {
+  return String(label || "")
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+/*
+==================================================
+CAMPAIGN DISPOSITIONS EDITOR
+==================================================
+Per explicit request — lets an admin modify, add, or remove
+dispositions from the generic list, saving the campaign's own
+Inbound and/or Outbound list independently. Leaving a direction's
+checkbox OFF (the default for every campaign that's never touched
+this) means that direction keeps using the generic list exactly as it
+already does today via getInboundDispositionsForCampaign/
+getOutboundDispositionsForCampaign — those two functions, and the
+BSMSC/BSCSR hardcoded overrides they already contain, are UNCHANGED by
+this feature; this only adds a further per-campaign override on top,
+checked first by DialerPage.jsx before falling through to them.
+
+Deliberately its own small component with its own load/save/error
+state, entirely separate from the surrounding campaign create/edit
+form's own handleSubmit/buildFormData — dispositions have nothing to
+do with the campaign's core config, don't involve file uploads, and
+saving them shouldn't require re-submitting (or risk re-triggering the
+audio/dialplan side effects of) the whole campaign form. Rendered with
+key={campaignId} by its parent so switching which campaign is being
+edited always starts this editor fresh rather than carrying over
+stale rows from whichever campaign was open before.
+
+"Load Generic as Starting Point" seeds the editable rows from
+whatever that campaign already effectively shows today (which may
+itself be a hardcoded override like BSMSC/BSCSR, not the bare
+DISPOSITIONS/INBOUND_DISPOSITIONS list) — the more useful starting
+point for an admin who wants to tweak an existing list rather than
+build one from nothing.
+==================================================
+*/
+function CampaignDispositionsEditor({ campaignId }) {
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const [inboundEnabled, setInboundEnabled] = useState(false);
+  const [outboundEnabled, setOutboundEnabled] = useState(false);
+  const [inboundRows, setInboundRows] = useState([]); // [{ value, label, valueTouched }]
+  const [outboundRows, setOutboundRows] = useState([]);
+
+  function load() {
+    setLoading(true);
+    setError("");
+    api
+      .getCampaignDispositionsAdmin(campaignId)
+      .then((data) => {
+        setInboundEnabled(Boolean(data.inboundEnabled));
+        setOutboundEnabled(Boolean(data.outboundEnabled));
+        setInboundRows((data.inbound || []).map((r) => ({ ...r, valueTouched: true })));
+        setOutboundRows((data.outbound || []).map((r) => ({ ...r, valueTouched: true })));
+      })
+      .catch((err) => setError(err.message))
+      .finally(() => setLoading(false));
+  }
+
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [campaignId]);
+
+  function rowsSetter(direction) {
+    return direction === "INBOUND" ? setInboundRows : setOutboundRows;
+  }
+
+  function loadGenericAsStartingPoint(direction) {
+    const generic =
+      direction === "INBOUND" ? getInboundDispositionsForCampaign(campaignId) : getOutboundDispositionsForCampaign(campaignId);
+    rowsSetter(direction)(generic.map((d) => ({ value: d.value, label: d.label, valueTouched: true })));
+  }
+
+  function addRow(direction) {
+    rowsSetter(direction)((prev) => [...prev, { value: "", label: "", valueTouched: false }]);
+  }
+
+  function removeRow(direction, index) {
+    rowsSetter(direction)((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  function updateLabel(direction, index, newLabel) {
+    rowsSetter(direction)((prev) =>
+      prev.map((row, i) =>
+        i === index ? { ...row, label: newLabel, value: row.valueTouched ? row.value : slugifyDispositionValue(newLabel) } : row
+      )
+    );
+  }
+
+  function updateValue(direction, index, newValue) {
+    rowsSetter(direction)((prev) =>
+      prev.map((row, i) =>
+        i === index ? { ...row, value: newValue.toUpperCase().replace(/\s+/g, "_"), valueTouched: true } : row
+      )
+    );
+  }
+
+  async function handleSave() {
+    setError("");
+    setSuccess("");
+    setBusy(true);
+    try {
+      await api.saveCampaignDispositions(campaignId, {
+        inboundEnabled,
+        outboundEnabled,
+        inbound: inboundRows.map(({ value, label }) => ({ value, label })),
+        outbound: outboundRows.map(({ value, label }) => ({ value, label })),
+      });
+      setSuccess("Dispositions saved.");
+      load();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function renderDirectionEditor(direction, enabled, setEnabled, rows) {
+    const genericCount =
+      direction === "INBOUND"
+        ? getInboundDispositionsForCampaign(campaignId).length
+        : getOutboundDispositionsForCampaign(campaignId).length;
+
+    return (
+      <div style={{ marginTop: 18 }}>
+        <label className="disposition-row">
+          <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
+          Use Custom {direction === "INBOUND" ? "Inbound" : "Outbound"} Dispositions
+        </label>
+
+        {!enabled && (
+          <p style={{ fontSize: 13, color: "#888", marginTop: 4 }}>
+            Currently using the generic {direction === "INBOUND" ? "inbound" : "outbound"} list ({genericCount} options) — agents
+            see this campaign's existing default dropdown. Check the box above to override it.
+          </p>
+        )}
+
+        {enabled && (
+          <>
+            {rows.length === 0 && (
+              <p style={{ fontSize: 13, color: "#888", marginTop: 4 }}>
+                No custom dispositions yet — add one below, or load the current generic list as a starting point to edit from.
+              </p>
+            )}
+            {rows.map((row, i) => (
+              <div key={i} style={{ display: "flex", gap: 8, marginTop: 6, alignItems: "center" }}>
+                <input
+                  type="text"
+                  placeholder="Label (e.g. Screening Completed)"
+                  value={row.label}
+                  onChange={(e) => updateLabel(direction, i, e.target.value)}
+                  style={{ flex: 2 }}
+                />
+                <input
+                  type="text"
+                  placeholder="VALUE_CODE"
+                  value={row.value}
+                  onChange={(e) => updateValue(direction, i, e.target.value)}
+                  title="Stored value — auto-filled from the label, but editable."
+                  style={{ flex: 1, fontSize: 12, color: "#888" }}
+                />
+                <button type="button" className="link" onClick={() => removeRow(direction, i)}>
+                  Remove
+                </button>
+              </div>
+            ))}
+            <div style={{ marginTop: 8, display: "flex", gap: 12 }}>
+              <button type="button" className="link" onClick={() => addRow(direction)}>
+                + Add Disposition
+              </button>
+              <button type="button" className="link" onClick={() => loadGenericAsStartingPoint(direction)}>
+                Load Generic as Starting Point
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="card" style={{ marginTop: 16 }}>
+      <h3>Dispositions</h3>
+      <p style={{ fontSize: 13, color: "#888" }}>
+        Override this campaign's Inbound and/or Outbound disposition dropdown independently. Leave a direction unchecked to keep
+        using the generic list — nothing changes for agents until you check the box and save.
+      </p>
+
+      {loading ? (
+        <p>Loading…</p>
+      ) : (
+        <>
+          {error && <div className="error">{error}</div>}
+          {success && <div className="success">{success}</div>}
+
+          {renderDirectionEditor("INBOUND", inboundEnabled, setInboundEnabled, inboundRows)}
+          {renderDirectionEditor("OUTBOUND", outboundEnabled, setOutboundEnabled, outboundRows)}
+
+          <div style={{ marginTop: 16 }}>
+            <button type="button" className="button-secondary" onClick={handleSave} disabled={busy}>
+              {busy ? "Saving…" : "Save Dispositions"}
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
 }
 
 export default function AdminCampaignsSection() {
@@ -618,6 +842,14 @@ export default function AdminCampaignsSection() {
                 </div>
               </form>
             </div>
+
+            {/* Only shown for an existing campaign — dispositions
+                belong to a real cmx_dialer.campaign_settings row,
+                which doesn't exist yet in Create mode. key={campaignId}
+                forces a fresh mount (fresh fetch, fresh local state)
+                whenever the admin switches which campaign they're
+                editing, instead of carrying over stale rows. */}
+            {editingCampaignId && <CampaignDispositionsEditor key={editingCampaignId} campaignId={editingCampaignId} />}
           </div>
 
           <div className="dialer-side">

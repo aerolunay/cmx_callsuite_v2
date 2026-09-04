@@ -103,6 +103,63 @@ export default function DialerPage() {
   const [lead, setLead] = useState(null);
   const [call, setCall] = useState(null); // { callId, room, status }
   const [inboundCall, setInboundCall] = useState(null); // { status, room, callerIdNumber }
+
+  // Per explicit request — per-campaign custom disposition overrides,
+  // editable via Admin -> Campaigns -> Dispositions (see
+  // AdminCampaignsSection.jsx / campaignDispositionService.js).
+  // Fetched lazily per campaignId as calls come in, NOT for every
+  // campaign up front — most campaigns never customize this, so
+  // there's no reason to fetch for a campaignId this agent may never
+  // actually see a call for in this session. Keyed by campaignId so
+  // switching between campaigns during a shift never re-fetches the
+  // same one twice. See effectiveInboundDispositions/
+  // effectiveOutboundDispositions below for how this cache is
+  // actually consumed — falls back to the existing hardcoded
+  // getInboundDispositionsForCampaign/getOutboundDispositionsForCampaign
+  // (BSMSC/BSCSR overrides and the generic list included) whenever a
+  // campaign has no cache entry yet, or its cached entry says that
+  // direction isn't customized.
+  const [campaignDispositionsCache, setCampaignDispositionsCache] = useState({});
+
+  // Fetches once per campaignId, for whichever of inbound/outbound
+  // currently has an active call — fires on both inboundCall and call
+  // since either can independently become active (blended campaigns).
+  // Deliberately fire-and-forget with a silent catch: if this fetch
+  // fails, effectiveInboundDispositions/effectiveOutboundDispositions
+  // below simply keep falling back to the existing hardcoded lists,
+  // exactly as if this feature didn't exist yet — a transient network
+  // hiccup here should never block an agent from dispositioning a
+  // real call.
+  useEffect(() => {
+    const campaignId = inboundCall?.campaignId || call?.campaignId;
+    if (!campaignId || campaignDispositionsCache[campaignId]) return;
+    api
+      .getCampaignDispositionsForAgent(campaignId)
+      .then((data) => {
+        setCampaignDispositionsCache((prev) => ({ ...prev, [campaignId]: data }));
+      })
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inboundCall?.campaignId, call?.campaignId]);
+
+  // Effective = this campaign's custom override, if one exists AND is
+  // actually enabled for this direction; otherwise the existing
+  // hardcoded fallback (BSMSC/BSCSR overrides, or the generic list for
+  // everyone else) — completely unchanged from before this feature
+  // existed. See campaignDispositionsCache's own comment above for why
+  // a missing cache entry (not yet fetched, or fetch failed) also
+  // falls through to the hardcoded list rather than showing nothing.
+  function effectiveInboundDispositions(campaignId) {
+    const cached = campaignDispositionsCache[campaignId];
+    if (cached?.inboundEnabled && cached.inbound?.length) return cached.inbound;
+    return getInboundDispositionsForCampaign(campaignId);
+  }
+
+  function effectiveOutboundDispositions(campaignId) {
+    const cached = campaignDispositionsCache[campaignId];
+    if (cached?.outboundEnabled && cached.outbound?.length) return cached.outbound;
+    return getOutboundDispositionsForCampaign(campaignId);
+  }
   useFlashingTitle(inboundCall?.status === "ringing_agent");
   const [inboundFirstName, setInboundFirstName] = useState("");
   const [inboundLastName, setInboundLastName] = useState("");
@@ -1306,7 +1363,7 @@ export default function DialerPage() {
             {inboundCall.status === "ended" && (
               <form onSubmit={handleSaveInboundDisposition} style={{ marginTop: 14 }}>
                 <h3 style={{ marginBottom: 8 }}>Disposition</h3>
-                {getInboundDispositionsForCampaign(inboundCall?.campaignId).map((d) => (
+                {effectiveInboundDispositions(inboundCall?.campaignId).map((d) => (
                   <label key={d.value} className="disposition-row">
                     <input
                       type="radio"
@@ -1483,7 +1540,7 @@ export default function DialerPage() {
               <div className="card">
                 <h3>Disposition</h3>
                 <form onSubmit={handleSaveDisposition}>
-                  {getOutboundDispositionsForCampaign(call?.campaignId).map((d) => (
+                  {effectiveOutboundDispositions(call?.campaignId).map((d) => (
                     <label key={d.value} className="disposition-row">
                       <input
                         type="radio"

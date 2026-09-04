@@ -8,6 +8,7 @@ const express = require("express");
 const multer = require("multer");
 const db = require("../config/db");
 const ami = require("../config/ami");
+const campaignDispositionService = require("../services/campaignDispositionService");
 
 const execFileAsync = util.promisify(execFile);
 
@@ -1201,6 +1202,64 @@ router.delete("/:campaignId", requireAdmin, async (req, res) => {
   }
 
   return res.json({ success: true, reloadWarning });
+});
+
+/*
+==================================================
+GET /api/admin/campaigns/:campaignId/dispositions
+==================================================
+Powers AdminCampaignsSection.jsx's own "Dispositions" editor — fetched
+lazily when an admin opens a campaign for edit (same "fetch on
+selection" pattern as AdminLeadsSection.jsx's own autodial-rules
+fetch), not preloaded into the main campaign list, since most
+campaigns will never touch this and there's no reason to pay for the
+extra join on every page load.
+==================================================
+*/
+router.get("/:campaignId/dispositions", requireAdmin, async (req, res) => {
+  try {
+    const result = await campaignDispositionService.getCampaignDispositions(req.params.campaignId);
+    return res.json({ success: true, ...result });
+  } catch (error) {
+    console.error(`GET /api/admin/campaigns/${req.params.campaignId}/dispositions failed:`, error);
+    return res.status(500).json({ success: false, message: "Failed to load campaign dispositions." });
+  }
+});
+
+/*
+==================================================
+PUT /api/admin/campaigns/:campaignId/dispositions
+==================================================
+Body (JSON, not multipart — no file uploads involved here, unlike the
+main campaign create/update routes above): { inboundEnabled,
+outboundEnabled, inbound: [{ value, label }], outbound: [{ value,
+label }] }. `value` is optional per-row — omit it and the service
+derives one from `label` (see campaignDispositionService.js's own
+slugifyValue) — the admin editor always sends one anyway (computed
+live as the admin types a label, so they can see/adjust it before
+saving), but this keeps the route itself tolerant of a bare label-only
+payload from anywhere else that might call it later.
+==================================================
+*/
+router.put("/:campaignId/dispositions", requireAdmin, async (req, res) => {
+  const { campaignId } = req.params;
+  const { inboundEnabled, outboundEnabled, inbound, outbound } = req.body;
+
+  try {
+    const result = await campaignDispositionService.saveCampaignDispositions(campaignId, {
+      inboundEnabled: Boolean(inboundEnabled),
+      outboundEnabled: Boolean(outboundEnabled),
+      inbound,
+      outbound,
+    });
+    return res.json({ success: true, ...result });
+  } catch (error) {
+    console.error(`PUT /api/admin/campaigns/${campaignId}/dispositions failed:`, error);
+    if (error.message.includes("is required when custom") || error.message.includes("has no campaign_settings row")) {
+      return res.status(400).json({ success: false, message: error.message });
+    }
+    return res.status(500).json({ success: false, message: "Failed to save campaign dispositions." });
+  }
 });
 
 module.exports = router;

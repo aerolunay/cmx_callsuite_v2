@@ -12,6 +12,7 @@ const crossAppHandoffService = require("../services/crossAppHandoffService");
 const recordingUploadService = require("../services/recordingUploadService");
 const conferenceService = require("../services/conferenceService");
 const attendedTransferService = require("../services/attendedTransferService");
+const campaignDispositionService = require("../services/campaignDispositionService");
 const { requireRoles, requireCampaignAccess, getAssignedCampaignIds, UNRESTRICTED_CAMPAIGN_ROLES } = require("../services/accessControlService");
 
 const router = express.Router();
@@ -1091,6 +1092,42 @@ router.get("/dialer/call-log", requireAuth, async (req, res) => {
   } catch (error) {
     console.error("GET /api/dialer/call-log failed:", error);
     return res.status(500).json({ success: false, message: "Failed to load call log." });
+  }
+});
+
+/*
+==================================================
+GET /api/dialer/campaigns/:campaignId/dispositions
+==================================================
+Agent-facing read of a campaign's custom disposition override, if any
+— powers DialerPage.jsx's own effective-dispositions resolution (see
+that file's own comment on effectiveInboundDispositions/
+effectiveOutboundDispositions). Deliberately NOT scoped to the agent's
+own assigned campaigns the way abandoned-voicemail above is — a
+disposition label list carries no sensitive information, and gating
+this on assignment risks blocking a legitimate disposition lookup for
+a call an agent is already handling for some other reason (e.g. an
+attended transfer landing them on a campaign they're not normally
+assigned to) purely because of this extra check. Any authenticated
+agent can read any campaign's disposition list; only requireAdmin
+above can ever change one.
+
+Falls back to { inboundEnabled: false, outboundEnabled: false,
+inbound: [], outbound: [] } (i.e. "no custom override, use generic")
+for a campaignId with no campaign_settings row at all, rather than
+404ing — DialerPage.jsx calls this defensively for whatever
+campaignId is on the active call, and a missing/unrecognized ID should
+just mean "nothing custom here," not break the disposition dropdown
+entirely.
+==================================================
+*/
+router.get("/dialer/campaigns/:campaignId/dispositions", requireAuth, async (req, res) => {
+  try {
+    const result = await campaignDispositionService.getCampaignDispositions(req.params.campaignId);
+    return res.json({ success: true, ...result });
+  } catch (error) {
+    console.error(`GET /api/dialer/campaigns/${req.params.campaignId}/dispositions failed:`, error);
+    return res.json({ success: true, inboundEnabled: false, outboundEnabled: false, inbound: [], outbound: [] });
   }
 });
 

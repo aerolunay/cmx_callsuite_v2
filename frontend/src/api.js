@@ -257,6 +257,24 @@ export const api = {
   deleteCampaign: (campaignId) =>
     request(`/admin/campaigns/${encodeURIComponent(campaignId)}`, { method: "DELETE" }),
 
+  // Per-campaign custom disposition lists (Inbound/Outbound), editable
+  // via AdminCampaignsSection.jsx's own "Dispositions" panel — see
+  // campaignDispositionService.js on the backend for the full
+  // reasoning. JSON body, unlike createCampaign/updateCampaign above —
+  // no file uploads involved here.
+  getCampaignDispositionsAdmin: (campaignId) =>
+    request(`/admin/campaigns/${encodeURIComponent(campaignId)}/dispositions`),
+  saveCampaignDispositions: (campaignId, payload) =>
+    request(`/admin/campaigns/${encodeURIComponent(campaignId)}/dispositions`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  // Agent-facing read of the same data — used by DialerPage.jsx to
+  // resolve the effective disposition list for whatever campaign the
+  // active call belongs to.
+  getCampaignDispositionsForAgent: (campaignId) =>
+    request(`/dialer/campaigns/${encodeURIComponent(campaignId)}/dispositions`),
+
   // Recordings — deliberately at /recordings, not /admin/recordings,
   // since this is now its own standalone page (RecordingsPage.jsx),
   // not part of Admin — gated server-side by requireAdminOrSupervisor
