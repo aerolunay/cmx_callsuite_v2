@@ -1431,7 +1431,7 @@ async function getCallLog(agentUser, campaignId, limit = 50) {
     outboundFilter = " AND dcl.campaign_id = ?";
     outboundParams.push(campaignId);
   }
-  outboundParams.push(start, end);
+  outboundParams.push(start, end, limit);
 
   const inboundParams = [agentUser];
   let inboundFilter = "";
@@ -1439,8 +1439,24 @@ async function getCallLog(agentUser, campaignId, limit = 50) {
     inboundFilter = " AND icl.campaign_id = ?";
     inboundParams.push(campaignId);
   }
-  inboundParams.push(start, end);
+  inboundParams.push(start, end, limit);
 
+  // REAL BUG FIX, per explicit request — LIMIT used to apply only
+  // once, to the COMBINED outbound+inbound result after UNION ALL +
+  // ORDER BY. That meant a single shared cap across both directions,
+  // not `limit` rows of EACH — harmless when campaignId narrows things
+  // down enough that combined volume stays under the cap, but with
+  // "All Campaigns" selected (campaignId empty, no filter on either
+  // subquery), an agent's outbound call volume across every campaign
+  // combined routinely swamps the cap by itself, silently crowding out
+  // older inbound calls entirely — confirmed live: inbound calls
+  // "missing" specifically (and only) in All Campaigns view, never
+  // when a single campaign is selected. Each direction now gets its
+  // OWN `ORDER BY ... LIMIT ?` inside its own subquery — so inbound
+  // calls are never at the mercy of how many outbound calls happened
+  // to also occur today — before the outer query re-sorts and trims
+  // the combined (up to 2×limit) rows down to `limit` again for the
+  // final response.
   const [rows] = await db.execute(
     `
       (
@@ -1465,6 +1481,8 @@ async function getCallLog(agentUser, campaignId, limit = 50) {
         WHERE dcl.agent_user = ?
           ${outboundFilter}
           AND dcl.call_started_at BETWEEN ? AND ?
+        ORDER BY dcl.call_started_at DESC
+        LIMIT ?
       )
       UNION ALL
       (
@@ -1489,6 +1507,8 @@ async function getCallLog(agentUser, campaignId, limit = 50) {
         WHERE icl.agent_user = ?
           ${inboundFilter}
           AND icl.call_started_at BETWEEN ? AND ?
+        ORDER BY icl.call_started_at DESC
+        LIMIT ?
       )
       ORDER BY call_started_at DESC
       LIMIT ?
