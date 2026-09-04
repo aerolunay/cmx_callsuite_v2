@@ -1422,7 +1422,7 @@ campaign_id in that case, same graceful-degradation pattern used
 elsewhere in this app for a missing campaign name).
 ==================================================
 */
-async function getCallLog(agentUser, campaignId, limit = 50) {
+async function getCallLog(agentUser, campaignId, limit = 2000) {
   const { start, end } = await getEasternDayBoundsForServerClock();
 
   const outboundParams = [agentUser];

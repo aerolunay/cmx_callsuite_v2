@@ -1738,28 +1738,48 @@ router.get("/recordings", requireRoles(...RECORDINGS_ROLES), requireCampaignAcce
   try {
     const { startDate, endDate, campaignId, agentName } = req.query;
 
-    const params = [];
-    let dateFilter = "";
-    if (startDate) {
-      dateFilter += " AND combined.call_started_at >= ?";
-      params.push(`${startDate} 00:00:00`);
-    }
-    if (endDate) {
-      dateFilter += " AND combined.call_started_at <= ?";
-      params.push(`${endDate} 23:59:59`);
+    // REAL BUG FIX, per explicit request — same class of bug as
+    // GET /admin/total-calls and dialerService.js's getCallLog: date/
+    // campaign/agent filtering and the LIMIT both used to apply only
+    // ONCE, to the COMBINED outbound+inbound UNION ALL result. With
+    // "All Campaigns" selected, outbound call volume across every
+    // campaign combined routinely swamped the 200-row cap by itself,
+    // silently crowding inbound recordings out of the list entirely —
+    // same symptom already confirmed and fixed elsewhere in this app.
+    // Each direction now filters AND limits independently, inside its
+    // own UNION branch, before combining, so inbound recordings always
+    // get their own fair 200 regardless of outbound volume.
+    function buildFilterAndParams(prefix) {
+      const filterParams = [];
+      let filter = "";
+      if (startDate) {
+        filter += ` AND ${prefix}.call_started_at >= ?`;
+        filterParams.push(`${startDate} 00:00:00`);
+      }
+      if (endDate) {
+        filter += ` AND ${prefix}.call_started_at <= ?`;
+        filterParams.push(`${endDate} 23:59:59`);
+      }
+      if (campaignId) {
+        filter += ` AND ${prefix}.campaign_id = ?`;
+        filterParams.push(campaignId);
+      }
+      if (agentName) {
+        filter += " AND au.full_name LIKE ?";
+        filterParams.push(`%${agentName}%`);
+      }
+      return { filter, filterParams };
     }
 
-    let campaignFilter = "";
-    if (campaignId) {
-      campaignFilter = " AND combined.campaign_id = ?";
-      params.push(campaignId);
-    }
-
-    let agentFilter = "";
-    if (agentName) {
-      agentFilter = " AND combined.agent_name LIKE ?";
-      params.push(`%${agentName}%`);
-    }
+    const outboundBuilt = buildFilterAndParams("d");
+    const inboundBuilt = buildFilterAndParams("i");
+    // Bumped from 200 to 2000, per explicit request — same named-
+    // constant reasoning as total-calls in adminRoutes.js, keeping the
+    // inner-per-direction cap and the outer combined cap in the same
+    // documented 2:1 ratio.
+    const PER_DIRECTION_LIMIT = 2000;
+    const outboundParams = [...outboundBuilt.filterParams, PER_DIRECTION_LIMIT];
+    const inboundParams = [...inboundBuilt.filterParams, PER_DIRECTION_LIMIT];
 
     const [rows] = await db.execute(
       `
@@ -1768,29 +1788,34 @@ router.get("/recordings", requireRoles(...RECORDINGS_ROLES), requireCampaignAcce
                combined.direction, combined.recording_key, combined.disposition, combined.comments,
                combined.first_name, combined.last_name, combined.callback_at, combined.wait_seconds
         FROM (
-          SELECT
-            d.call_id, d.campaign_id, d.agent_user, au.full_name AS agent_name,
-            d.phone_number, d.call_started_at, d.call_ended_at, d.recording_key, 'outbound' AS direction,
-            d.disposition, d.comments, d.first_name, d.last_name, d.callback_at, NULL AS wait_seconds
-          FROM cmx_dialer.dialer_call_log d
-          LEFT JOIN cmx_dialer.app_users au ON au.vicidial_user = d.agent_user
-          WHERE d.recording_key IS NOT NULL
-
+          (
+            SELECT
+              d.call_id, d.campaign_id, d.agent_user, au.full_name AS agent_name,
+              d.phone_number, d.call_started_at, d.call_ended_at, d.recording_key, 'outbound' AS direction,
+              d.disposition, d.comments, d.first_name, d.last_name, d.callback_at, NULL AS wait_seconds
+            FROM cmx_dialer.dialer_call_log d
+            LEFT JOIN cmx_dialer.app_users au ON au.vicidial_user = d.agent_user
+            WHERE d.recording_key IS NOT NULL ${outboundBuilt.filter}
+            ORDER BY d.call_started_at DESC
+            LIMIT ?
+          )
           UNION ALL
-
-          SELECT
-            i.call_id, i.campaign_id, i.agent_user, au.full_name AS agent_name,
-            i.caller_id_number AS phone_number, i.call_started_at, i.call_ended_at, i.recording_key, 'inbound' AS direction,
-            i.disposition, i.comments, i.first_name, i.last_name, i.callback_at, i.wait_seconds
-          FROM cmx_dialer.inbound_call_log i
-          LEFT JOIN cmx_dialer.app_users au ON au.vicidial_user = i.agent_user
-          WHERE i.recording_key IS NOT NULL
+          (
+            SELECT
+              i.call_id, i.campaign_id, i.agent_user, au.full_name AS agent_name,
+              i.caller_id_number AS phone_number, i.call_started_at, i.call_ended_at, i.recording_key, 'inbound' AS direction,
+              i.disposition, i.comments, i.first_name, i.last_name, i.callback_at, i.wait_seconds
+            FROM cmx_dialer.inbound_call_log i
+            LEFT JOIN cmx_dialer.app_users au ON au.vicidial_user = i.agent_user
+            WHERE i.recording_key IS NOT NULL ${inboundBuilt.filter}
+            ORDER BY i.call_started_at DESC
+            LIMIT ?
+          )
         ) combined
-        WHERE 1=1 ${dateFilter} ${campaignFilter} ${agentFilter}
         ORDER BY combined.call_started_at DESC
-        LIMIT 200
+        LIMIT ${PER_DIRECTION_LIMIT * 2}
       `,
-      params
+      [...outboundParams, ...inboundParams]
     );
 
     return res.json({ success: true, recordings: rows });

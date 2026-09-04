@@ -1783,13 +1783,47 @@ router.get(
     const { campaignId } = req.query;
     const { start, end } = await statsService.getEasternDayBoundsForServerClock();
 
-    const params = [start, end];
-    let campaignFilter = "";
-    if (campaignId) {
-      campaignFilter = "AND combined.campaign_id = ?";
-      params.push(campaignId);
-    }
+    // Bumped from 200 to 2000, per explicit request — same reasoning
+    // as the crowding-out fix right below: keep this a named constant
+    // (not a magic number pasted 3x) so the inner-per-direction caps
+    // and the outer combined cap stay in the documented 2:1 ratio if
+    // this ever needs adjusting again.
+    const PER_DIRECTION_LIMIT = 2000;
 
+    const outboundParams = [start, end];
+    let outboundCampaignFilter = "";
+    if (campaignId) {
+      outboundCampaignFilter = "AND campaign_id = ?";
+      outboundParams.push(campaignId);
+    }
+    outboundParams.push(PER_DIRECTION_LIMIT);
+
+    const inboundParams = [start, end];
+    let inboundCampaignFilter = "";
+    if (campaignId) {
+      inboundCampaignFilter = "AND campaign_id = ?";
+      inboundParams.push(campaignId);
+    }
+    inboundParams.push(PER_DIRECTION_LIMIT);
+
+    // REAL BUG FIX, per explicit request — same class of bug as
+    // dialerService.js's getCallLog: LIMIT 200 used to apply only
+    // once, to the COMBINED outbound+inbound UNION ALL result (the
+    // date-range/campaign filter and ORDER BY/LIMIT all lived on the
+    // OUTER query, after combining). With a specific campaign
+    // selected, combined volume for just that one campaign routinely
+    // stayed under 200, so nothing was ever lost. With "All Campaigns"
+    // selected (no campaignId), every campaign's outbound call volume
+    // stacked together into one much larger pool, and since outbound
+    // dial attempts vastly outnumber inbound calls across a whole
+    // day's worth of every campaign combined, they silently crowded
+    // nearly all inbound calls out of the top-200 window — confirmed
+    // live: only 3 inbound calls showing in All Campaigns view (should
+    // have been far more), full list correct the moment a single
+    // campaign was selected instead. Each direction now filters AND
+    // limits independently, inside its own UNION branch, before ever
+    // being combined — so inbound calls always get their own fair 200
+    // regardless of how many outbound calls happened that day.
     const [rows] = await db.execute(
       `
         SELECT
@@ -1801,11 +1835,23 @@ router.get(
           au.full_name AS agent_name,
           combined.agent_user
         FROM (
-          SELECT campaign_id, phone_number, call_id, call_started_at, agent_user, 'outbound' AS direction
-          FROM cmx_dialer.dialer_call_log
+          (
+            SELECT campaign_id, phone_number, call_id, call_started_at, agent_user, 'outbound' AS direction
+            FROM cmx_dialer.dialer_call_log
+            WHERE call_started_at >= ? AND call_started_at <= ?
+            ${outboundCampaignFilter}
+            ORDER BY call_started_at DESC
+            LIMIT ?
+          )
           UNION ALL
-          SELECT campaign_id, caller_id_number AS phone_number, call_id, call_started_at, agent_user, 'inbound' AS direction
-          FROM cmx_dialer.inbound_call_log
+          (
+            SELECT campaign_id, caller_id_number AS phone_number, call_id, call_started_at, agent_user, 'inbound' AS direction
+            FROM cmx_dialer.inbound_call_log
+            WHERE call_started_at >= ? AND call_started_at <= ?
+            ${inboundCampaignFilter}
+            ORDER BY call_started_at DESC
+            LIMIT ?
+          )
         ) combined
         LEFT JOIN (
           SELECT related_call_id, SUM(duration_seconds) AS handle_time_seconds
@@ -1814,12 +1860,10 @@ router.get(
           GROUP BY related_call_id
         ) agg ON agg.related_call_id = combined.call_id
         LEFT JOIN cmx_dialer.app_users au ON au.vicidial_user = combined.agent_user
-        WHERE combined.call_started_at >= ? AND combined.call_started_at <= ?
-        ${campaignFilter}
         ORDER BY combined.call_started_at DESC
-        LIMIT 200
+        LIMIT ${PER_DIRECTION_LIMIT * 2}
       `,
-      params
+      [...outboundParams, ...inboundParams]
     );
 
     const calls = rows.map((r) => ({
