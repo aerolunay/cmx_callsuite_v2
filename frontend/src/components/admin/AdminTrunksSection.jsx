@@ -37,6 +37,12 @@ export default function AdminTrunksSection() {
 
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  // Tracks whether the CURRENT success-state message is actually a
+  // reloadWarning (DB saved fine, but applying to Asterisk failed) —
+  // set explicitly at each call site below, rather than guessing from
+  // the message text, so the render below can style it as .warning
+  // (amber) instead of .success (green) without any string-sniffing.
+  const [successIsWarning, setSuccessIsWarning] = useState(false);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
 
@@ -63,6 +69,7 @@ export default function AdminTrunksSection() {
     setActive(true);
     setError("");
     setSuccess("");
+    setSuccessIsWarning(false);
   }
 
   function handleStartEdit(t) {
@@ -75,12 +82,14 @@ export default function AdminTrunksSection() {
     setActive(t.active === 1 || t.active === true);
     setError("");
     setSuccess("");
+    setSuccessIsWarning(false);
   }
 
   async function handleSubmit(e) {
     e.preventDefault();
     setError("");
     setSuccess("");
+    setSuccessIsWarning(false);
     setBusy(true);
     try {
       const payload = { sipUsername, sipPassword, sipServer, description, active };
@@ -90,8 +99,17 @@ export default function AdminTrunksSection() {
       } else {
         result = await api.createTrunk({ trunkName, ...payload });
       }
-      setSuccess(result.reloadWarning || "Trunk saved.");
+      // REAL BUG FIX: resetForm() itself calls setSuccess("") — calling
+      // it AFTER setSuccess(result.reloadWarning || "Trunk saved.")
+      // meant React's automatic batching collapsed both updates into
+      // one render using resetForm's "" as the final value, so this
+      // message (including any reloadWarning — e.g. "Trunk was saved,
+      // but applying it to Asterisk failed") never actually rendered
+      // at all. resetForm() must run FIRST so the real message set
+      // afterward is what actually reaches the screen.
       resetForm();
+      setSuccessIsWarning(Boolean(result.reloadWarning));
+      setSuccess(result.reloadWarning || "Trunk saved.");
       loadTrunks();
     } catch (err) {
       setError(err.message);
@@ -104,9 +122,13 @@ export default function AdminTrunksSection() {
     if (!window.confirm(`Delete trunk "${t.trunk_name}"? This can't be undone.`)) return;
     setError("");
     setSuccess("");
+    setSuccessIsWarning(false);
     setBusy(true);
     try {
       const result = await api.deleteTrunk(t.trunk_id);
+      // Same fix as handleSubmit above — set AFTER any state that
+      // clears success/error, never before.
+      setSuccessIsWarning(Boolean(result.reloadWarning));
       setSuccess(result.reloadWarning || "Trunk deleted.");
       loadTrunks();
     } catch (err) {
@@ -126,7 +148,13 @@ export default function AdminTrunksSection() {
       </p>
 
       {error && <div className="error">{error}</div>}
-      {success && <div className="success">{success}</div>}
+      {/* REAL BUG FIX (see handleSubmit/handleDelete above) — a
+          reloadWarning ("saved, but Asterisk wasn't updated") now
+          renders in the same amber .warning styling used elsewhere,
+          not blended into the identical-looking green .success box a
+          plain "Trunk saved." gets. Both are real outcomes worth
+          telling apart at a glance, not just in the text. */}
+      {success && <div className={successIsWarning ? "warning" : "success"}>{success}</div>}
 
       {loading ? (
         <p>Loading…</p>

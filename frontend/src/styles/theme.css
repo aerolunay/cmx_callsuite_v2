@@ -257,6 +257,57 @@ button.primary:disabled {
   margin-bottom: 12px;
 }
 
+/*
+==================================================
+GLOBAL .error / .success / .warning
+==================================================
+Per explicit request, following a real incident: a trunk's Asterisk
+apply-failure warning (regenerateTrunkConfFile failing after the DB
+row itself saved fine — see adminRoutes.js's own reloadWarning) was
+rendered inside a plain, entirely unstyled <div className="success">
+everywhere OUTSIDE the login page (.auth-card above only scoped its
+own .error/.success, and nothing else in this file ever defined a
+bare .error/.success/.warning rule) — meaning it was completely
+indistinguishable, color and all, from an ordinary "Trunk saved."
+message, and got missed. Every admin section (AdminTrunksSection,
+AdminCampaignsSection, AdminUsersSection, etc.) already uses these
+same three class names, so this one rule set fixes all of them at
+once rather than requiring one CSS tweak per section. .warning is
+NEW — used specifically for a "technically succeeded, but with a
+caveat worth actually reading" message (a reloadWarning), distinct
+from a clean .success and short of a hard .error.
+==================================================
+*/
+.error {
+  color: var(--cmx-danger);
+  background: #fdecea;
+  border: 1px solid var(--cmx-danger);
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+
+.success {
+  color: var(--cmx-success);
+  background: #eaf6ec;
+  border: 1px solid var(--cmx-success);
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+
+.warning {
+  color: var(--cmx-warning);
+  background: #fdf3e7;
+  border: 1px solid var(--cmx-warning);
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+
 /* ===== Landing / general content ===== */
 .page-content {
   padding: 32px;
