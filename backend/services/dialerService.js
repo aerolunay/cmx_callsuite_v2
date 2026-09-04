@@ -412,6 +412,17 @@ function startCall({
   shouldRunAmd = true,
   outboundTrunk,
 }) {
+  // REAL BUG FIX, per explicit request — see agentStatusService.js's
+  // own claimAgentForOutboundDial/releaseAgentForOutboundDial comment
+  // for the full race-condition writeup. This MUST be the absolute
+  // first thing startCall() does, before anything else at all — JS's
+  // single-threaded, run-to-completion semantics mean nothing else can
+  // run before this line executes, closing the race window down to
+  // zero rather than just narrowing it. Released once the real
+  // IN_CALL status write actually completes, further down this same
+  // function.
+  agentStatusService.claimAgentForOutboundDial(appUserId);
+
   // NEW — per explicit request, per-campaign outbound trunk selection
   // (Telpeer, for campaigns that need Caller ID spoofing, alongside
   // the existing default QuestBlue trunk/CMXCallSuite). Defense in
@@ -428,6 +439,12 @@ function startCall({
     try {
       suffix = allocateRoomSuffix();
     } catch (err) {
+      // Release the claim here too — this is the one early-exit path
+      // that returns before ever reaching the release call further
+      // down; without this, a room-allocation failure would leave a
+      // stale claim permanently excluding this agent from inbound
+      // calls until the process restarts.
+      agentStatusService.releaseAgentForOutboundDial(appUserId);
       return reject(err);
     }
 
@@ -483,6 +500,16 @@ function startCall({
     } catch (err) {
       console.error("[dialerService] Failed to set IN_CALL status:", err.message);
     }
+
+    // Claim released — whether the write above succeeded or failed,
+    // there's no reason to keep holding it: either the agent's real
+    // status now correctly reads IN_CALL (so the normal status check
+    // in getAnyReadyAgentWithExtension already excludes them going
+    // forward on its own), or it failed and they're stuck as READY
+    // regardless of this claim, in which case an inbound match
+    // reaching them is no worse than the pre-existing failure already
+    // happening.
+    agentStatusService.releaseAgentForOutboundDial(appUserId);
 
     // Listen for this call's agent ConfbridgeJoin before firing leg 2.
     // Matched on room number only (conference numbers are unique per

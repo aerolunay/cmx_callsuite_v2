@@ -300,6 +300,56 @@ async function resetSkipCount(appUserId) {
   await db.execute(`UPDATE cmx_dialer.app_users SET priority_skip_count = 0 WHERE app_user_id = ?`, [appUserId]);
 }
 
+/*
+==================================================
+OUTBOUND-DIAL CLAIM — REAL BUG FIX, per explicit request
+==================================================
+Closes a genuine race condition, confirmed via direct code trace: an
+agent clicking "Dial Next"/manual dial doesn't have their status
+actually written as IN_CALL in the database until dialerService.js's
+startCall() reaches its own `await agentStatusService.setStatus(...,
+"IN_CALL", ...)` line — which happens AFTER room allocation and
+callId generation, not synchronously the instant the click is
+processed. During that brief window, this agent's status_log row
+still reads READY.
+
+Separately, getAnyReadyAgentWithExtension() below (the inbound-call-
+to-agent matcher) is a plain SELECT with no locking, and gets
+re-triggered constantly — not just when a new inbound call arrives,
+but every single time ANY agent anywhere transitions to READY (see
+inboundCallService.js's own statusChanged listener). In a busy center
+that happens very often, meaning this narrow window gets tested
+frequently system-wide, not just in a rare edge case.
+
+Net effect without this fix: an agent could be mid-flight on an
+outbound dial and STILL get matched to a waiting inbound call in that
+same window, resulting in a genuine double-booking — two simultaneous
+Originate attempts landing on the same agent's extension.
+
+Fix: a synchronous, in-memory claim — startCall() calls
+claimAgentForOutboundDial(appUserId) as the very FIRST thing it does,
+before any await at all (JS's single-threaded, run-to-completion
+semantics mean nothing else can run in between), and releases it once
+the real IN_CALL status write actually completes (at which point the
+normal status='READY' check below already excludes them correctly on
+its own — the claim only needs to bridge this one specific gap, not
+stay held for the call's whole duration). Deliberately a plain
+in-memory Set, matching this app's existing "single Node process"
+scoping (see dialerService.js's own activeCalls/room-allocator
+comments) — not a DB-level lock, since nothing here needs to survive a
+process restart.
+==================================================
+*/
+const agentsClaimingOutboundDial = new Set();
+
+function claimAgentForOutboundDial(appUserId) {
+  agentsClaimingOutboundDial.add(appUserId);
+}
+
+function releaseAgentForOutboundDial(appUserId) {
+  agentsClaimingOutboundDial.delete(appUserId);
+}
+
 async function getAnyReadyAgentWithExtension(campaignId, excludeAppUserIds = []) {
   const excludeSet = new Set(excludeAppUserIds);
 
@@ -357,6 +407,12 @@ async function getAnyReadyAgentWithExtension(campaignId, excludeAppUserIds = [])
     const { app_user_id: appUserId, vicidial_user: agentUser, priority, priority_skip_count: skipCount } = row;
     if (!agentUser) continue;
     if (excludeSet.has(appUserId)) continue;
+    // REAL BUG FIX, per explicit request — see this function's own
+    // claim/release comment above. An agent mid-flight on an outbound
+    // dial still reads READY in the query above (their status write
+    // hasn't landed yet), but must never be matched to an inbound
+    // call in that window.
+    if (agentsClaimingOutboundDial.has(appUserId)) continue;
     if (!ws.isConnected(appUserId)) continue;
     // Priority 4 — hard exclusion, see this function's own comment
     // above. Filtered out here, before eligible.length is even
@@ -532,6 +588,8 @@ module.exports = {
   setStatus,
   closeCurrentStatus,
   getAnyReadyAgentWithExtension,
+  claimAgentForOutboundDial,
+  releaseAgentForOutboundDial,
   setPriority,
   isCallTied,
   statusEvents,
