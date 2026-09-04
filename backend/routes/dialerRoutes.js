@@ -1559,26 +1559,32 @@ router.post("/dialer/disposition/:callId", requireAuth, async (req, res) => {
       console.error("Failed to update agent status after disposition:", statusErr.message);
     }
 
-    // BSMSC-only, fire-and-forget — the dialer_call_log row for this
-    // call already committed above (via saveDisposition), so an upload
-    // failure here can never leave the disposition itself half-saved.
-    // Never awaited into the response — same non-blocking pattern
-    // already used for the welcome email in adminRoutes.js. Updates
-    // recording_key on the SAME row once the upload actually completes,
-    // which could be anywhere from under a second to a while later
-    // depending on file size/network — the Call Logs page (built next)
-    // should treat a null recording_key as "still uploading or was
-    // never recorded," not as an error.
-    if (campaignId === "CMXBSMSC") {
-      recordingUploadService
-        .uploadRecording(callId, campaignId)
-        .then((key) =>
-          db.execute(`UPDATE cmx_dialer.dialer_call_log SET recording_key = ? WHERE call_id = ?`, [key, callId])
-        )
-        .catch((err) => {
-          console.error(`[dialerRoutes] Failed to upload recording for call ${callId}:`, err.message);
-        });
-    }
+    // REAL BUG FIX, per explicit request — this used to be gated
+    // `if (campaignId === "CMXBSMSC")`, a leftover from when this app
+    // only supported recording for one specific campaign. The actual
+    // recording START (see the ConfbridgeJoin handler in
+    // dialerService.js) was already fixed a while back to check every
+    // campaign's own real campaign_recording column instead of this
+    // same hardcoded string — but this UPLOAD step never got the same
+    // update, so any OTHER campaign with recording genuinely enabled
+    // (confirmed live: CMXBSCSR and CMXHTAOB both show ALLCALLS) still
+    // had its local .wav file captured on the Asterisk server the
+    // whole time, but it silently NEVER got uploaded to S3 or linked
+    // via recording_key — invisible from the app's perspective, correct
+    // and complete on disk. Now attempts the upload unconditionally;
+    // uploadRecording() already has its own clear, specific error for
+    // "no local file found" (a campaign with recording genuinely
+    // disabled), caught right below exactly as before — so a NEVER
+    // campaign still fails harmlessly here, just without needing a
+    // second, redundant DB query to pre-check that in advance.
+    recordingUploadService
+      .uploadRecording(callId, campaignId)
+      .then((key) =>
+        db.execute(`UPDATE cmx_dialer.dialer_call_log SET recording_key = ? WHERE call_id = ?`, [key, callId])
+      )
+      .catch((err) => {
+        console.error(`[dialerRoutes] Failed to upload recording for call ${callId}:`, err.message);
+      });
 
     return res.json({ success: true, ...result });
   } catch (error) {
@@ -1664,20 +1670,20 @@ router.post("/dialer/inbound-disposition", requireAuth, async (req, res) => {
 
     await inboundCallService.finalizeInboundCall(callId, appUserId, setNotReady);
 
-    // BSMSC-only, fire-and-forget — same reasoning as outbound above.
-    // The inbound_call_log row already committed by the time this
-    // runs, so an upload failure here never affects the disposition
-    // save itself.
-    if (inboundCampaignId === "CMXBSMSC") {
-      recordingUploadService
-        .uploadRecording(callId, inboundCampaignId)
-        .then((key) =>
-          db.execute(`UPDATE cmx_dialer.inbound_call_log SET recording_key = ? WHERE call_id = ?`, [key, callId])
-        )
-        .catch((err) => {
-          console.error(`[dialerRoutes] Failed to upload recording for call ${callId}:`, err.message);
-        });
-    }
+    // REAL BUG FIX, per explicit request — same stale CMXBSMSC-only
+    // gate as the outbound disposition route above, same fix: attempt
+    // the upload unconditionally rather than pre-filtering by a single
+    // hardcoded campaign id, and let uploadRecording()'s own "no local
+    // file found" error (caught right below) handle a genuinely
+    // non-recorded campaign harmlessly.
+    recordingUploadService
+      .uploadRecording(callId, inboundCampaignId)
+      .then((key) =>
+        db.execute(`UPDATE cmx_dialer.inbound_call_log SET recording_key = ? WHERE call_id = ?`, [key, callId])
+      )
+      .catch((err) => {
+        console.error(`[dialerRoutes] Failed to upload recording for call ${callId}:`, err.message);
+      });
 
     return res.json({ success: true });
   } catch (error) {
