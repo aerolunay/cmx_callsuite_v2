@@ -423,16 +423,29 @@ function startCall({
   // function.
   agentStatusService.claimAgentForOutboundDial(appUserId);
 
-  // NEW — per explicit request, per-campaign outbound trunk selection
-  // (Telpeer, for campaigns that need Caller ID spoofing, alongside
-  // the existing default QuestBlue trunk/CMXCallSuite). Defense in
-  // depth: campaignRoutes.js already validates this against
-  // ALLOWED_OUTBOUND_TRUNKS before it's ever saved, but this value
-  // ends up directly inside a dialplan channel string
-  // (PJSIP/${EXTEN}@${CMXTRUNK}, see extensions.conf), so it's
-  // re-validated here too rather than trusted from a single layer up
-  // the call chain.
-  const resolvedOutboundTrunk = outboundTrunk === "Telpeer" ? "Telpeer" : "CMXCallSuite";
+  // REAL BUG FIX, per explicit request — this used to re-validate
+  // against a single hardcoded literal "Telpeer" (`outboundTrunk ===
+  // "Telpeer" ? "Telpeer" : "CMXCallSuite"`), a leftover from BEFORE
+  // the dynamic multi-trunk system existed (Admin -> DID/Trunk Setup,
+  // cmx_dialer.outbound_trunks — see adminRoutes.js/campaignRoutes.js).
+  // Any trunk created through that feature (e.g. "TELPEER-HTA-OB")
+  // failed this exact-string check and silently fell back to
+  // CMXCallSuite on EVERY outbound call, regardless of what the
+  // campaign's own Outbound Trunk setting actually said — confirmed
+  // live via a real test call showing "Using outbound trunk:
+  // CMXCallSuite" in the Asterisk CLI despite the campaign being
+  // configured for a different, real, active trunk.
+  //
+  // outboundTrunk here already comes from cmx_dialer.campaign_
+  // settings.outbound_trunk (see dialerRoutes.js's own call site),
+  // which campaignRoutes.js's isValidOutboundTrunk() already validates
+  // against this SAME outbound_trunks table before ever saving it —
+  // so trusting that column's value here (falling back to
+  // CMXCallSuite only when it's genuinely blank/falsy) matches the
+  // real, current trust boundary, instead of re-applying a stale one
+  // from back when "Telpeer" was the only alternate trunk that could
+  // ever exist.
+  const resolvedOutboundTrunk = outboundTrunk || "CMXCallSuite";
   phoneNumber = normalizePhoneNumber(phoneNumber);
   return new Promise(async (resolve, reject) => {
     let suffix;
