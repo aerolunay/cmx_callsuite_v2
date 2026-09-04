@@ -232,6 +232,15 @@ export const api = {
     if (campaignId) params.set("campaignId", campaignId);
     return request(`/admin/reports/raw-calls?${params.toString()}`);
   },
+  // NEW — "Calls Flagged" (call avoidance tracking), admin/wfm only.
+  getCallFlags: (startDate, endDate, campaignId) => {
+    const params = new URLSearchParams();
+    if (startDate) params.set("startDate", startDate);
+    if (endDate) params.set("endDate", endDate);
+    if (campaignId) params.set("campaignId", campaignId);
+    const qs = params.toString();
+    return request(`/admin/call-flags${qs ? `?${qs}` : ""}`);
+  },
 
   // Campaign management — create/edit auto-creates the DID routing,
   // dialplan, and audio prompts server-side (see campaignRoutes.js).

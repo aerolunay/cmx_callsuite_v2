@@ -854,6 +854,31 @@ async function endCall(callId) {
     throw new Error(`No active call found for callId ${callId}.`);
   }
 
+  // NEW — call avoidance tracking, per explicit request: flags every
+  // instance of the agent clicking Hang Up while the customer is still
+  // actively connected (status === "customer_connected" AND their
+  // channel is still set — i.e. they haven't already left on their
+  // own). This function is confirmed agent-initiated ONLY — a
+  // customer hanging up first goes through the completely separate
+  // finalizeCustomerInitiatedEnd() path in registerCallEventTracking()
+  // below instead, so this can safely fire unconditionally here
+  // without ever misattributing a customer-initiated end to the
+  // agent. Fire-and-forget — a failure here must never block or fail
+  // the actual hangup itself. Judgment about whether any given row
+  // represents genuine avoidance happens on the human review side
+  // (the "Calls Flagged" admin page), not here.
+  if (call.status === "customer_connected" && call.customerChannel) {
+    const durationSeconds = Math.floor((new Date() - call.startedAt) / 1000);
+    db.execute(
+      `INSERT INTO cmx_dialer.call_flags
+        (call_id, direction, agent_user, campaign_id, phone_number, call_started_at, call_duration_seconds)
+       VALUES (?, 'outbound', ?, ?, ?, ?, ?)`,
+      [call.callId, call.agentUser, call.campaignId, call.phoneNumber, call.startedAt, durationSeconds]
+    ).catch((err) => {
+      console.error(`[dialerService] Failed to record call flag for ${call.callId}:`, err.message);
+    });
+  }
+
   const hasExtraParticipants = call.extraParticipants && call.extraParticipants.length > 0;
   const hangups = [];
 

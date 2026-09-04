@@ -2073,4 +2073,81 @@ router.get(
   }
 );
 
+/*
+==================================================
+GET /api/admin/call-flags?startDate=&endDate=&campaignId=optional
+==================================================
+NEW — "Calls Flagged", per explicit request: surfaces every row from
+cmx_dialer.call_flags — every instance of an agent clicking Hang Up
+while the customer was still actively connected, across both inbound
+and outbound calls (see dialerService.js's endCall() and
+dialerRoutes.js's own inbound end-call route, the two places that
+actually write these rows). A real, raw signal for investigating
+possible call avoidance — this route only surfaces the data; judgment
+about whether any given row represents genuine avoidance happens on
+the human review side.
+
+Restricted to admin/wfm ONLY, per explicit request — reuses
+requireAdmin exactly as-is (already admin+wfm, nothing else), the same
+gate every other admin/wfm-only action in this file already uses.
+
+startDate/endDate default to today (same self-calibrating Eastern
+day-bounds technique used everywhere else in this app) if not given.
+campaignId is optional — omitted means every campaign, matching the
+"campaignId ? filter : no filter" convention already used throughout
+this file and statsService.js.
+==================================================
+*/
+router.get("/call-flags", requireAdmin, async (req, res) => {
+  try {
+    const { startDate, endDate, campaignId } = req.query;
+    const { start, end } =
+      startDate && endDate
+        ? await statsService.getEasternRangeBoundsForServerClock(startDate, endDate)
+        : await statsService.getEasternDayBoundsForServerClock();
+
+    const params = [start, end];
+    let campaignFilter = "";
+    if (campaignId) {
+      campaignFilter = "AND cf.campaign_id = ?";
+      params.push(campaignId);
+    }
+
+    const [rows] = await db.execute(
+      `
+        SELECT
+          cf.flag_id, cf.call_id, cf.direction, cf.agent_user, au.full_name AS agent_name,
+          cf.campaign_id, c.campaign_name, cf.phone_number, cf.call_started_at,
+          cf.call_duration_seconds, cf.flagged_at
+        FROM cmx_dialer.call_flags cf
+        LEFT JOIN cmx_dialer.app_users au ON au.vicidial_user = cf.agent_user
+        LEFT JOIN asterisk.vicidial_campaigns c ON c.campaign_id = cf.campaign_id
+        WHERE cf.flagged_at >= ? AND cf.flagged_at <= ? ${campaignFilter}
+        ORDER BY cf.flagged_at DESC
+        LIMIT 500
+      `,
+      params
+    );
+
+    const flags = rows.map((r) => ({
+      flagId: r.flag_id,
+      callId: r.call_id,
+      direction: r.direction,
+      agentUser: r.agent_user,
+      agentName: r.agent_name || r.agent_user,
+      campaignId: r.campaign_id,
+      campaignName: r.campaign_name || r.campaign_id,
+      phoneNumber: r.phone_number,
+      callStartedAt: r.call_started_at,
+      callDurationSeconds: r.call_duration_seconds,
+      flaggedAt: r.flagged_at,
+    }));
+
+    return res.json({ success: true, flags });
+  } catch (error) {
+    console.error("GET /api/admin/call-flags failed:", error);
+    return res.status(500).json({ success: false, message: "Failed to load call flags." });
+  }
+});
+
 module.exports = router;

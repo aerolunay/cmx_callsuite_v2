@@ -7,6 +7,7 @@ import AdminVicidialUsersSection from "../components/admin/AdminVicidialUsersSec
 import AdminCampaignsSection from "../components/admin/AdminCampaignsSection";
 import AdminLeadsSection from "../components/admin/AdminLeadsSection";
 import AdminTrunksSection from "../components/admin/AdminTrunksSection";
+import AdminCallFlagsSection from "../components/admin/AdminCallFlagsSection";
 
 /*
 ==================================================
@@ -44,6 +45,10 @@ const SECTIONS = [
   { key: "campaigns", label: "Campaigns" },
   { key: "leads", label: "Leads / Auto-Dial" },
   { key: "trunks", label: "DID / Trunk Setup" },
+  // NEW — call avoidance tracking, per explicit request. This whole
+  // page already gates to admin/wfm only (see the Navigate guard
+  // below), so no additional per-section role check is needed here.
+  { key: "call-flags", label: "Calls Flagged" },
 ];
 
 export default function AdminPage() {
@@ -81,6 +86,7 @@ export default function AdminPage() {
             {activeSection === "leads" && <AdminLeadsSection />}
 
             {activeSection === "trunks" && <AdminTrunksSection />}
+            {activeSection === "call-flags" && <AdminCallFlagsSection />}
           </div>
         </div>
       </div>

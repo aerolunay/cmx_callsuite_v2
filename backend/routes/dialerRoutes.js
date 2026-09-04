@@ -999,6 +999,35 @@ router.post("/dialer/inbound/end-call", requireAuth, async (req, res) => {
     if (!call) {
       return res.status(404).json({ success: false, message: "No inbound call with that ID." });
     }
+
+    // NEW — call avoidance tracking, per explicit request: flags every
+    // instance of the agent clicking Hang Up while the customer is
+    // still actively connected (status === "agent_connected" AND
+    // their channel is still set). This ROUTE — not
+    // endInboundCall() itself — is where this check belongs:
+    // endInboundCall() is a SHARED function also used by customer-
+    // initiated/AMI-event-driven ends (ConfbridgeLeave/Hangup
+    // listeners) and attended-transfer cleanup, so adding this check
+    // inside it would risk misattributing a customer-initiated end to
+    // the agent. This route is confirmed to be the ONLY agent-facing
+    // "click Hang Up" entry point for inbound calls. Fire-and-forget —
+    // a failure here must never block or fail the actual hangup
+    // itself. Judgment about whether any given row represents genuine
+    // avoidance happens on the human review side (the "Calls Flagged"
+    // admin page), not here.
+    if (call.status === "agent_connected" && call.customerChannel) {
+      const { username: agentUser } = req.session.agent;
+      const durationSeconds = Math.floor((new Date() - call.startedAt) / 1000);
+      db.execute(
+        `INSERT INTO cmx_dialer.call_flags
+          (call_id, direction, agent_user, campaign_id, phone_number, call_started_at, call_duration_seconds)
+         VALUES (?, 'inbound', ?, ?, ?, ?, ?)`,
+        [call.callId, agentUser, call.campaignId, call.callerIdNumber, call.startedAt, durationSeconds]
+      ).catch((err) => {
+        console.error(`[dialerRoutes] Failed to record call flag for ${call.callId}:`, err.message);
+      });
+    }
+
     await inboundCallService.endInboundCall(call.room);
     return res.json({ success: true });
   } catch (error) {
