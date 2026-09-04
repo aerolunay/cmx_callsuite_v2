@@ -575,6 +575,35 @@ export default function DialerPage() {
     agentStatus?.status === "AFTER_CALL_WORK";
   const isCallActive = call && call.status !== "ended";
 
+  // Per explicit request — Abandoned & Voicemail only ever has real
+  // data for BLENDED campaigns in the first place (a pure OUTBOUND
+  // campaign never takes inbound calls at all, so it can never have
+  // an abandoned-call or voicemail row against its campaign_id) — so
+  // the tab itself is hidden entirely for an Outbound-only context,
+  // rather than just showing an empty table. "Outbound-only context"
+  // means: a specific campaign is selected via statsCampaignFilter
+  // and that ONE campaign is OUTBOUND, OR "All Campaigns" is selected
+  // and NONE of this agent's assignments are BLENDED. If a specific
+  // BLENDED campaign is selected, or "All" is selected and the agent
+  // has at least one BLENDED assignment (even alongside other
+  // Outbound ones), the tab stays available.
+  const selectedCampaignType = statsCampaignFilter
+    ? myCampaigns.find((c) => c.campaign_id === statsCampaignFilter)?.campaign_type
+    : null;
+  const showAbandonedVoicemailTab = statsCampaignFilter
+    ? selectedCampaignType === "BLENDED"
+    : myCampaigns.some((c) => c.campaign_type === "BLENDED");
+
+  // If the tab becomes unavailable while it's the active one (e.g. the
+  // agent switches the Stats/Call Log filter from a Blended campaign
+  // to an Outbound one), fall back to Call Logs rather than leaving
+  // the view stuck on a tab that's no longer rendered anywhere.
+  useEffect(() => {
+    if (!showAbandonedVoicemailTab && callLogTab === "abandonedVoicemail") {
+      setCallLogTab("callLog");
+    }
+  }, [showAbandonedVoicemailTab, callLogTab]);
+
   async function handleStatusSwitch() {
     setError("");
     setBusy(true);
@@ -1635,55 +1664,62 @@ export default function DialerPage() {
                 request, these live in one container rather than two
                 always-visible cards. Both tabs share the same
                 statsCampaignFilter as StatsPanel above, so switching
-                tabs doesn't reset the campaign filter. */}
-            <div className="card" style={{ padding: 0, marginBottom: 0 }}>
-              <div style={{ display: "flex", borderBottom: "1px solid #e5e7eb" }}>
-                <button
-                  type="button"
-                  onClick={() => setCallLogTab("callLog")}
-                  style={{
-                    flex: 1,
-                    padding: "10px 16px",
-                    border: "none",
-                    background: "transparent",
-                    cursor: "pointer",
-                    fontWeight: callLogTab === "callLog" ? 600 : 400,
-                    borderBottom: callLogTab === "callLog" ? "2px solid #1e7e34" : "2px solid transparent",
-                  }}
-                >
-                  Call Logs
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setCallLogTab("abandonedVoicemail")}
-                  style={{
-                    flex: 1,
-                    padding: "10px 16px",
-                    border: "none",
-                    background: "transparent",
-                    cursor: "pointer",
-                    fontWeight: callLogTab === "abandonedVoicemail" ? 600 : 400,
-                    borderBottom: callLogTab === "abandonedVoicemail" ? "2px solid #1e7e34" : "2px solid transparent",
-                  }}
-                >
-                  Abandoned & Voicemail
-                </button>
+                tabs doesn't reset the campaign filter. Per further
+                explicit request, the switcher itself (and the second
+                tab) only shows for a Blended context — see
+                showAbandonedVoicemailTab's own comment above — an
+                Outbound-only agent/filter sees just Call Logs, with
+                no tab bar at all, same as before this feature existed. */}
+            {showAbandonedVoicemailTab && (
+              <div className="card" style={{ padding: 0, marginBottom: 0 }}>
+                <div style={{ display: "flex", borderBottom: "1px solid #e5e7eb" }}>
+                  <button
+                    type="button"
+                    onClick={() => setCallLogTab("callLog")}
+                    style={{
+                      flex: 1,
+                      padding: "10px 16px",
+                      border: "none",
+                      background: "transparent",
+                      cursor: "pointer",
+                      fontWeight: callLogTab === "callLog" ? 600 : 400,
+                      borderBottom: callLogTab === "callLog" ? "2px solid #1e7e34" : "2px solid transparent",
+                    }}
+                  >
+                    Call Logs
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCallLogTab("abandonedVoicemail")}
+                    style={{
+                      flex: 1,
+                      padding: "10px 16px",
+                      border: "none",
+                      background: "transparent",
+                      cursor: "pointer",
+                      fontWeight: callLogTab === "abandonedVoicemail" ? 600 : 400,
+                      borderBottom: callLogTab === "abandonedVoicemail" ? "2px solid #1e7e34" : "2px solid transparent",
+                    }}
+                  >
+                    Abandoned & Voicemail
+                  </button>
+                </div>
               </div>
-            </div>
+            )}
 
-            {callLogTab === "callLog" ? (
-              <CallLogTable
-                refreshKey={callLogVersion}
-                campaignId={statsCampaignFilter}
-                onCallBack={handleCallBack}
-                canCallBack={agentStatus?.status === "READY"}
-              />
-            ) : (
+            {callLogTab === "abandonedVoicemail" && showAbandonedVoicemailTab ? (
               <AbandonedVoicemailTable
                 campaignId={statsCampaignFilter}
                 highlightKey={callbackBlockKey}
                 onCallback={handleAbandonedVoicemailCallback}
                 refreshKey={callLogVersion}
+              />
+            ) : (
+              <CallLogTable
+                refreshKey={callLogVersion}
+                campaignId={statsCampaignFilter}
+                onCallBack={handleCallBack}
+                canCallBack={agentStatus?.status === "READY"}
               />
             )}
           </div>
