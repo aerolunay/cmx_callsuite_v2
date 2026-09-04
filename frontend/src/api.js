@@ -88,22 +88,16 @@ export const api = {
     return request(`/dialer/abandoned-voicemail${qs ? `?${qs}` : ""}`);
   },
   getAgentVoicemailPlaybackUrl: (voicemailLogId) => request(`/dialer/voicemail/${voicemailLogId}/playback-url`),
-  // UPDATED — per explicit request: the "Callback" flow now sends a
-  // real disposition (validated server-side against
-  // dialerService.KNOWN_DISPOSITION_VALUES), not a raw status string.
-  // The backend constructs "CB - <label>" itself — see dialerRoutes.js's
-  // buildCallbackStatus().
-  setVoicemailCallback: (voicemailLogId, dispositionValue, dispositionLabel) =>
-    request(`/dialer/voicemail/${voicemailLogId}/status`, {
-      method: "PATCH",
-      body: JSON.stringify({ dispositionValue, dispositionLabel }),
-    }),
-  // NEW — same Callback flow, for abandoned calls.
-  setAbandonedCallCallback: (abandonedCallLogId, dispositionValue, dispositionLabel) =>
-    request(`/dialer/abandoned-call/${abandonedCallLogId}/status`, {
-      method: "PATCH",
-      body: JSON.stringify({ dispositionValue, dispositionLabel }),
-    }),
+  // REDESIGNED — per explicit request: clicking "Callback" on an
+  // Abandoned & Voicemail row now places a REAL call (see
+  // DialerPage.jsx's handleAbandonedVoicemailCallback), reusing the
+  // existing startCall/saveDisposition flow — the disposition the
+  // agent picks on the NORMAL post-call form is what gets recorded on
+  // that row's status server-side (see dialerRoutes.js's
+  // POST /dialer/disposition/:callId). The standalone
+  // setVoicemailCallback/setAbandonedCallCallback functions that used
+  // to live here (a separate, inline disposition picker with no
+  // actual call) are gone — their routes no longer exist either.
   // NEW — checked before placing a MANUAL dial only (never for
   // outbound campaign/lead auto-dialing) — see DialerPage.jsx's own
   // manual-dial handler.

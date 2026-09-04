@@ -9,7 +9,11 @@ import { api } from "../api";
 import { useAuth } from "../context/AuthContext";
 import { useDialerSocketMessages } from "../context/DialerSocketContext";
 import { MiniPhone } from "../components/MiniPhone";
-import { getOutboundDispositionsForCampaign, getInboundDispositionsForCampaign } from "../constants/dispositions";
+import {
+  getOutboundDispositionsForCampaign,
+  getInboundDispositionsForCampaign,
+  dispositionLabel,
+} from "../constants/dispositions";
 import { formatDuration, durationColorFor } from "../utils/format";
 import { playConnectedBeep } from "../utils/audio";
 import { useFlashingTitle } from "../hooks/useFlashingTitle";
@@ -688,6 +692,64 @@ export default function DialerPage() {
     }
   }
 
+  // NEW — per explicit request: clicking "Callback" on an Abandoned &
+  // Voicemail row places a REAL call, exactly like handleCallBack
+  // right above (Call Log's own, pre-existing callback feature) — the
+  // only real difference is the source data shape (an abandoned/
+  // voicemail row, not a call-log row) and that this also remembers
+  // WHICH row this callback came from (callbackSourceType/
+  // callbackSourceId on call state), so that whatever disposition the
+  // agent picks on the NORMAL post-call disposition form gets
+  // recorded on that row's own status too — see handleSaveDisposition
+  // below and dialerRoutes.js's POST /dialer/disposition/:callId.
+  async function handleAbandonedVoicemailCallback(row) {
+    if (agentStatus?.status !== "READY") {
+      setError("You must be Ready to place a callback.");
+      return;
+    }
+    if (call || inboundCall) {
+      setError("You're already on a call.");
+      return;
+    }
+    if (!row.campaignId) {
+      setError("This entry has no campaign on file — can't determine where to call it back from.");
+      return;
+    }
+
+    setError("");
+    setBusy(true);
+    try {
+      const callbackLead = {
+        lead_id: 0,
+        first_name: "",
+        last_name: "",
+        phone_number: row.callerIdNumber,
+      };
+      setLead(callbackLead);
+
+      const callData = await api.startCall(
+        row.campaignId,
+        callbackLead.lead_id,
+        callbackLead.phone_number,
+        callbackLead,
+        "CALLBACK"
+      );
+      setCall({
+        callId: callData.callId,
+        room: callData.room,
+        status: "ringing_agent",
+        callType: "CALLBACK",
+        campaignId: row.campaignId,
+        callbackSourceType: row.type,
+        callbackSourceId: row.type === "voicemail" ? row.voicemailLogId : row.abandonedCallLogId,
+      });
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   // Shared by both the direct (single-campaign) path and the popup's
   // confirm handler below — the actual dial only ever happens here,
   // once a campaign is genuinely known one way or another.
@@ -906,6 +968,16 @@ export default function DialerPage() {
         comments: comments.trim(),
         callbackAt: disposition === "CALLBACK" ? callbackAt : undefined,
         setNotReady: setNotReadyAfterSave,
+        // NEW — per explicit request: when this call originated from
+        // clicking "Callback" on an Abandoned & Voicemail row (see
+        // handleAbandonedVoicemailCallback above), this disposition is
+        // what gets recorded on that row's own status server-side.
+        // Undefined for every other call (manual dial, Dial Next,
+        // Call Log's own callback) — dialerRoutes.js only acts on
+        // this when both fields are actually present.
+        callbackSourceType: call.callbackSourceType,
+        callbackSourceId: call.callbackSourceId,
+        dispositionLabel: dispositionLabel(disposition),
       });
 
       setLead(null);
@@ -1550,7 +1622,11 @@ export default function DialerPage() {
                 canCallBack={agentStatus?.status === "READY"}
               />
             ) : (
-              <AbandonedVoicemailTable campaignId={statsCampaignFilter} highlightKey={callbackBlockKey} />
+              <AbandonedVoicemailTable
+                campaignId={statsCampaignFilter}
+                highlightKey={callbackBlockKey}
+                onCallback={handleAbandonedVoicemailCallback}
+              />
             )}
           </div>
         </div>

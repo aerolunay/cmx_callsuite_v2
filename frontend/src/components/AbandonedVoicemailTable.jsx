@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { formatDate, formatDurationHMS } from "../utils/format";
 import VoicemailPlaybackModal from "../modals/VoicemailPlaybackModal";
-import { getOutboundDispositionsForCampaign } from "../constants/dispositions";
 
 /*
 ==================================================
@@ -14,19 +13,18 @@ tab container). Abandoned and Voicemail rows are merged into ONE list,
 each row tagged with its `type`, sorted together by timestamp.
 
 REDESIGNED — per explicit request: the old New/Resolved/Unreachable/
-Left VM status dropdown is gone. Instead, each row (voicemail AND
-abandoned now, not just voicemail) gets a "Callback" action. Clicking
-it reveals an inline disposition picker (the SAME outbound disposition
-list an agent sees ending a real outbound call, via
-getOutboundDispositionsForCampaign — a callback is inherently an
-outbound action). Picking one saves "CB - <disposition label>" as the
-row's status (constructed server-side — see dialerRoutes.js's
-buildCallbackStatus) and the row is immediately removed from view.
-Only status = 'NEW' rows are ever shown here at all — the backend
-itself only returns those (see GET /dialer/abandoned-voicemail), and
-this component also removes a row locally the instant its own Callback
-save succeeds, so there's no flash of a stale row before the next
-reload.
+Left VM status dropdown, and later an inline disposition picker with
+no actual call, are both gone. Clicking "Callback" now places a REAL
+call to that row's number/campaign — exactly like the existing Call
+Log callback feature — via the onCallback prop (see DialerPage.jsx's
+handleAbandonedVoicemailCallback). Whatever disposition the agent
+picks on the NORMAL post-call disposition form once that call ends is
+what gets recorded on this row's status server-side ("CB - <label>" —
+see dialerRoutes.js's POST /dialer/disposition/:callId), not anything
+decided here. Only status = 'NEW' rows are ever shown here at all —
+the backend itself only returns those (see GET
+/dialer/abandoned-voicemail) — so a row correctly disappears the next
+time this reloads, once its callback's disposition has actually saved.
 
 highlightKey (optional prop) — per explicit request, supports
 DialerPage's manual-dial-block flow: if an agent tries to manually
@@ -40,7 +38,7 @@ action here, matching the agent-facing playback-url route's own
 restriction — agents can listen, not download.
 ==================================================
 */
-export default function AbandonedVoicemailTable({ campaignId, highlightKey }) {
+export default function AbandonedVoicemailTable({ campaignId, highlightKey, onCallback }) {
   const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" }); // yyyy-MM-dd
 
   const [startDate, setStartDate] = useState(today);
@@ -51,12 +49,6 @@ export default function AbandonedVoicemailTable({ campaignId, highlightKey }) {
   const [playingId, setPlayingId] = useState(null);
   const [modalVoicemail, setModalVoicemail] = useState(null);
   const [modalUrl, setModalUrl] = useState(null);
-  // Which row's inline disposition picker is currently open — a
-  // string key ("voicemail-123" / "abandoned-45"), or null.
-  const [activeCallbackKey, setActiveCallbackKey] = useState(null);
-  // Which row's Callback save is currently in flight, so its picker
-  // shows "Saving…" and can't be double-submitted.
-  const [savingCallbackKey, setSavingCallbackKey] = useState(null);
 
   const highlightRef = useRef(null);
 
@@ -122,32 +114,6 @@ export default function AbandonedVoicemailTable({ campaignId, highlightKey }) {
   function closeModal() {
     setModalVoicemail(null);
     setModalUrl(null);
-  }
-
-  // Per explicit request — picking a disposition immediately saves
-  // "CB - <label>" and removes the row from view, rather than needing
-  // a second confirm step or a full reload to see it disappear.
-  async function handleCallbackDispositionSelect(row, dispositionValue) {
-    const key = rowKey(row);
-    const dispositions = getOutboundDispositionsForCampaign(row.campaignId);
-    const disposition = dispositions.find((d) => d.value === dispositionValue);
-    if (!disposition) return;
-
-    setSavingCallbackKey(key);
-    setError("");
-    try {
-      if (row.type === "voicemail") {
-        await api.setVoicemailCallback(row.voicemailLogId, disposition.value, disposition.label);
-      } else {
-        await api.setAbandonedCallCallback(row.abandonedCallLogId, disposition.value, disposition.label);
-      }
-      setRows((prev) => prev.filter((r) => rowKey(r) !== key));
-      setActiveCallbackKey(null);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setSavingCallbackKey(null);
-    }
   }
 
   return (
@@ -221,28 +187,9 @@ export default function AbandonedVoicemailTable({ campaignId, highlightKey }) {
                       : `Waited ${row.waitSeconds != null ? formatDurationHMS(row.waitSeconds) : "—"}`}
                   </td>
                   <td>
-                    {activeCallbackKey === key ? (
-                      <select
-                        autoFocus
-                        defaultValue=""
-                        disabled={savingCallbackKey === key}
-                        onChange={(e) => handleCallbackDispositionSelect(row, e.target.value)}
-                        onBlur={() => setActiveCallbackKey((prev) => (prev === key ? null : prev))}
-                      >
-                        <option value="" disabled>
-                          {savingCallbackKey === key ? "Saving…" : "Select disposition…"}
-                        </option>
-                        {getOutboundDispositionsForCampaign(row.campaignId).map((d) => (
-                          <option key={d.value} value={d.value}>
-                            {d.label}
-                          </option>
-                        ))}
-                      </select>
-                    ) : (
-                      <button type="button" className="link" onClick={() => setActiveCallbackKey(key)}>
-                        Callback
-                      </button>
-                    )}
+                    <button type="button" className="link" onClick={() => onCallback(row)}>
+                      Callback
+                    </button>
                   </td>
                   <td>
                     {row.type === "voicemail" && row.hasRecording && (

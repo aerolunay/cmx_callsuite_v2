@@ -1235,15 +1235,17 @@ router.get("/dialer/voicemail/:voicemailLogId/playback-url", requireAuth, async 
 
 /*
 ==================================================
-PATCH /api/dialer/voicemail/:voicemailLogId/status
+buildCallbackStatus(dispositionValue, dispositionLabel)
 ==================================================
-REDESIGNED — per explicit request: no more picking a status directly
-(NEW/RESOLVED/UNREACHABLE/LEFT_VM) from a dropdown on DialerPage's
-Abandoned & Voicemail tab. Instead, an agent clicks "Callback", picks
-a real disposition, and this constructs "CB - <disposition label>" as
-the new status server-side — the frontend never sends a raw status
-string at all anymore. Once set, the row is no longer 'NEW' and
-correctly disappears from GET /dialer/abandoned-voicemail above.
+REDESIGNED — per explicit request: clicking "Callback" on an Abandoned
+& Voicemail row now places a REAL call (see DialerPage.jsx's
+handleAbandonedVoicemailCallback), just like the existing Call Log
+callback feature. Whatever disposition the agent picks on the NORMAL
+post-call disposition form (POST /dialer/disposition/:callId below)
+is what gets recorded here — there is no separate, standalone
+disposition picker anymore. This helper just constructs the
+"CB - <label>" string, called directly from that route once a real
+disposition has actually been saved.
 
 dispositionValue is validated against dialerService's own
 KNOWN_DISPOSITION_VALUES (the exact same set saveDisposition() already
@@ -1251,13 +1253,6 @@ trusts elsewhere in this app) — never a raw, unchecked value.
 dispositionLabel is the human-readable text actually stored in the
 status column; only lightly sanitized (length-capped, trimmed) since
 it's just a display string, not something branched on anywhere.
-
-Same access scoping as the playback-url route above — any
-authenticated agent, but only for a voicemail belonging to a campaign
-they're actually assigned to. Admin-facing surfaces (Live Dashboard,
-VoicemailsPage.jsx) use a COMPLETELY SEPARATE route
-(voicemailRoutes.js's own PATCH /voicemails/:id/status) which still
-accepts the original plain status values, untouched by this redesign.
 ==================================================
 */
 function buildCallbackStatus(dispositionValue, dispositionLabel) {
@@ -1267,88 +1262,6 @@ function buildCallbackStatus(dispositionValue, dispositionLabel) {
   const safeLabel = String(dispositionLabel || dispositionValue).trim().slice(0, 40);
   return `CB - ${safeLabel}`;
 }
-
-router.patch("/dialer/voicemail/:voicemailLogId/status", requireAuth, async (req, res) => {
-  try {
-    const { voicemailLogId } = req.params;
-    const { dispositionValue, dispositionLabel } = req.body;
-    const { appUserId } = req.session.agent;
-
-    const status = buildCallbackStatus(dispositionValue, dispositionLabel);
-    if (!status) {
-      return res.status(400).json({ success: false, message: "A valid dispositionValue is required." });
-    }
-
-    const [rows] = await db.execute(`SELECT campaign_id FROM cmx_dialer.voicemail_log WHERE voicemail_log_id = ?`, [
-      voicemailLogId,
-    ]);
-    if (!rows.length) {
-      return res.status(404).json({ success: false, message: "Voicemail not found." });
-    }
-
-    const assignedIds = await getAssignedCampaignIds(appUserId);
-    if (!assignedIds.includes(rows[0].campaign_id)) {
-      return res.status(403).json({ success: false, message: "You are not assigned to that campaign." });
-    }
-
-    await db.execute(`UPDATE cmx_dialer.voicemail_log SET status = ? WHERE voicemail_log_id = ?`, [
-      status,
-      voicemailLogId,
-    ]);
-
-    return res.json({ success: true, status });
-  } catch (error) {
-    console.error(`PATCH /api/dialer/voicemail/${req.params.voicemailLogId}/status failed:`, error);
-    return res.status(500).json({ success: false, message: "Failed to update voicemail status." });
-  }
-});
-
-/*
-==================================================
-PATCH /api/dialer/abandoned-call/:abandonedCallLogId/status
-==================================================
-NEW — per explicit request: same "Callback" flow as the voicemail
-route right above, now available for abandoned calls too. Identical
-disposition validation and "CB - <label>" construction, identical
-per-row campaign-assignment scoping — abandoned_call_log never had a
-status column or any update route at all before this.
-==================================================
-*/
-router.patch("/dialer/abandoned-call/:abandonedCallLogId/status", requireAuth, async (req, res) => {
-  try {
-    const { abandonedCallLogId } = req.params;
-    const { dispositionValue, dispositionLabel } = req.body;
-    const { appUserId } = req.session.agent;
-
-    const status = buildCallbackStatus(dispositionValue, dispositionLabel);
-    if (!status) {
-      return res.status(400).json({ success: false, message: "A valid dispositionValue is required." });
-    }
-
-    const [rows] = await db.execute(
-      `SELECT campaign_id FROM cmx_dialer.abandoned_call_log WHERE abandoned_call_log_id = ?`,
-      [abandonedCallLogId]
-    );
-    if (!rows.length) {
-      return res.status(404).json({ success: false, message: "Abandoned call not found." });
-    }
-
-    const assignedIds = await getAssignedCampaignIds(appUserId);
-    if (!assignedIds.includes(rows[0].campaign_id)) {
-      return res.status(403).json({ success: false, message: "You are not assigned to that campaign." });
-    }
-
-    await db.execute(`UPDATE cmx_dialer.abandoned_call_log SET status = ? WHERE abandoned_call_log_id = ?`, [
-      status,
-      abandonedCallLogId,
-    ]);
-
-    return res.json({ success: true, status });
-  } catch (error) {
-    console.error(`PATCH /api/dialer/abandoned-call/${req.params.abandonedCallLogId}/status failed:`, error);
-    return res.status(500).json({ success: false, message: "Failed to update abandoned call status." });
-  }
-});
 
 /*
 ==================================================
@@ -1465,7 +1378,29 @@ SAVE DISPOSITION (outbound)
 router.post("/dialer/disposition/:callId", requireAuth, async (req, res) => {
   try {
     const { callId } = req.params;
-    const { campaignId, leadId, phoneNumber, firstName, lastName, room, disposition, comments, callbackAt, setNotReady } = req.body;
+    const {
+      campaignId,
+      leadId,
+      phoneNumber,
+      firstName,
+      lastName,
+      room,
+      disposition,
+      comments,
+      callbackAt,
+      setNotReady,
+      // NEW — per explicit request: when this call originated from
+      // clicking "Callback" on an Abandoned & Voicemail row (see
+      // DialerPage.jsx's handleAbandonedVoicemailCallback), the
+      // disposition the agent picks on THIS normal post-call form is
+      // what gets recorded on that row's status — not a separate,
+      // standalone picker. dispositionLabel is looked up
+      // frontend-side (dispositions.js already has it) rather than
+      // duplicating a value->label mapping on the backend.
+      callbackSourceType,
+      callbackSourceId,
+      dispositionLabel,
+    } = req.body;
 
     if (!campaignId || leadId === undefined || leadId === null || !phoneNumber || !room || !disposition) {
       return res.status(400).json({
@@ -1498,6 +1433,39 @@ router.post("/dialer/disposition/:callId", requireAuth, async (req, res) => {
       comments,
       callbackAt,
     });
+
+    // NEW — per explicit request: if this call originated from
+    // clicking "Callback" on an Abandoned & Voicemail row, the
+    // disposition the agent just picked above is what gets recorded
+    // on that row's own status now — "CB - <label>", same construction
+    // already used by the standalone voicemail/abandoned-call status
+    // routes (buildCallbackStatus). Deliberately best-effort: a
+    // failure here never fails the disposition save itself, which has
+    // already committed by this point — the agent's real work is
+    // done regardless of whether this secondary update succeeds.
+    if (callbackSourceType && callbackSourceId) {
+      const callbackStatus = buildCallbackStatus(disposition, dispositionLabel);
+      if (callbackStatus) {
+        try {
+          if (callbackSourceType === "voicemail") {
+            await db.execute(`UPDATE cmx_dialer.voicemail_log SET status = ? WHERE voicemail_log_id = ?`, [
+              callbackStatus,
+              callbackSourceId,
+            ]);
+          } else if (callbackSourceType === "abandoned") {
+            await db.execute(`UPDATE cmx_dialer.abandoned_call_log SET status = ? WHERE abandoned_call_log_id = ?`, [
+              callbackStatus,
+              callbackSourceId,
+            ]);
+          }
+        } catch (err) {
+          console.error(
+            `[dialerRoutes] Failed to update ${callbackSourceType} ${callbackSourceId}'s status after disposition save:`,
+            err.message
+          );
+        }
+      }
+    }
 
     // NOTE: this used to be a real gap — outbound disposition never
     // touched agent status at all, unlike inbound's finalizeInboundCall
