@@ -1626,6 +1626,7 @@ export default function DialerPage() {
                 campaignId={statsCampaignFilter}
                 highlightKey={callbackBlockKey}
                 onCallback={handleAbandonedVoicemailCallback}
+                refreshKey={callLogVersion}
               />
             )}
           </div>

@@ -26,6 +26,15 @@ the backend itself only returns those (see GET
 /dialer/abandoned-voicemail) — so a row correctly disappears the next
 time this reloads, once its callback's disposition has actually saved.
 
+REAL BUG FIX, per explicit request: a row previously only disappeared
+after a manual page refresh — this component had no way of knowing a
+disposition had just been saved elsewhere (the disposition form is a
+completely separate section of DialerPage). refreshKey (passed down
+as DialerPage's own callLogVersion, which already increments after
+every disposition save — see handleSaveDisposition/
+handleSaveInboundDisposition) now triggers an automatic reload the
+moment that happens.
+
 highlightKey (optional prop) — per explicit request, supports
 DialerPage's manual-dial-block flow: if an agent tries to manually
 dial a number that already has a pending (status = 'NEW') entry here,
@@ -38,7 +47,7 @@ action here, matching the agent-facing playback-url route's own
 restriction — agents can listen, not download.
 ==================================================
 */
-export default function AbandonedVoicemailTable({ campaignId, highlightKey, onCallback }) {
+export default function AbandonedVoicemailTable({ campaignId, highlightKey, onCallback, refreshKey }) {
   const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" }); // yyyy-MM-dd
 
   const [startDate, setStartDate] = useState(today);
@@ -69,7 +78,7 @@ export default function AbandonedVoicemailTable({ campaignId, highlightKey, onCa
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [campaignId]);
+  }, [campaignId, refreshKey]);
 
   // Per explicit request — scrolls the highlighted row into view the
   // moment it's known (either on initial load with a highlightKey
