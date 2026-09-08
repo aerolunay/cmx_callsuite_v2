@@ -59,6 +59,28 @@ relying on this.
 const APP_ORIGINATED_CONTEXT = "default";
 const APP_ORIGINATED_EXTEN_PATTERN = /^2\d+$/; // matches "2<room>", e.g. "29700929"
 
+// REAL BUG FIX, per explicit request — confirmed live: a supervisor
+// using Silent Listen (monitoringService.js) was getting their own
+// status flipped to MICROSIP_OUTBOUND ("Microsip Call" on the Live
+// Status Dashboard) for the entire duration of their listening
+// session. Root cause: monitoringService.js originates its own
+// channel via Application: "ConfBridge" directly, never touching
+// Context/Exten at all — so it doesn't match
+// APP_ORIGINATED_CONTEXT/APP_ORIGINATED_EXTEN_PATTERN below any more
+// than a genuine MicroSIP-direct call does, tripping the exact same
+// "must be MicroSIP-direct" detection this whole file exists for.
+// Recognized instead by the same distinctive CallerID
+// monitoringService.js already sets on that Originate specifically so
+// PhoneContext.jsx can auto-answer it — reused here for the opposite
+// purpose: telling this detector "this is OUR OWN app calling the
+// supervisor, ignore it," the same way APP_ORIGINATED_CONTEXT/
+// APP_ORIGINATED_EXTEN_PATTERN already tell it "this is our own app
+// calling an AGENT, ignore it" for regular calls. Per explicit
+// product decision, a supervisor's status is left completely
+// untouched while Silent Listening — no separate "Live Monitoring"
+// status was wanted, just "don't misreport this as something else."
+const SILENT_LISTEN_CALLERID_NAME = "CMX Silent Listen";
+
 // AMI channel name -> { appUserId, priorStatus }
 // priorStatus is null if the agent had no open status row at all right
 // before this call (e.g. some out-of-band edge case) — handleHangup
@@ -111,6 +133,8 @@ async function handleNewchannel(evt) {
   const isAppOriginatedAgentLeg =
     evt.context === APP_ORIGINATED_CONTEXT && APP_ORIGINATED_EXTEN_PATTERN.test(evt.exten || "");
   if (isAppOriginatedAgentLeg) return; // this app rang their phone itself — not a direct MicroSIP call
+
+  if (evt.calleridname === SILENT_LISTEN_CALLERID_NAME) return; // this app rang them for Silent Listen — not a direct MicroSIP call either
 
   try {
     const current = await agentStatusService.getCurrentStatus(agent.appUserId);
