@@ -23,6 +23,7 @@ const campaignRoutes = require("./routes/campaignRoutes");
 const leadRoutes = require("./routes/leadRoutes");
 const voicemailRoutes = require("./routes/voicemailRoutes");
 const internalRoutes = require("./routes/internalRoutes");
+const archiveRoutes = require("./routes/archiveRoutes");
 
 const app = express();
 
@@ -193,6 +194,13 @@ app.use("/api", voicemailRoutes);
 // CURL(), protected by INTERNAL_API_SECRET instead. See
 // internalRoutes.js for why this is mounted separately from /api.
 app.use("/internal", internalRoutes);
+
+// Not session-authenticated either — called by the local archival
+// script (Python, run from a PC that isn't this server), protected by
+// its own ARCHIVE_API_SECRET instead. Deliberately a SEPARATE secret
+// from INTERNAL_API_SECRET above — see archiveRoutes.js's own header
+// comment for why.
+app.use("/archive", archiveRoutes);
 
 /*
 ==================================================

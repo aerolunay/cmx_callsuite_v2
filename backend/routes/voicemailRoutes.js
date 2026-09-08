@@ -198,7 +198,7 @@ router.get(
       `
         SELECT
           vl.voicemail_log_id, vl.campaign_id, c.campaign_name, vl.caller_id_number,
-          vl.call_started_at, vl.left_at, vl.duration_seconds, vl.recording_key, vl.status,
+          vl.call_started_at, vl.left_at, vl.duration_seconds, vl.recording_key, vl.recording_archived_at, vl.status,
           vl.is_after_hours, vl.reviewed, vl.reviewed_by, vl.reviewed_at, vl.created_at
         FROM cmx_dialer.voicemail_log vl
         LEFT JOIN asterisk.vicidial_campaigns c ON c.campaign_id = vl.campaign_id

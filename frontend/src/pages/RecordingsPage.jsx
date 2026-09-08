@@ -253,26 +253,43 @@ export default function RecordingsPage() {
                     <td>{r.phone_number || "—"}</td>
                     <td>{formatCallDuration(r.call_started_at, r.call_ended_at)}</td>
                     <td>
-                      <button
-                        type="button"
-                        className="link"
-                        disabled={playingId === r.call_id}
-                        onClick={() => handlePlay(r)}
-                      >
-                        {playingId === r.call_id ? "Loading…" : "Play"}
-                      </button>
-                      {agent?.accessLevel === "admin" && (
+                      {r.recording_key ? (
                         <>
-                          {" "}
                           <button
                             type="button"
                             className="link"
-                            disabled={downloadingId === r.call_id}
-                            onClick={() => handleDownload(r)}
+                            disabled={playingId === r.call_id}
+                            onClick={() => handlePlay(r)}
                           >
-                            {downloadingId === r.call_id ? "Preparing…" : "Download"}
+                            {playingId === r.call_id ? "Loading…" : "Play"}
                           </button>
+                          {agent?.accessLevel === "admin" && (
+                            <>
+                              {" "}
+                              <button
+                                type="button"
+                                className="link"
+                                disabled={downloadingId === r.call_id}
+                                onClick={() => handleDownload(r)}
+                              >
+                                {downloadingId === r.call_id ? "Preparing…" : "Download"}
+                              </button>
+                            </>
+                          )}
                         </>
+                      ) : r.recording_archived_at ? (
+                        // Per explicit request — a call that WAS
+                        // recorded and has since been archived to
+                        // local storage (see archive_recordings.py)
+                        // shows this instead of just losing its Play
+                        // button with no explanation. Distinct from
+                        // the plain "—" a call that was simply never
+                        // recorded gets below.
+                        <span style={{ fontSize: 13, color: "#888" }}>
+                          Archived to local storage on {formatDateTime(r.recording_archived_at)}
+                        </span>
+                      ) : (
+                        "—"
                       )}
                     </td>
                   </tr>

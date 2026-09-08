@@ -169,14 +169,24 @@ export default function AdminRecordingsSection() {
                   <td>{r.direction === "inbound" ? "Inbound" : "Outbound"}</td>
                   <td>{r.phone_number || "—"}</td>
                   <td>
-                    <button
-                      type="button"
-                      className="link"
-                      disabled={playingId === r.call_id}
-                      onClick={() => handlePlay(r)}
-                    >
-                      {playingId === r.call_id ? "Loading…" : "Play"}
-                    </button>
+                    {r.recording_key ? (
+                      <button
+                        type="button"
+                        className="link"
+                        disabled={playingId === r.call_id}
+                        onClick={() => handlePlay(r)}
+                      >
+                        {playingId === r.call_id ? "Loading…" : "Play"}
+                      </button>
+                    ) : r.recording_archived_at ? (
+                      // Per explicit request — same "Archived to local
+                      // storage" treatment as RecordingsPage.jsx.
+                      <span style={{ fontSize: 13, color: "#888" }}>
+                        Archived to local storage on {formatDateTime(r.recording_archived_at)}
+                      </span>
+                    ) : (
+                      "—"
+                    )}
                   </td>
                 </tr>
               ))}

@@ -211,7 +211,15 @@ export default function AbandonedVoicemailTable({ campaignId, highlightKey, onCa
                         {playingId === row.voicemailLogId ? "Loading…" : "Play"}
                       </button>
                     )}
-                    {row.type === "voicemail" && !row.hasRecording && "—"}
+                    {row.type === "voicemail" && !row.hasRecording && row.recordingArchivedAt && (
+                      // Per explicit request — a voicemail that HAD
+                      // audio and has since been archived to local
+                      // storage (see archive_recordings.py) shows this
+                      // instead of just losing its Play button with no
+                      // explanation.
+                      <span style={{ fontSize: 12, color: "#888" }}>Archived {formatDate(row.recordingArchivedAt)}</span>
+                    )}
+                    {row.type === "voicemail" && !row.hasRecording && !row.recordingArchivedAt && "—"}
                   </td>
                 </tr>
               );

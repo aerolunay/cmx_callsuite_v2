@@ -233,26 +233,43 @@ export default function VoicemailsPage() {
                       {v.status || "NEW"}
                     </td>
                     <td>
-                      <button
-                        type="button"
-                        className="link"
-                        disabled={playingId === v.voicemail_log_id}
-                        onClick={() => handlePlay(v)}
-                      >
-                        {playingId === v.voicemail_log_id ? "Loading…" : "Play"}
-                      </button>
-                      {agent?.accessLevel === "admin" && (
+                      {v.recording_key ? (
                         <>
-                          {" "}
                           <button
                             type="button"
                             className="link"
-                            disabled={downloadingId === v.voicemail_log_id}
-                            onClick={() => handleDownload(v)}
+                            disabled={playingId === v.voicemail_log_id}
+                            onClick={() => handlePlay(v)}
                           >
-                            {downloadingId === v.voicemail_log_id ? "Preparing…" : "Download"}
+                            {playingId === v.voicemail_log_id ? "Loading…" : "Play"}
                           </button>
+                          {agent?.accessLevel === "admin" && (
+                            <>
+                              {" "}
+                              <button
+                                type="button"
+                                className="link"
+                                disabled={downloadingId === v.voicemail_log_id}
+                                onClick={() => handleDownload(v)}
+                              >
+                                {downloadingId === v.voicemail_log_id ? "Preparing…" : "Download"}
+                              </button>
+                            </>
+                          )}
                         </>
+                      ) : v.recording_archived_at ? (
+                        // Per explicit request — a voicemail that HAD
+                        // audio and has since been archived to local
+                        // storage (see archive_recordings.py) keeps
+                        // its row here (unlike before, when the whole
+                        // row was deleted) and shows this instead of
+                        // just losing its Play button with no
+                        // explanation.
+                        <span style={{ fontSize: 13, color: "#888" }}>
+                          Archived to local storage on {formatDateTime(v.recording_archived_at)}
+                        </span>
+                      ) : (
+                        "—"
                       )}
                     </td>
                   </tr>
