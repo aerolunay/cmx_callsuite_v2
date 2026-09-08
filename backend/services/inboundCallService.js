@@ -698,17 +698,36 @@ wait_seconds is computed HERE, once, from call.startedAt/endedAt (both
 set via new Date() in this same Node process) — a fixed historical
 value at the moment of writing, not something recomputed later, so
 there's no live-ticking clock concern for this one at all.
+
+REAL FIX, per explicit request following a real data-analysis gap: two
+completely different scenarios were both being recorded identically —
+a caller hanging up before ANY agent was ever paged (previousStatus
+"waiting_for_agent" — genuinely nobody available) versus a caller
+hanging up while a REAL agent's phone was actively ringing
+(previousStatus "ringing_agent" — someone was right there about to
+answer). Confirmed live: an ad-hoc query joining agent_status_log to
+find "was any agent READY during this call's wait window" couldn't
+tell these apart at all, since both produce the exact same row shape
+with no trace of which one actually happened — a "ringing_agent"
+abandonment inherently HAD a matched, ringing agent (that's what
+ringing_agent means), while "waiting_for_agent" never had one at all.
+abandonReason now captures that distinction directly, taken from the
+SAME previousStatus value endInboundCall (this function's only caller)
+already has in hand at the exact moment it decides this was abandoned —
+no new lookup needed, no way for it to drift out of sync with the
+real cause.
 ==================================================
 */
-async function recordAbandonedCall(call) {
+async function recordAbandonedCall(call, previousStatus) {
   const waitSeconds = Math.floor((call.endedAt.getTime() - call.startedAt.getTime()) / 1000);
+  const abandonReason = previousStatus === "ringing_agent" ? "AGENT_RINGING_NO_ANSWER" : "NEVER_MATCHED";
   await db.execute(
     `
       INSERT INTO cmx_dialer.abandoned_call_log
-        (campaign_id, caller_id_number, call_started_at, call_ended_at, wait_seconds)
-      VALUES (?, ?, ?, ?, ?)
+        (campaign_id, caller_id_number, call_started_at, call_ended_at, wait_seconds, abandon_reason)
+      VALUES (?, ?, ?, ?, ?, ?)
     `,
-    [call.campaignId, call.callerIdNumber, call.startedAt, call.endedAt, waitSeconds]
+    [call.campaignId, call.callerIdNumber, call.startedAt, call.endedAt, waitSeconds, abandonReason]
   );
 }
 
@@ -816,7 +835,7 @@ async function endInboundCall(room) {
 
   if (wasAbandoned) {
     try {
-      await recordAbandonedCall(call);
+      await recordAbandonedCall(call, previousStatus);
     } catch (err) {
       console.error("[inboundCallService] Failed to record abandoned call:", err.message);
     }
@@ -1247,7 +1266,7 @@ async function getAbandonedCallsToday(campaignId, startDate, endDate, statusFilt
 
   const [rows] = await db.execute(
     `
-      SELECT acl.abandoned_call_log_id, acl.campaign_id, c.campaign_name, acl.caller_id_number, acl.call_started_at, acl.wait_seconds, acl.status
+      SELECT acl.abandoned_call_log_id, acl.campaign_id, c.campaign_name, acl.caller_id_number, acl.call_started_at, acl.wait_seconds, acl.status, acl.abandon_reason
       FROM cmx_dialer.abandoned_call_log acl
       LEFT JOIN asterisk.vicidial_campaigns c ON c.campaign_id = acl.campaign_id
       WHERE acl.call_started_at >= ? AND acl.call_started_at <= ?
@@ -1267,6 +1286,7 @@ async function getAbandonedCallsToday(campaignId, startDate, endDate, statusFilt
     callStartedAt: r.call_started_at,
     waitSeconds: r.wait_seconds,
     status: r.status,
+    abandonReason: r.abandon_reason,
   }));
 }
 

@@ -1236,6 +1236,7 @@ router.get("/dialer/abandoned-voicemail", requireAuth, async (req, res) => {
         timestamp: a.callStartedAt,
         waitSeconds: a.waitSeconds,
         status: a.status,
+        abandonReason: a.abandonReason,
       })),
       ...voicemailRows.map((v) => ({
         type: "voicemail",

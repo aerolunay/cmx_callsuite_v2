@@ -193,7 +193,21 @@ export default function AbandonedVoicemailTable({ campaignId, highlightKey, onCa
                       ? `${row.durationSeconds != null ? formatDurationHMS(row.durationSeconds) : "—"}${
                           row.isAfterHours ? " · After Hours" : ""
                         }`
-                      : `Waited ${row.waitSeconds != null ? formatDurationHMS(row.waitSeconds) : "—"}`}
+                      : `Waited ${row.waitSeconds != null ? formatDurationHMS(row.waitSeconds) : "—"}${
+                          // Per explicit request — distinguishes a caller
+                          // who hung up before any agent was ever paged
+                          // from one who hung up while an agent's phone
+                          // was actually ringing (a real agent was right
+                          // there, about to answer). abandonReason is
+                          // undefined for any row logged before this
+                          // column existed — shows nothing extra rather
+                          // than guessing for that older data.
+                          row.abandonReason === "AGENT_RINGING_NO_ANSWER"
+                            ? " · Agent was ringing"
+                            : row.abandonReason === "NEVER_MATCHED"
+                              ? " · No agent available"
+                              : ""
+                        }`}
                   </td>
                   <td>
                     <button type="button" className="link" onClick={() => onCallback(row)}>
