@@ -139,6 +139,21 @@ when a row's Play button is actually clicked.
 router.get(
   "/voicemails",
   (req, res, next) => {
+    // REAL BUG FIX, confirmed via a live crash in production — this
+    // destructured req.session.agent unconditionally, assuming some
+    // upstream check had already guaranteed a valid session by the
+    // time this ONE route's own inline middleware ran (every other
+    // voicemail route below uses requireRoles(...), which does that
+    // guarantee — this route intentionally bypasses requireRoles for
+    // its own manual wfm-dashboard carve-out, but forgot to replace
+    // the auth check requireRoles would have done first). Any request
+    // with an expired/missing session (e.g. every currently-logged-in
+    // agent's session, if this app's session store is in-memory and
+    // the backend just restarted) crashed here instead of getting a
+    // clean 401.
+    if (!req.session.agent) {
+      return res.status(401).json({ success: false, message: "Not authenticated." });
+    }
     const { accessLevel } = req.session.agent;
     const { window } = req.query;
     // Manual role check, REPLACING requireRoles(...VOICEMAIL_ROLES)
