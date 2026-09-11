@@ -188,6 +188,85 @@ call ends). "leaving_voicemail" is a voicemail-only branch off
 */
 const inboundCalls = new Map();
 
+/*
+==================================================
+AGENT_RING_TIMEOUT_MS
+==================================================
+Per explicit request, following a real production incident — a call
+got permanently stuck showing "ringing your phone" to one specific
+agent, seemingly forever (survived the agent logging out and back in,
+since it's re-fetched fresh from this same in-memory state every time
+— see getCurrentInboundCall). Root cause: the agent-leg Originate
+below is fire-and-forget (Async: "true", no Timeout param, and nothing
+listens for its eventual OriginateResponse) — the ONLY things that
+were ever supposed to move a call out of "ringing_agent" were the
+agent actually answering (ConfbridgeJoin, below) or the customer
+hanging up (endInboundCall's own Hangup handling). If either of those
+events is ever missed for any reason (a dropped AMI event, a restart
+at exactly the wrong moment, etc.), NOTHING else was watching — the
+call just sat there indefinitely, with no self-healing path at all.
+
+This is a plain safety net, not the primary mechanism — every normal
+call still resolves via ConfbridgeJoin/Hangup exactly as before, long
+before this timer would ever fire. It only ever DOES anything on the
+rare call that would otherwise have been stuck forever.
+==================================================
+*/
+const AGENT_RING_TIMEOUT_MS = 30000; // 30 seconds — a real phone doesn't ring meaningfully longer than this before someone gives up either way
+
+/*
+==================================================
+scheduleRingTimeout / clearRingTimeout
+==================================================
+The timer is stored ON THE CALL OBJECT ITSELF (call.ringTimeoutHandle)
+so it can be found and cancelled from wherever the call naturally
+resolves — MUST be cleared the moment a call leaves "ringing_agent"
+through any other path (agent answers, customer hangs up, a later
+retry re-rings a DIFFERENT agent), or a stale timer could fire late
+and incorrectly reset a call that's already moved on to a completely
+different state.
+==================================================
+*/
+function scheduleRingTimeout(call, appUserId) {
+  clearRingTimeout(call);
+  call.ringTimeoutHandle = setTimeout(async () => {
+    // Re-check everything at fire time, not just at schedule time —
+    // this timer could have been superseded by a real resolution (or
+    // even a brand new ring attempt for the SAME call, if a later
+    // pass retried it) in the 30 seconds since it was scheduled.
+    if (call.status !== "ringing_agent" || call.pendingAppUserId !== appUserId) return;
+
+    console.warn(
+      `[inboundCallService] Agent ring timed out after ${AGENT_RING_TIMEOUT_MS / 1000}s with no answer/hangup detected — releasing agent and retrying (callId=${call.callId}, room=${call.room}, appUserId=${appUserId}). This should be rare; see AGENT_RING_TIMEOUT_MS's own comment.`
+    );
+
+    try {
+      await agentStatusService.setStatus(appUserId, "READY", { relatedCampaignId: call.campaignId });
+    } catch (err) {
+      console.error("[inboundCallService] Failed to return timed-out agent to READY:", err.message);
+    }
+
+    call.status = "waiting_for_agent";
+    call.pendingAppUserId = null;
+    call.pendingAgentExtension = null;
+    call.ringTimeoutHandle = null;
+    broadcastInboundStatus(call);
+
+    // Immediately retry with a different agent, rather than waiting
+    // for some other unrelated event to eventually trigger another
+    // pass — a customer who's been waiting 30+ seconds shouldn't wait
+    // any longer than necessary for a second attempt.
+    tryConnectReadyAgents();
+  }, AGENT_RING_TIMEOUT_MS);
+}
+
+function clearRingTimeout(call) {
+  if (call.ringTimeoutHandle) {
+    clearTimeout(call.ringTimeoutHandle);
+    call.ringTimeoutHandle = null;
+  }
+}
+
 function findByCallId(callId) {
   for (const call of inboundCalls.values()) {
     if (call.callId === callId) return call;
@@ -266,6 +345,7 @@ async function allocateInboundRoom(did, campaignIdOverride) {
     pendingAgentExtension: null,
     connectedAppUserId: null,
     onHold: false,
+    ringTimeoutHandle: null, // see AGENT_RING_TIMEOUT_MS's own comment — the safety-net timer for the current ringing_agent attempt, if any
     startedAt: new Date(),
     endedAt: null,
     // Same reasoning as dialerService.js's callState — channels added
@@ -675,6 +755,14 @@ async function tryConnectReadyAgentsInner() {
         CallerID: `"Inbound Caller" <${call.room}>`,
         Async: "true",
       });
+
+      // REAL BUG FIX, per explicit request — see AGENT_RING_TIMEOUT_MS's
+      // own comment above for the full incident writeup. Scheduled only
+      // once the Originate action itself has been accepted (this whole
+      // try block hasn't thrown) — if it fails outright, the catch below
+      // already handles putting the call back to waiting_for_agent
+      // immediately, no timeout needed for that path.
+      scheduleRingTimeout(call, agent.appUserId);
     } catch (err) {
       console.error("[inboundCallService] Failed to originate agent leg for inbound call:", err.message);
 
@@ -782,6 +870,8 @@ async function endInboundCall(room) {
 
   const previousStatus = call.status;
   const appUserId = call.connectedAppUserId || call.pendingAppUserId;
+
+  clearRingTimeout(call); // call is ending through this path regardless of status — any pending ring-timeout is no longer relevant
 
   call.status = "ended";
   call.endedAt = new Date();
@@ -939,6 +1029,7 @@ function registerInboundEventTracking() {
     }
 
     if (call.status === "ringing_agent") {
+      clearRingTimeout(call); // agent genuinely answered — the ring-timeout safety net is no longer needed for this attempt
       call.agentChannel = evt.channel;
       call.connectedAppUserId = call.pendingAppUserId;
       call.pendingAppUserId = null;
