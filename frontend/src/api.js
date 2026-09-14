@@ -232,6 +232,18 @@ export const api = {
     if (campaignId) params.set("campaignId", campaignId);
     return request(`/admin/reports/raw-calls?${params.toString()}`);
   },
+  // Third/fourth report types — Abandoned Calls, aggregated and raw,
+  // same startDate/endDate/campaignId shape as the two above.
+  getAbandonedCallsAggregatedReport: (startDate, endDate, campaignId) => {
+    const params = new URLSearchParams({ startDate, endDate });
+    if (campaignId) params.set("campaignId", campaignId);
+    return request(`/admin/reports/abandoned-calls-aggregated?${params.toString()}`);
+  },
+  getAbandonedCallsRawReport: (startDate, endDate, campaignId) => {
+    const params = new URLSearchParams({ startDate, endDate });
+    if (campaignId) params.set("campaignId", campaignId);
+    return request(`/admin/reports/abandoned-calls-raw?${params.toString()}`);
+  },
   // NEW — "Calls Flagged" (call avoidance tracking), admin/wfm only.
   getCallFlags: (startDate, endDate, campaignId) => {
     const params = new URLSearchParams();

@@ -30,12 +30,15 @@ export default function ReportsPage() {
   const [startDate, setStartDate] = useState(todayNY());
   const [endDate, setEndDate] = useState(todayNY());
 
-  // Two report types, per explicit request: the existing aggregated
-  // campaign->agent breakdown, and a new "Raw Data" option — one row
-  // per call, inbound+outbound combined, no aggregation at all.
+  // Four report types, per explicit request: the existing aggregated
+  // campaign->agent breakdown, "Raw Data" (one row per call, inbound+
+  // outbound combined), and now Abandoned Calls in both an aggregated
+  // (per-campaign totals) and raw (one row per abandoned call) form.
   const [reportType, setReportType] = useState("aggregated");
   const [report, setReport] = useState(null);
   const [rawCalls, setRawCalls] = useState(null);
+  const [abandonedReport, setAbandonedReport] = useState(null);
+  const [abandonedRawCalls, setAbandonedRawCalls] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -71,6 +74,18 @@ export default function ReportsPage() {
       api
         .getRawCallsReport(startDate, endDate, campaignId || undefined)
         .then((data) => setRawCalls(data.calls))
+        .catch((err) => setError(err.message))
+        .finally(() => setLoading(false));
+    } else if (reportType === "abandoned-aggregated") {
+      api
+        .getAbandonedCallsAggregatedReport(startDate, endDate, campaignId || undefined)
+        .then((data) => setAbandonedReport(data.report))
+        .catch((err) => setError(err.message))
+        .finally(() => setLoading(false));
+    } else if (reportType === "abandoned-raw") {
+      api
+        .getAbandonedCallsRawReport(startDate, endDate, campaignId || undefined)
+        .then((data) => setAbandonedRawCalls(data.calls))
         .catch((err) => setError(err.message))
         .finally(() => setLoading(false));
     } else {
@@ -148,6 +163,44 @@ export default function ReportsPage() {
     downloadCsv(`cmx-dialer-report-raw-calls_${startDate}_to_${endDate}.csv`, columns, rawCalls);
   }
 
+  function handleDownloadAbandonedAggregatedCsv() {
+    if (!abandonedReport) return;
+
+    const columns = [
+      { label: "Campaign", value: "campaignName" },
+      { label: "Total Abandoned", value: "totalAbandoned" },
+      { label: "No Agent Available", value: "neverMatchedCount" },
+      { label: "Agent Ringing, No Answer", value: "agentRingingNoAnswerCount" },
+      { label: "Unknown Reason (legacy)", value: "unknownReasonCount" },
+      { label: "Avg Wait (s)", value: "avgWaitSeconds" },
+    ];
+
+    downloadCsv(`cmx-dialer-report-abandoned-aggregated_${startDate}_to_${endDate}.csv`, columns, abandonedReport.campaigns);
+  }
+
+  function handleDownloadAbandonedRawCsv() {
+    if (!abandonedRawCalls) return;
+
+    const columns = [
+      { label: "Campaign", value: "campaignName" },
+      { label: "Caller ID", value: "callerIdNumber" },
+      { label: "Call Started", value: "callStartedAt" },
+      { label: "Call Ended", value: "callEndedAt" },
+      { label: "Wait Seconds", value: "waitSeconds" },
+      {
+        label: "Abandon Reason",
+        value: (row) =>
+          row.abandonReason === "NEVER_MATCHED"
+            ? "No Agent Available"
+            : row.abandonReason === "AGENT_RINGING_NO_ANSWER"
+              ? "Agent Ringing, No Answer"
+              : "Unknown (legacy)",
+      },
+    ];
+
+    downloadCsv(`cmx-dialer-report-abandoned-raw_${startDate}_to_${endDate}.csv`, columns, abandonedRawCalls);
+  }
+
   return (
     <>
       <Header />
@@ -160,6 +213,8 @@ export default function ReportsPage() {
             <select value={reportType} onChange={(e) => setReportType(e.target.value)}>
               <option value="aggregated">Aggregated</option>
               <option value="raw">Raw Data (Inbound + Outbound, combined)</option>
+              <option value="abandoned-aggregated">Abandoned Calls — Aggregated</option>
+              <option value="abandoned-raw">Abandoned Calls — Raw Data</option>
             </select>
           </div>
           <div>
@@ -192,8 +247,24 @@ export default function ReportsPage() {
           <button
             type="button"
             className="button-secondary"
-            onClick={reportType === "raw" ? handleDownloadRawCsv : handleDownloadCsv}
-            disabled={reportType === "raw" ? !rawCalls : !report}
+            onClick={
+              reportType === "raw"
+                ? handleDownloadRawCsv
+                : reportType === "abandoned-aggregated"
+                  ? handleDownloadAbandonedAggregatedCsv
+                  : reportType === "abandoned-raw"
+                    ? handleDownloadAbandonedRawCsv
+                    : handleDownloadCsv
+            }
+            disabled={
+              reportType === "raw"
+                ? !rawCalls
+                : reportType === "abandoned-aggregated"
+                  ? !abandonedReport
+                  : reportType === "abandoned-raw"
+                    ? !abandonedRawCalls
+                    : !report
+            }
           >
             Download CSV
           </button>
@@ -356,6 +427,103 @@ export default function ReportsPage() {
                       <td>{fmtSeconds(c.hold_seconds)}</td>
                       <td>{fmtSeconds(c.acw_seconds)}</td>
                       <td>{fmtSeconds(c.aht_seconds)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        )}
+        {!loading && reportType === "abandoned-aggregated" && abandonedReport && (
+          <>
+            <div className="card" style={{ marginBottom: 20 }}>
+              <h3>All Campaigns — Totals</h3>
+              <table className="call-log-table">
+                <thead>
+                  <tr>
+                    <th>Total Abandoned</th>
+                    <th>No Agent Available</th>
+                    <th>Agent Ringing, No Answer</th>
+                    <th>Unknown (legacy)</th>
+                    <th>Avg Wait</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>{abandonedReport.grandTotals.totalAbandoned}</td>
+                    <td>{abandonedReport.grandTotals.neverMatchedCount}</td>
+                    <td>{abandonedReport.grandTotals.agentRingingNoAnswerCount}</td>
+                    <td>{abandonedReport.grandTotals.unknownReasonCount}</td>
+                    <td>{fmtSeconds(abandonedReport.grandTotals.avgWaitSeconds)}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            {abandonedReport.campaigns.length === 0 && <p>No abandoned calls in this range.</p>}
+
+            {abandonedReport.campaigns.length > 0 && (
+              <div className="card call-log-card">
+                <h3>By Campaign</h3>
+                <table className="call-log-table">
+                  <thead>
+                    <tr>
+                      <th>Campaign</th>
+                      <th>Total Abandoned</th>
+                      <th>No Agent Available</th>
+                      <th>Agent Ringing, No Answer</th>
+                      <th>Unknown (legacy)</th>
+                      <th>Avg Wait</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {abandonedReport.campaigns.map((c) => (
+                      <tr key={c.campaignId ?? "unassigned"}>
+                        <td>{c.campaignName || c.campaignId || "—"}</td>
+                        <td>{c.totalAbandoned}</td>
+                        <td>{c.neverMatchedCount}</td>
+                        <td>{c.agentRingingNoAnswerCount}</td>
+                        <td>{c.unknownReasonCount}</td>
+                        <td>{fmtSeconds(c.avgWaitSeconds)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </>
+        )}
+
+        {!loading && reportType === "abandoned-raw" && abandonedRawCalls && (
+          <div className="card call-log-card">
+            <h3>Abandoned Calls — Raw Data — {abandonedRawCalls.length} calls</h3>
+            {abandonedRawCalls.length === 0 ? (
+              <p>No abandoned calls in this range.</p>
+            ) : (
+              <table className="call-log-table">
+                <thead>
+                  <tr>
+                    <th>Campaign</th>
+                    <th>Caller ID</th>
+                    <th>Call Started</th>
+                    <th>Wait</th>
+                    <th>Reason</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {abandonedRawCalls.map((c) => (
+                    <tr key={c.abandonedCallLogId}>
+                      <td>{c.campaignName || c.campaignId || "—"}</td>
+                      <td>{c.callerIdNumber || "—"}</td>
+                      <td>{new Date(c.callStartedAt).toLocaleString(undefined, { timeZone: "America/New_York" })}</td>
+                      <td>{fmtSeconds(c.waitSeconds)}</td>
+                      <td>
+                        {c.abandonReason === "NEVER_MATCHED"
+                          ? "No Agent Available"
+                          : c.abandonReason === "AGENT_RINGING_NO_ANSWER"
+                            ? "Agent Ringing, No Answer"
+                            : "Unknown (legacy)"}
+                      </td>
                     </tr>
                   ))}
                 </tbody>

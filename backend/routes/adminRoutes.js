@@ -2119,6 +2119,187 @@ router.get(
 
 /*
 ==================================================
+GET /api/admin/reports/abandoned-calls-aggregated?startDate=&endDate=&campaignId=optional
+==================================================
+Third report type, per explicit request — "Abandoned calls
+(aggregated/raw data)" in the Reports section, alongside the existing
+call-based reports above. This is the aggregated half: per-campaign
+totals (count, broken down by abandon_reason — see
+inboundCallService.js's own comment on that column for what
+NEVER_MATCHED vs AGENT_RINGING_NO_ANSWER actually mean — plus average
+wait time), with a grand-total row across every campaign in scope.
+
+Same role gate + resolveCampaignScope + Eastern-day-bounds resolution
+as both call reports above, for the same reasons already documented
+there — one shared definition of "startDate to endDate" and "which
+campaigns this caller is allowed to see," not a second one invented
+for this report specifically.
+
+unknownReasonCount exists for rows logged BEFORE abandon_reason existed
+at all (NULL on that column) — shown separately rather than silently
+folded into either real category, since a NULL genuinely isn't known
+to be either one.
+==================================================
+*/
+router.get(
+  "/reports/abandoned-calls-aggregated",
+  requireRoles("supervisor", "account_manager", "wfm", "admin"),
+  resolveCampaignScope,
+  async (req, res) => {
+    try {
+      const { startDate, endDate } = req.query;
+      if (!startDate || !endDate) {
+        return res.status(400).json({ success: false, message: "startDate and endDate query params are required." });
+      }
+
+      const { start, end } = await statsService.getEasternRangeBoundsForServerClock(startDate, endDate);
+      const campaignIds = req.campaignScope; // null = truly unrestricted (admin/wfm "All"), array = one or more specific campaigns
+
+      const params = [start, end];
+      let campaignFilter = "";
+      if (campaignIds && campaignIds.length > 0) {
+        campaignFilter = `AND acl.campaign_id IN (${campaignIds.map(() => "?").join(",")})`;
+        params.push(...campaignIds);
+      }
+
+      const [rows] = await db.execute(
+        `
+          SELECT
+            acl.campaign_id, c.campaign_name,
+            COUNT(*) AS total_abandoned,
+            SUM(CASE WHEN acl.abandon_reason = 'NEVER_MATCHED' THEN 1 ELSE 0 END) AS never_matched_count,
+            SUM(CASE WHEN acl.abandon_reason = 'AGENT_RINGING_NO_ANSWER' THEN 1 ELSE 0 END) AS agent_ringing_no_answer_count,
+            SUM(CASE WHEN acl.abandon_reason IS NULL THEN 1 ELSE 0 END) AS unknown_reason_count,
+            AVG(acl.wait_seconds) AS avg_wait_seconds
+          FROM cmx_dialer.abandoned_call_log acl
+          LEFT JOIN asterisk.vicidial_campaigns c ON c.campaign_id = acl.campaign_id
+          WHERE acl.call_started_at >= ? AND acl.call_started_at <= ? ${campaignFilter}
+          GROUP BY acl.campaign_id, c.campaign_name
+          ORDER BY total_abandoned DESC
+        `,
+        params
+      );
+
+      const campaigns = rows.map((r) => ({
+        campaignId: r.campaign_id,
+        campaignName: r.campaign_name,
+        totalAbandoned: Number(r.total_abandoned) || 0,
+        neverMatchedCount: Number(r.never_matched_count) || 0,
+        agentRingingNoAnswerCount: Number(r.agent_ringing_no_answer_count) || 0,
+        unknownReasonCount: Number(r.unknown_reason_count) || 0,
+        avgWaitSeconds: r.avg_wait_seconds !== null ? Math.round(Number(r.avg_wait_seconds)) : null,
+      }));
+
+      const grandTotals = campaigns.reduce(
+        (acc, c) => {
+          acc.totalAbandoned += c.totalAbandoned;
+          acc.neverMatchedCount += c.neverMatchedCount;
+          acc.agentRingingNoAnswerCount += c.agentRingingNoAnswerCount;
+          acc.unknownReasonCount += c.unknownReasonCount;
+          acc.totalWaitSeconds += (c.avgWaitSeconds || 0) * c.totalAbandoned;
+          return acc;
+        },
+        { totalAbandoned: 0, neverMatchedCount: 0, agentRingingNoAnswerCount: 0, unknownReasonCount: 0, totalWaitSeconds: 0 }
+      );
+      const avgWaitSecondsOverall =
+        grandTotals.totalAbandoned > 0 ? Math.round(grandTotals.totalWaitSeconds / grandTotals.totalAbandoned) : null;
+
+      return res.json({
+        success: true,
+        report: {
+          campaigns,
+          grandTotals: {
+            totalAbandoned: grandTotals.totalAbandoned,
+            neverMatchedCount: grandTotals.neverMatchedCount,
+            agentRingingNoAnswerCount: grandTotals.agentRingingNoAnswerCount,
+            unknownReasonCount: grandTotals.unknownReasonCount,
+            avgWaitSeconds: avgWaitSecondsOverall,
+          },
+        },
+      });
+    } catch (error) {
+      console.error("GET /api/admin/reports/abandoned-calls-aggregated failed:", error);
+      return res.status(500).json({ success: false, message: error.message || "Failed to load abandoned calls report." });
+    }
+  }
+);
+
+/*
+==================================================
+GET /api/admin/reports/abandoned-calls-raw?startDate=&endDate=&campaignId=optional
+==================================================
+Fourth report type — the raw-data half of the same request. One row
+per abandoned call, no aggregation, no LIMIT (same "a report should
+return everything in the requested range" convention as
+/reports/raw-calls above — this app's other abandoned-call reads
+elsewhere, like the Live Status Dashboard and DialerPage's own tab,
+deliberately cap at 200 since those are live "today" views, not
+historical exports; a report has no reason to share that cap).
+
+Does NOT yet include which agent was ringing for an
+AGENT_RINGING_NO_ANSWER row — that requires the ringing_agent_user_id
+column (see sql/006_add_ringing_agent_user_id.sql), which is a
+separate, not-yet-applied migration as of this route being written.
+Once that migration and its accompanying code are live, this query can
+be extended with a LEFT JOIN to app_users the same way
+getAbandonedCallsToday already does.
+==================================================
+*/
+router.get(
+  "/reports/abandoned-calls-raw",
+  requireRoles("supervisor", "account_manager", "wfm", "admin"),
+  resolveCampaignScope,
+  async (req, res) => {
+    try {
+      const { startDate, endDate } = req.query;
+      if (!startDate || !endDate) {
+        return res.status(400).json({ success: false, message: "startDate and endDate query params are required." });
+      }
+
+      const { start, end } = await statsService.getEasternRangeBoundsForServerClock(startDate, endDate);
+      const campaignIds = req.campaignScope;
+
+      const params = [start, end];
+      let campaignFilter = "";
+      if (campaignIds && campaignIds.length > 0) {
+        campaignFilter = `AND acl.campaign_id IN (${campaignIds.map(() => "?").join(",")})`;
+        params.push(...campaignIds);
+      }
+
+      const [rows] = await db.execute(
+        `
+          SELECT
+            acl.abandoned_call_log_id, acl.campaign_id, c.campaign_name, acl.caller_id_number,
+            acl.call_started_at, acl.call_ended_at, acl.wait_seconds, acl.abandon_reason
+          FROM cmx_dialer.abandoned_call_log acl
+          LEFT JOIN asterisk.vicidial_campaigns c ON c.campaign_id = acl.campaign_id
+          WHERE acl.call_started_at >= ? AND acl.call_started_at <= ? ${campaignFilter}
+          ORDER BY acl.call_started_at DESC
+        `,
+        params
+      );
+
+      const calls = rows.map((r) => ({
+        abandonedCallLogId: r.abandoned_call_log_id,
+        campaignId: r.campaign_id,
+        campaignName: r.campaign_name,
+        callerIdNumber: r.caller_id_number,
+        callStartedAt: r.call_started_at,
+        callEndedAt: r.call_ended_at,
+        waitSeconds: r.wait_seconds,
+        abandonReason: r.abandon_reason,
+      }));
+
+      return res.json({ success: true, calls });
+    } catch (error) {
+      console.error("GET /api/admin/reports/abandoned-calls-raw failed:", error);
+      return res.status(500).json({ success: false, message: error.message || "Failed to load raw abandoned call data." });
+    }
+  }
+);
+
+/*
+==================================================
 GET /api/admin/call-flags?startDate=&endDate=&campaignId=optional
 ==================================================
 NEW — "Calls Flagged", per explicit request: surfaces every row from
