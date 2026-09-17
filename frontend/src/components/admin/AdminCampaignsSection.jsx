@@ -361,6 +361,7 @@ export default function AdminCampaignsSection() {
   const [campaignId, setCampaignId] = useState("");
   const [campaignName, setCampaignName] = useState("");
   const [did, setDid] = useState("");
+  const [callerId, setCallerId] = useState("");
   const [outboundTrunk, setOutboundTrunk] = useState("CMXCallSuite");
   const [availableTrunks, setAvailableTrunks] = useState([]);
   const [campaignType, setCampaignType] = useState("OUTBOUND");
@@ -420,6 +421,7 @@ export default function AdminCampaignsSection() {
     setCampaignId("");
     setCampaignName("");
     setDid("");
+    setCallerId("");
     setOutboundTrunk("CMXCallSuite");
     setCampaignType("OUTBOUND");
     setBlendedFallbackCampaignId("");
@@ -446,6 +448,17 @@ export default function AdminCampaignsSection() {
     setCampaignId(c.campaign_id);
     setCampaignName(c.campaign_name || "");
     setDid(c.did || "");
+    // REAL BUG FIX, per explicit request, following a full production
+    // incident this exact gap caused — see this field's own JSX
+    // comment below for the full story. Shows the raw campaign_cid
+    // ONLY when it's a genuine, real override — NOT when it's just
+    // the DID being used as-is (the normal case) or the fake
+    // "0000000000" placeholder a DID-less campaign silently falls
+    // back to. Showing that placeholder back to the admin would be
+    // actively misleading — it looks like a real value sitting there,
+    // when it's actually a broken state that gets a real SIP 403 from
+    // QuestBlue the moment anyone tries to dial out on it.
+    setCallerId(c.campaign_cid && c.campaign_cid !== c.did && c.campaign_cid !== "0000000000" ? c.campaign_cid : "");
     setOutboundTrunk(c.outbound_trunk || "CMXCallSuite");
     setCampaignType(c.campaign_type || "OUTBOUND");
     setBlendedFallbackCampaignId(c.blended_fallback_campaign_id || "");
@@ -526,6 +539,14 @@ export default function AdminCampaignsSection() {
     formData.append("dialMethod", campaignType === "OUTBOUND" ? dialMethod : "MANUAL");
     formData.append("blendedFallbackCampaignId", campaignType === "OUTBOUND" ? blendedFallbackCampaignId : "");
     formData.append("recordingEnabled", String(recordingEnabled));
+    // Sent on EVERY save (create AND update), unlike DID which is
+    // create-only — see this field's own JSX comment for the full
+    // incident this addresses. Sending it every time, always
+    // reflecting whatever's actually in this input right now, is
+    // exactly what prevents a later, unrelated edit from silently
+    // reverting it back to the "0000000000" placeholder the way the
+    // missing field used to.
+    formData.append("callerId", callerId);
     formData.append("businessHoursStart", businessHoursStart);
     formData.append("businessHoursEnd", businessHoursEnd);
     formData.append("businessDays", daysArrayToString(selectedDays));
@@ -550,6 +571,24 @@ export default function AdminCampaignsSection() {
     e.preventDefault();
     setError("");
     setSuccess("");
+
+    // REAL BUG FIX, per explicit request, following a full production
+    // incident: a DID-less campaign on the QuestBlue trunk with no
+    // Caller ID set silently falls back to a fake "0000000000"
+    // placeholder — which QuestBlue rejects outright with a SIP 403
+    // the moment anyone tries to place a call, with nothing in the
+    // app surfacing that failure back to whoever set it up. Caught
+    // here, at save time, instead of leaving it to be discovered the
+    // hard way during a live test call.
+    if (outboundTrunk === "CMXCallSuite" && !did.trim() && !callerId.trim()) {
+      setError(
+        "This campaign has no DID and no Caller ID, but uses the QuestBlue trunk — outbound calls WILL fail instantly " +
+          "(QuestBlue rejects the fake placeholder Caller ID with a SIP 403). Enter a real, provisioned Caller ID below, " +
+          "or add a DID, before saving."
+      );
+      return;
+    }
+
     setBusy(true);
     try {
       const formData = buildFormData();
@@ -621,20 +660,39 @@ export default function AdminCampaignsSection() {
                   </p>
                 )}
 
-                {/* Which trunk this campaign's outbound calls actually
-                    go out through. QuestBlue (CMXCallSuite) is the
-                    existing, always-available default and always uses
-                    this campaign's own DID as its Caller ID — the old
-                    Caller ID override field was retired now that
-                    Telpeer handles Caller ID spoofing entirely on its
-                    own portal, per extension (QuestBlue itself rejects
-                    any non-provisioned Caller ID outright with a real
-                    SIP 403, confirmed via a real test call, so an
-                    override field never made sense for it anyway).
-                    Options below are fetched live from Admin ->
-                    DID/Trunk Setup — adding a trunk there makes it
-                    immediately selectable here, no code change or
-                    redeploy needed. */}
+                {/* REAL BUG FIX, per explicit request, following a full
+                    production incident: this field was previously
+                    retired on the assumption that QuestBlue campaigns
+                    always have a real DID to fall back on as their
+                    Caller ID — true for most campaigns, but NOT for a
+                    pure-outbound campaign with no DID at all, which
+                    silently fell back to a fake "0000000000"
+                    placeholder instead. QuestBlue rejects that fake
+                    placeholder outright with a real SIP 403 the moment
+                    a call is placed — confirmed live, and the root
+                    cause of a lengthy incident before this field came
+                    back. Telpeer-trunked campaigns still don't need
+                    this (Caller ID is controlled entirely on Telpeer's
+                    own portal, per trunk) — but for QuestBlue, this is
+                    the ONLY way to give a DID-less campaign a real,
+                    working Caller ID. See handleSubmit's own
+                    validation above, which blocks saving a
+                    QuestBlue + no-DID + no-Caller-ID combination
+                    outright now, rather than letting it silently fail
+                    later. */}
+                <label className="comments-label">Caller ID (optional — QuestBlue only)</label>
+                <input
+                  type="text"
+                  value={callerId}
+                  onChange={(e) => setCallerId(e.target.value.replace(/\D/g, "").slice(0, 10))}
+                  placeholder="Leave blank to use this campaign's own DID as Caller ID"
+                />
+                <p style={{ fontSize: 13, color: "#888", marginTop: 4 }}>
+                  Only matters for the QuestBlue trunk (Telpeer controls Caller ID on its own portal, per trunk).
+                  Leave blank if this campaign has a real DID — QuestBlue uses that automatically. Required if this
+                  campaign has NO DID and uses QuestBlue, or outbound calls will fail instantly.
+                </p>
+
                 <label className="comments-label">Outbound Trunk</label>
                 <select value={outboundTrunk} onChange={(e) => setOutboundTrunk(e.target.value)}>
                   <option value="CMXCallSuite">QuestBlue (default)</option>
@@ -647,8 +705,8 @@ export default function AdminCampaignsSection() {
                 </select>
                 <p style={{ fontSize: 13, color: "#888", marginTop: 4 }}>
                   Additional trunks are managed under Admin → DID/Trunk Setup. Telpeer's Caller ID
-                  is controlled entirely on Telpeer's own portal, per trunk. QuestBlue always uses
-                  this campaign's DID as its Caller ID.
+                  is controlled entirely on Telpeer's own portal, per trunk. QuestBlue uses this
+                  campaign's DID as its Caller ID unless overridden above.
                 </p>
 
                 <label className="comments-label">Campaign Type</label>
