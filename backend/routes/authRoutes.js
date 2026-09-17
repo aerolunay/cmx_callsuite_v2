@@ -128,9 +128,25 @@ const OTP_LOGIN_MAX_PER_IP = Number(process.env.OTP_LOGIN_MAX_PER_IP || 300);
 const OTP_LOGIN_MAX_PER_EMAIL = Number(process.env.OTP_LOGIN_MAX_PER_EMAIL || 10);
 const CHECK_USER_MAX_PER_IP = Number(process.env.CHECK_USER_MAX_PER_IP || 300);
 
+// REAL BUG FOUND live in production (2026-09-17): express-rate-limit
+// v8's own startup validation flags this exact pattern — falling back
+// to req.ip DIRECTLY inside a custom keyGenerator, without normalizing
+// it through the library's own ipKeyGenerator() helper first, is
+// unsafe for IPv6 clients specifically. The same IPv6 address has
+// multiple valid textual representations (zero-compression, casing),
+// so an IPv6 client could rotate representations and get a fresh
+// counter each time, bypassing this limiter entirely — exactly the
+// kind of hole a rate limiter shouldn't have. Logged as a non-fatal
+// startup warning (did NOT crash the process — confirmed live: the
+// app kept running and serving requests normally right through it),
+// but real and worth fixing properly rather than leaving a known
+// bypass path in a security control. ipKeyGenerator() is attached as
+// a property on the default export itself (confirmed directly against
+// the installed package), so no separate import line needed — this
+// stays a one-line fix at each of the two call sites below.
 function normalizedEmailKey(req) {
   const email = String(req.body?.email || "").trim().toLowerCase();
-  return email || req.ip;
+  return email || rateLimit.ipKeyGenerator(req.ip);
 }
 
 const otpRequestByIpLimiter = rateLimit({
