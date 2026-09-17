@@ -184,10 +184,77 @@ async function resolveCampaignScope(req, res, next) {
   }
 }
 
+/*
+resolveCampaignScopeMulti — NEW, per explicit request (Leads Calling
+Dashboard's "select all outbound campaigns" checkbox). Like
+resolveCampaignScope above, but for endpoints that accept an EXPLICIT
+multi-campaign selection from the frontend, as a comma-separated
+?campaignIds=A,B,C, rather than either exactly one campaignId or an
+implicit "no param = All".
+
+admin/wfm: campaignIds optional. Omitted -> req.campaignScope = null
+(no filter, truly unrestricted "All"). Provided -> used as-is, no
+ownership check needed (they already have access to everything).
+
+Every other allowed role: any campaignIds provided MUST be a subset of
+their real assignments — rejects 403 (naming which ones aren't theirs)
+if not, exactly the same enforcement principle as
+requireCampaignAccess/resolveCampaignScope: a direct API call
+shouldn't be able to see a campaign the UI would never have offered it.
+Omitted/empty -> defaults to their full assignment list, same "All (My
+Campaigns)" behavior resolveCampaignScope already gives scoped roles.
+
+Same req.campaignScope contract as resolveCampaignScope (null | string
+array), so any handler already written against that shape (e.g.
+statsService.getLeadsCallingDashboard's campaignIds param) works
+unchanged regardless of which of the two middlewares populated it.
+*/
+async function resolveCampaignScopeMulti(req, res, next) {
+  const { accessLevel, appUserId } = req.session.agent;
+  const raw = req.query.campaignIds;
+  const requested = raw
+    ? String(raw)
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean)
+    : [];
+
+  if (UNRESTRICTED_CAMPAIGN_ROLES.includes(accessLevel)) {
+    req.campaignScope = requested.length > 0 ? requested : null;
+    return next();
+  }
+
+  try {
+    const assignedIds = await getAssignedCampaignIds(appUserId);
+    req.accessibleCampaignIds = assignedIds;
+
+    if (requested.length > 0) {
+      const notAssigned = requested.filter((id) => !assignedIds.includes(id));
+      if (notAssigned.length > 0) {
+        return res.status(403).json({
+          success: false,
+          message: `You are not assigned to: ${notAssigned.join(", ")}.`,
+        });
+      }
+      req.campaignScope = requested;
+    } else {
+      // No explicit selection — same "All (My Campaigns)" default as
+      // resolveCampaignScope, never the full system-wide list.
+      req.campaignScope = assignedIds;
+    }
+
+    return next();
+  } catch (error) {
+    console.error("[accessControlService] resolveCampaignScopeMulti failed:", error);
+    return res.status(500).json({ success: false, message: "Failed to verify campaign access." });
+  }
+}
+
 module.exports = {
   requireRoles,
   getAssignedCampaignIds,
   requireCampaignAccess,
   resolveCampaignScope,
+  resolveCampaignScopeMulti,
   UNRESTRICTED_CAMPAIGN_ROLES,
 };

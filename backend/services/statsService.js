@@ -497,6 +497,295 @@ async function getCampaignAgentBreakdown({ startDate, endDate, campaignId, campa
 
 /*
 ==================================================
+LEADS CALLING DASHBOARD — NEW, per explicit request
+==================================================
+Powers a new dashboard, scoped to OUTBOUND campaigns that actually
+have leads uploaded (see getLeadsCampaignsWithLeads below, and
+leadRoutes.js for how leads get uploaded in the first place — this is
+a read-only companion to that feature, not a new upload path).
+
+Metrics, exactly as specified:
+  - Contact Rate  = Total Dialed / Total Leads
+  - Connect Rate  = Total Calls Answered By A Human / Total Dialed
+  - Remaining Leads = leads never yet attempted
+  - Per-agent aggregated table
+
+DEFINITIONS — flagged explicitly since these are business-rule
+ASSUMPTIONS, not something the request spelled out at the disposition
+level. Adjust NON_HUMAN_DISPOSITIONS below if the business defines
+"a human answered" differently (e.g. treating WRONG_NUMBER as a
+non-contact):
+  - "Total Leads" / "Remaining Leads" are LIVE INVENTORY snapshots
+    (as of right now), not bounded by the dashboard's date filter —
+    a lead uploaded last month and never called is still "remaining"
+    today regardless of what date range is selected. This matches how
+    dialer_call_log's getNextLead() logic already treats
+    vicidial_list.status itself as the one source of truth for
+    "still eligible to dial", not a date-scoped concept.
+  - "Total Dialed" = one row in cmx_dialer.dialer_call_log per dial
+    attempt in the selected date range — exactly the same definition
+    computeDirectionStats already uses for outbound totalCalls, so
+    this dashboard's numbers agree with Reports/Live Dashboard rather
+    than inventing a second, inconsistent count (the exact class of
+    bug already found and fixed once for AHT — see
+    computeDirectionStats's own header comment).
+  - "Answered by a human" = every dialer_call_log row in range whose
+    disposition is NOT one of the auto/manually-confirmed non-human
+    outcomes below. Everything else (CALL_ENDED, CX_HUNG_UP,
+    NOT_INTERESTED, DO_NOT_CALL, CALLBACK, SCREENING_COMPLETED,
+    NOT_ELIGIBLE, XFER_CONF, WRONG_NUMBER, ...) implies a live person
+    was reached at some point during the call.
+==================================================
+*/
+const NON_HUMAN_DISPOSITIONS = ["MACHINE", "BUSY", "NO_ANSWER", "VOICEMAIL"];
+
+function pct(numerator, denominator) {
+  return denominator > 0 ? (numerator / denominator) * 100 : null;
+}
+
+/*
+getLeadsCampaignsWithLeads(scopeCampaignIds) — powers the dashboard's
+campaign picker. Only OUTBOUND campaigns (cmx_dialer.campaign_settings
+.campaign_type = 'OUTBOUND' — same flag campaignRoutes.js's own
+?type=OUTBOUND filter uses) that have at least one lead actually
+uploaded (an INNER JOIN down to a non-empty vicidial_list, not just an
+existing-but-empty vicidial_lists row from a past upload). Optionally
+restricted to scopeCampaignIds (the caller's own real assignments, for
+every role except admin/wfm — enforced by the ROUTE, not here; this
+function trusts whatever list it's given).
+*/
+async function getLeadsCampaignsWithLeads(scopeCampaignIds) {
+  const params = [];
+  let scopeFilter = "";
+  if (scopeCampaignIds && scopeCampaignIds.length > 0) {
+    scopeFilter = ` AND c.campaign_id IN (${scopeCampaignIds.map(() => "?").join(",")})`;
+    params.push(...scopeCampaignIds);
+  }
+
+  const [rows] = await db.execute(
+    `
+      SELECT
+        c.campaign_id AS campaignId,
+        c.campaign_name AS campaignName,
+        COUNT(vl.lead_id) AS totalLeads,
+        SUM(CASE WHEN vl.status = 'NEW' THEN 1 ELSE 0 END) AS remainingLeads
+      FROM vicidial_campaigns c
+      JOIN cmx_dialer.campaign_settings s ON s.campaign_id = c.campaign_id AND s.campaign_type = 'OUTBOUND'
+      JOIN vicidial_lists vlt ON vlt.campaign_id = c.campaign_id
+      JOIN vicidial_list vl ON vl.list_id = vlt.list_id
+      WHERE c.active = 'Y' ${scopeFilter}
+      GROUP BY c.campaign_id, c.campaign_name
+      HAVING COUNT(vl.lead_id) > 0
+      ORDER BY c.campaign_name ASC
+    `,
+    params
+  );
+
+  return rows.map((r) => ({
+    campaignId: r.campaignId,
+    campaignName: r.campaignName,
+    totalLeads: Number(r.totalLeads) || 0,
+    remainingLeads: Number(r.remainingLeads) || 0,
+  }));
+}
+
+/*
+getLeadsCallingDashboard({ startDate, endDate, campaignIds }) —
+campaignIds is REQUIRED and must be non-empty (the route resolves
+"select all outbound campaigns" down to a real list before calling
+this, via accessControlService.resolveCampaignScopeMulti — this
+function never treats "no campaignIds" as "everything", to avoid
+silently including campaigns without leads, or campaigns outside a
+scoped role's assignments, if this were ever called incorrectly).
+
+Returns per-campaign rows (for the cards/charts), a grand-total row,
+and a single per-agent aggregated table across every selected campaign
+combined — exactly the three pieces asked for, in one round trip.
+*/
+async function getLeadsCallingDashboard({ startDate, endDate, campaignIds }) {
+  if (!campaignIds || campaignIds.length === 0) {
+    return {
+      startDate,
+      endDate,
+      campaigns: [],
+      grandTotals: { totalLeads: 0, remainingLeads: 0, totalDialed: 0, humanAnswered: 0, contactRatePct: null, connectRatePct: null, dispositionBreakdown: [] },
+      agents: [],
+    };
+  }
+
+  const { start, end } = await getEasternRangeBoundsForServerClock(startDate, endDate);
+  const campaignInClause = campaignIds.map(() => "?").join(",");
+
+  // Lead inventory — NOT date-bounded, see header comment above.
+  const [leadRows] = await db.execute(
+    `
+      SELECT
+        vlt.campaign_id AS campaignId,
+        COUNT(vl.lead_id) AS totalLeads,
+        SUM(CASE WHEN vl.status = 'NEW' THEN 1 ELSE 0 END) AS remainingLeads
+      FROM vicidial_lists vlt
+      JOIN vicidial_list vl ON vl.list_id = vlt.list_id
+      WHERE vlt.campaign_id IN (${campaignInClause})
+      GROUP BY vlt.campaign_id
+    `,
+    campaignIds
+  );
+
+  // Dial attempts + human-answered, grouped by campaign+agent, in range.
+  const nonHumanPlaceholders = NON_HUMAN_DISPOSITIONS.map(() => "?").join(",");
+  const [dialRows] = await db.execute(
+    `
+      SELECT
+        campaign_id AS campaignId,
+        agent_user AS agentUser,
+        COUNT(*) AS totalDialed,
+        SUM(CASE WHEN disposition NOT IN (${nonHumanPlaceholders}) THEN 1 ELSE 0 END) AS humanAnswered
+      FROM cmx_dialer.dialer_call_log
+      WHERE call_started_at BETWEEN ? AND ? AND campaign_id IN (${campaignInClause})
+      GROUP BY campaign_id, agent_user
+    `,
+    [...NON_HUMAN_DISPOSITIONS, start, end, ...campaignIds]
+  );
+
+  // Disposition breakdown — NEW, per explicit request ("% per
+  // disposition"). Grouped by campaign+disposition in one pass so both
+  // the per-campaign and grand-total breakdowns below come from the
+  // exact same counts as totalDialed above (no separate, potentially
+  // disagreeing query) — same "sum raw counts once, derive every view
+  // from that" principle as the rest of this function.
+  const [dispositionRows] = await db.execute(
+    `
+      SELECT campaign_id AS campaignId, disposition, COUNT(*) AS n
+      FROM cmx_dialer.dialer_call_log
+      WHERE call_started_at BETWEEN ? AND ? AND campaign_id IN (${campaignInClause})
+      GROUP BY campaign_id, disposition
+    `,
+    [start, end, ...campaignIds]
+  );
+
+  const [campaignNameRows] = await db.execute(
+    `SELECT campaign_id, campaign_name FROM vicidial_campaigns WHERE campaign_id IN (${campaignInClause})`,
+    campaignIds
+  );
+  const [agentRows] = await db.execute(
+    `SELECT app_user_id, vicidial_user, full_name FROM cmx_dialer.app_users WHERE vicidial_user IS NOT NULL`
+  );
+
+  const campaignNameById = new Map(campaignNameRows.map((c) => [c.campaign_id, c.campaign_name]));
+  const agentByUsername = new Map(agentRows.map((a) => [a.vicidial_user, a]));
+
+  // dispositionCountsByCampaign: campaignId -> { disposition -> count }
+  // dispositionCountsOverall: disposition -> count (summed across every
+  // selected campaign, for the grand-total breakdown).
+  const dispositionCountsByCampaign = new Map();
+  const dispositionCountsOverall = new Map();
+  for (const row of dispositionRows) {
+    const n = Number(row.n) || 0;
+    const perCampaign = dispositionCountsByCampaign.get(row.campaignId) || new Map();
+    perCampaign.set(row.disposition, (perCampaign.get(row.disposition) || 0) + n);
+    dispositionCountsByCampaign.set(row.campaignId, perCampaign);
+    dispositionCountsOverall.set(row.disposition, (dispositionCountsOverall.get(row.disposition) || 0) + n);
+  }
+
+  function breakdownFromCounts(countsMap, totalDialedForBreakdown) {
+    return Array.from(countsMap.entries())
+      .map(([disposition, count]) => ({
+        disposition,
+        count,
+        pct: pct(count, totalDialedForBreakdown),
+      }))
+      .sort((a, b) => b.count - a.count);
+  }
+
+
+  // --- Per-campaign rows ---
+  const leadsByCampaign = new Map(
+    leadRows.map((r) => [
+      r.campaignId,
+      { totalLeads: Number(r.totalLeads) || 0, remainingLeads: Number(r.remainingLeads) || 0 },
+    ])
+  );
+
+  const dialTotalsByCampaign = new Map(); // campaignId -> { totalDialed, humanAnswered }
+  for (const row of dialRows) {
+    const entry = dialTotalsByCampaign.get(row.campaignId) || { totalDialed: 0, humanAnswered: 0 };
+    entry.totalDialed += row.totalDialed;
+    entry.humanAnswered += Number(row.humanAnswered) || 0; // mysql2 SUM() string-coercion, same fix as computeDirectionStats
+    dialTotalsByCampaign.set(row.campaignId, entry);
+  }
+
+  const campaigns = campaignIds
+    .map((campaignId) => {
+      const leads = leadsByCampaign.get(campaignId) || { totalLeads: 0, remainingLeads: 0 };
+      const dial = dialTotalsByCampaign.get(campaignId) || { totalDialed: 0, humanAnswered: 0 };
+      return {
+        campaignId,
+        campaignName: campaignNameById.get(campaignId) || campaignId,
+        totalLeads: leads.totalLeads,
+        remainingLeads: leads.remainingLeads,
+        totalDialed: dial.totalDialed,
+        humanAnswered: dial.humanAnswered,
+        contactRatePct: pct(dial.totalDialed, leads.totalLeads),
+        connectRatePct: pct(dial.humanAnswered, dial.totalDialed),
+        // % per disposition, per explicit request — each disposition's
+        // share of THIS campaign's own totalDialed in range.
+        dispositionBreakdown: breakdownFromCounts(
+          dispositionCountsByCampaign.get(campaignId) || new Map(),
+          dial.totalDialed
+        ),
+      };
+    })
+    .sort((a, b) => a.campaignName.localeCompare(b.campaignName));
+
+  // --- Grand totals — sum raw counts first, THEN divide (never
+  // averaging per-campaign percentages), same principle
+  // getCampaignAgentBreakdown already applies for AHT. ---
+  const grandTotals = campaigns.reduce(
+    (acc, c) => {
+      acc.totalLeads += c.totalLeads;
+      acc.remainingLeads += c.remainingLeads;
+      acc.totalDialed += c.totalDialed;
+      acc.humanAnswered += c.humanAnswered;
+      return acc;
+    },
+    { totalLeads: 0, remainingLeads: 0, totalDialed: 0, humanAnswered: 0 }
+  );
+  grandTotals.contactRatePct = pct(grandTotals.totalDialed, grandTotals.totalLeads);
+  grandTotals.connectRatePct = pct(grandTotals.humanAnswered, grandTotals.totalDialed);
+  // % per disposition, per explicit request — each disposition's
+  // share of Total Dialed across EVERY selected campaign combined.
+  grandTotals.dispositionBreakdown = breakdownFromCounts(dispositionCountsOverall, grandTotals.totalDialed);
+
+  // --- Per-agent table — aggregated ACROSS every selected campaign,
+  // one row per agent (per explicit request: "a table showing
+  // aggregated values per agent", not broken back out per campaign). ---
+  const byAgent = new Map(); // vicidialUser -> { totalDialed, humanAnswered }
+  for (const row of dialRows) {
+    const entry = byAgent.get(row.agentUser) || { totalDialed: 0, humanAnswered: 0 };
+    entry.totalDialed += row.totalDialed;
+    entry.humanAnswered += Number(row.humanAnswered) || 0;
+    byAgent.set(row.agentUser, entry);
+  }
+
+  const agents = Array.from(byAgent.entries())
+    .map(([vicidialUser, totals]) => {
+      const agentInfo = agentByUsername.get(vicidialUser);
+      return {
+        vicidialUser,
+        appUserId: agentInfo?.app_user_id ?? null,
+        fullName: agentInfo?.full_name || vicidialUser,
+        totalDialed: totals.totalDialed,
+        humanAnswered: totals.humanAnswered,
+        connectRatePct: pct(totals.humanAnswered, totals.totalDialed),
+      };
+    })
+    .sort((a, b) => b.totalDialed - a.totalDialed || a.fullName.localeCompare(b.fullName));
+
+  return { startDate, endDate, campaigns, grandTotals, agents };
+}
+
+/*
+==================================================
 getTodayStats
 ==================================================
 Scoped to one specific agent + campaign. Now just a thin wrapper
@@ -733,4 +1022,6 @@ module.exports = {
   getVoicemailDashboardWindowForServerClock,
   getReportingSummary,
   getCampaignAgentBreakdown,
+  getLeadsCampaignsWithLeads,
+  getLeadsCallingDashboard,
 };

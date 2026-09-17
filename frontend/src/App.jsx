@@ -6,6 +6,7 @@ import DialerPage from "./pages/DialerPage";
 import AdminPage from "./pages/AdminPage";
 import LiveStatusDashboard from "./pages/LiveStatusDashboard";
 import ReportsPage from "./pages/ReportsPage";
+import LeadsCallingDashboardPage from "./pages/LeadsCallingDashboardPage";
 import RecordingsPage from "./pages/RecordingsPage";
 import VoicemailsPage from "./pages/VoicemailsPage";
 import VoicemailPlayerPage from "./pages/VoicemailPlayerPage";
@@ -69,6 +70,14 @@ export default function App() {
         element={
           <ProtectedRoute>
             <ReportsPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/leads-dashboard"
+        element={
+          <ProtectedRoute>
+            <LeadsCallingDashboardPage />
           </ProtectedRoute>
         }
       />

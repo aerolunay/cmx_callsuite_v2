@@ -2,6 +2,7 @@
 
 const crypto = require("crypto");
 const express = require("express");
+const rateLimit = require("express-rate-limit");
 const { authenticator } = require("otplib");
 const QRCode = require("qrcode");
 
@@ -40,6 +41,97 @@ function generateOtpCode() {
 function hashCode(code) {
   return crypto.createHash("sha256").update(code).digest("hex");
 }
+
+/*
+==================================================
+RATE LIMITING — NEW, per explicit request
+==================================================
+Before this, NOTHING in this file throttled requests at all: an
+attacker (or a buggy client stuck retrying) could call /request-otp as
+fast as the network allowed — spamming a real user's inbox with codes
+and burning SMTP send quota — and /login-totp had ZERO brute-force
+protection whatsoever (unlike /verify-otp, which at least invalidates
+one specific OTP code after MAX_OTP_ATTEMPTS wrong guesses, a TOTP
+code is only 6 digits and totally guessable given enough unthrottled
+attempts).
+
+In-memory store (express-rate-limit's default) is fine here — this
+app runs as a single Node process (see server.js's own single
+httpServer.listen(), no cluster/pm2 fan-out), so there's exactly one
+counter, not one per worker that would under-count. If this ever moves
+to multiple instances behind a load balancer, swap in a shared store
+(e.g. rate-limit-redis) — the counters need to be shared, not doubled.
+
+TWO limiters per sensitive route, applied together as a middleware
+chain, each catching a different attack shape:
+  - byIp    — catches one attacker hammering MANY different emails
+              from the same network.
+  - byEmail — catches one attacker hammering ONE victim's email from
+              rotating/many IPs. Falls back to req.ip if the request
+              body has no email at all (malformed request — still
+              worth counting against something).
+app.set("trust proxy", 1) in server.js (production only) is what makes
+req.ip resolve to the real client IP behind a reverse proxy rather than
+the proxy's own address — without it every request would appear to
+share one IP and byIp would over-throttle.
+==================================================
+*/
+function normalizedEmailKey(req) {
+  const email = String(req.body?.email || "").trim().toLowerCase();
+  return email || req.ip;
+}
+
+const otpRequestByIpLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 10, // this network, any emails combined
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: "Too many login code requests. Please wait a few minutes and try again." },
+});
+
+const otpRequestByEmailLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5, // this one email, regardless of requester IP
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: normalizedEmailKey,
+  message: { success: false, message: "Too many login code requests for this account. Please wait a few minutes and try again." },
+});
+
+// Applies to BOTH /verify-otp (a 6-digit OTP code) and /login-totp (a
+// 6-digit TOTP code) — a higher ceiling than the request limiters
+// above since a real agent fat-fingering their code a few times in a
+// row is normal, but still low enough to make brute-forcing either
+// code space impractical within one window.
+const otpLoginByIpLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: "Too many login attempts. Please wait a few minutes and try again." },
+});
+
+const otpLoginByEmailLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: normalizedEmailKey,
+  message: { success: false, message: "Too many login attempts for this account. Please wait a few minutes and try again." },
+});
+
+// /check-user deliberately reveals whether an email has TOTP enabled
+// (see that route's own header comment) — a lighter IP-only limiter
+// here just slows down automated account enumeration, not a full
+// brute-force concern the way the two above are.
+const checkUserLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: "Too many requests. Please wait a few minutes and try again." },
+});
+
 
 /*
 ==================================================
@@ -107,7 +199,7 @@ with known staff emails; would need reconsidering if this app were ever
 exposed more publicly.
 ==================================================
 */
-router.post("/check-user", async (req, res) => {
+router.post("/check-user", checkUserLimiter, async (req, res) => {
   try {
     const { email } = req.body;
 
@@ -141,7 +233,7 @@ which addresses are registered. Only sends an email if the app_user
 actually exists and is active.
 ==================================================
 */
-router.post("/request-otp", async (req, res) => {
+router.post("/request-otp", otpRequestByIpLimiter, otpRequestByEmailLimiter, async (req, res) => {
   try {
     const { email } = req.body;
 
@@ -192,7 +284,7 @@ POST /api/auth/verify-otp
 Body: { email, code }
 ==================================================
 */
-router.post("/verify-otp", async (req, res) => {
+router.post("/verify-otp", otpLoginByIpLimiter, otpLoginByEmailLimiter, async (req, res) => {
   try {
     const { email, code } = req.body;
 
@@ -369,7 +461,7 @@ POST /api/auth/login-totp
 Body: { email, code }
 ==================================================
 */
-router.post("/login-totp", async (req, res) => {
+router.post("/login-totp", otpLoginByIpLimiter, otpLoginByEmailLimiter, async (req, res) => {
   try {
     const { email, code } = req.body;
 
