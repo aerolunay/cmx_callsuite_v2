@@ -1008,7 +1008,7 @@ away from the screen at that exact moment.
 
 .hbar-row {
   display: grid;
-  grid-template-columns: 140px 1fr 90px;
+  grid-template-columns: minmax(200px, 260px) 1fr auto;
   align-items: center;
   gap: 10px;
   font-size: 13px;
@@ -1016,9 +1016,17 @@ away from the screen at that exact moment.
 
 .hbar-label {
   color: #444;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  /* UPDATED — was a fixed 140px with ellipsis truncation, which cut
+     off campaign names ("Bright Sprout Meals Outbound") and longer
+     disposition labels ("Answering Machine (auto-detected)",
+     "Voicemail / Answering Machine") per explicit request. Now wraps
+     onto multiple lines within a wider column instead of truncating
+     — the title attribute (see HorizontalBarChart.jsx) still gives a
+     full-text tooltip on hover as a fallback, but shouldn't be needed
+     for the label itself anymore. */
+  white-space: normal;
+  overflow-wrap: break-word;
+  line-height: 1.3;
 }
 
 .hbar-track {
@@ -1039,6 +1047,32 @@ away from the screen at that exact moment.
   font-family: monospace;
   color: var(--cmx-navy);
   font-weight: 600;
+  /* UPDATED — was a fixed 90px, too narrow for "132 (100.0%)"-style
+     values once real disposition counts started flowing through.
+     grid-template-columns above now sizes this column to its content
+     (auto) instead of a fixed width. */
+  white-space: nowrap;
+}
+
+/* Narrow viewports — stack label above the bar+value instead of
+   squeezing a 200px+ label column onto a phone-width screen. */
+@media (max-width: 600px) {
+  .hbar-row {
+    grid-template-columns: 1fr auto;
+    grid-template-areas:
+      "label label"
+      "track value";
+    row-gap: 4px;
+  }
+  .hbar-label {
+    grid-area: label;
+  }
+  .hbar-track {
+    grid-area: track;
+  }
+  .hbar-value {
+    grid-area: value;
+  }
 }
 
 /* ===== Leads Calling Dashboard ===== */
