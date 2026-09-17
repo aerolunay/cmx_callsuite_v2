@@ -74,24 +74,76 @@ app.set("trust proxy", 1) in server.js (production only) is what makes
 req.ip resolve to the real client IP behind a reverse proxy rather than
 the proxy's own address — without it every request would appear to
 share one IP and byIp would over-throttle.
+
+SCALABILITY — per explicit request. This team runs multiple physical
+sites (US, DR, PH, ...), each on its OWN network — meaning each site
+presents its own public IP to this server, so each site gets its OWN
+independent byIp counter. That's actually good news: sizing the byIp
+ceiling only needs to cover the LARGEST SINGLE SITE's headcount at
+shift-start (everyone there sharing one IP), not the sum across every
+site — a 100-agent site and a 5-agent site never compete for the same
+counter.
+
+That still leaves a real problem: today's largest site is ~20 agents,
+but the stated growth plan is DR -> 80 and PH -> 100. Hardcoding a
+number sized for "today" means another code change + redeploy every
+time a site's headcount crosses that number — exactly the kind of
+thing that should be a config change, not a patch. So every ceiling
+below is read from process.env (same pattern OTP_EXPIRY_MINUTES above
+already uses), with a default sized for the STATED future (100-agent
+site), not just current headcount:
+  100 agents x up to ~2 requests each (a slow-email or fat-fingered
+  retry is normal) = ~200 worst-case legitimate requests in one
+  window: rounded up to 300 for margin. Still far below what an
+  actual automated attack would need to run to matter, so this stays
+  a real defense, just centered on this team's real scale instead of
+  a guess.
+
+If a single site ever grows past what the default comfortably covers,
+bump OTP_REQUEST_MAX_PER_IP / OTP_LOGIN_MAX_PER_IP / CHECK_USER_MAX_PER_IP
+in that environment's .env and restart — no code change needed.
+
+ONE assumption worth confirming once, not per-deploy: this only works
+if each site's traffic actually arrives at this server AS that site's
+own distinct public IP — i.e. no single upstream VPN gateway or shared
+proxy silently merging multiple sites' traffic into one IP before it
+reaches app.set("trust proxy", 1)'s one trusted hop. If DR and PH ever
+route through a shared gateway, they'd start sharing one counter and
+this sizing math would need revisiting.
+
+The per-EMAIL limiters are deliberately NOT tied to site headcount —
+they're scoped to one account regardless of requester IP, so a site
+growing from 20 to 100 agents doesn't change how many times any ONE
+account can be hit. Their defaults stay small and are still
+env-overridable for symmetry/consistency, not because site growth
+requires it.
 ==================================================
 */
+const RATE_LIMIT_WINDOW_MINUTES = Number(process.env.RATE_LIMIT_WINDOW_MINUTES || 15);
+const RATE_LIMIT_WINDOW_MS = RATE_LIMIT_WINDOW_MINUTES * 60 * 1000;
+
+const OTP_REQUEST_MAX_PER_IP = Number(process.env.OTP_REQUEST_MAX_PER_IP || 300);
+const OTP_REQUEST_MAX_PER_EMAIL = Number(process.env.OTP_REQUEST_MAX_PER_EMAIL || 5);
+const OTP_LOGIN_MAX_PER_IP = Number(process.env.OTP_LOGIN_MAX_PER_IP || 300);
+const OTP_LOGIN_MAX_PER_EMAIL = Number(process.env.OTP_LOGIN_MAX_PER_EMAIL || 10);
+const CHECK_USER_MAX_PER_IP = Number(process.env.CHECK_USER_MAX_PER_IP || 300);
+
 function normalizedEmailKey(req) {
   const email = String(req.body?.email || "").trim().toLowerCase();
   return email || req.ip;
 }
 
 const otpRequestByIpLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 10, // this network, any emails combined
+  windowMs: RATE_LIMIT_WINDOW_MS,
+  max: OTP_REQUEST_MAX_PER_IP, // this network (one site), any emails combined — see SCALABILITY comment above
   standardHeaders: true,
   legacyHeaders: false,
   message: { success: false, message: "Too many login code requests. Please wait a few minutes and try again." },
 });
 
 const otpRequestByEmailLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 5, // this one email, regardless of requester IP
+  windowMs: RATE_LIMIT_WINDOW_MS,
+  max: OTP_REQUEST_MAX_PER_EMAIL, // this one email, regardless of requester IP — NOT sized to site headcount, see comment above
   standardHeaders: true,
   legacyHeaders: false,
   keyGenerator: normalizedEmailKey,
@@ -104,16 +156,16 @@ const otpRequestByEmailLimiter = rateLimit({
 // row is normal, but still low enough to make brute-forcing either
 // code space impractical within one window.
 const otpLoginByIpLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 20,
+  windowMs: RATE_LIMIT_WINDOW_MS,
+  max: OTP_LOGIN_MAX_PER_IP,
   standardHeaders: true,
   legacyHeaders: false,
   message: { success: false, message: "Too many login attempts. Please wait a few minutes and try again." },
 });
 
 const otpLoginByEmailLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 10,
+  windowMs: RATE_LIMIT_WINDOW_MS,
+  max: OTP_LOGIN_MAX_PER_EMAIL,
   standardHeaders: true,
   legacyHeaders: false,
   keyGenerator: normalizedEmailKey,
@@ -125,8 +177,8 @@ const otpLoginByEmailLimiter = rateLimit({
 // here just slows down automated account enumeration, not a full
 // brute-force concern the way the two above are.
 const checkUserLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 30,
+  windowMs: RATE_LIMIT_WINDOW_MS,
+  max: CHECK_USER_MAX_PER_IP,
   standardHeaders: true,
   legacyHeaders: false,
   message: { success: false, message: "Too many requests. Please wait a few minutes and try again." },
