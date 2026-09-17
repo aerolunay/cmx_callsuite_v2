@@ -46,6 +46,8 @@ export default function Header({ agentStatus }) {
             Dialer      : agent, supervisor, training_quality
             Live Status : supervisor, training_quality, account_manager, wfm, admin
             Reports     : supervisor, account_manager, wfm, admin (NOT training_quality)
+            Leads Dashboard : supervisor, account_manager, wfm, admin (same
+                          split as Reports — NEW)
             Recordings  : supervisor, training_quality, account_manager, admin (NOT wfm)
             Voicemails  : supervisor, account_manager, training_quality (all
                           scoped to assigned campaigns), admin (unrestricted)
@@ -85,6 +87,11 @@ export default function Header({ agentStatus }) {
           {["supervisor", "account_manager", "wfm", "admin"].includes(agent.accessLevel) && (
             <Link to="/reports" className="header-admin-link">
               Reports
+            </Link>
+          )}
+          {["supervisor", "account_manager", "wfm", "admin"].includes(agent.accessLevel) && (
+            <Link to="/leads-dashboard" className="header-admin-link">
+              Leads Dashboard
             </Link>
           )}
           {["supervisor", "training_quality", "account_manager", "admin"].includes(agent.accessLevel) && (

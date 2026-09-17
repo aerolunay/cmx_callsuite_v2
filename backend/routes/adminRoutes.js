@@ -12,7 +12,7 @@ const ws = require("../config/ws");
 const ami = require("../config/ami");
 const { transporter } = require("../config/mailer");
 const { buildWelcomeEmail } = require("../services/emailTemplates");
-const { requireRoles, requireCampaignAccess, resolveCampaignScope, getAssignedCampaignIds, UNRESTRICTED_CAMPAIGN_ROLES } = require("../services/accessControlService");
+const { requireRoles, requireCampaignAccess, resolveCampaignScope, resolveCampaignScopeMulti, getAssignedCampaignIds, UNRESTRICTED_CAMPAIGN_ROLES } = require("../services/accessControlService");
 const monitoringService = require("../services/monitoringService");
 
 const router = express.Router();
@@ -2113,6 +2113,91 @@ router.get(
     } catch (error) {
       console.error("GET /api/admin/reports/raw-calls failed:", error);
       return res.status(500).json({ success: false, message: error.message || "Failed to load raw call data." });
+    }
+  }
+);
+
+/*
+==================================================
+LEADS CALLING DASHBOARD — NEW, per explicit request
+==================================================
+Role gate: same set as the other Reports-family endpoints
+(supervisor, account_manager, wfm, admin) — this dashboard is a
+reporting view over lead-calling activity, not a dialing/admin action,
+so it follows Reports' access matrix rather than inventing a new one.
+Adjust LEADS_DASHBOARD_ROLES below if the business wants a different
+split later.
+==================================================
+*/
+const LEADS_DASHBOARD_ROLES = ["supervisor", "account_manager", "wfm", "admin"];
+
+/*
+GET /api/admin/leads-dashboard/campaigns
+Campaign picker for the dashboard — OUTBOUND campaigns that actually
+have leads uploaded, scoped to the caller's own assignments for every
+role except admin/wfm (same "not just hidden in the dropdown, enforced
+server-side" principle used everywhere else in this file).
+*/
+router.get("/leads-dashboard/campaigns", requireRoles(...LEADS_DASHBOARD_ROLES), async (req, res) => {
+  try {
+    const { accessLevel, appUserId } = req.session.agent;
+    const scopeCampaignIds = UNRESTRICTED_CAMPAIGN_ROLES.includes(accessLevel)
+      ? null
+      : await getAssignedCampaignIds(appUserId);
+
+    const campaigns = await statsService.getLeadsCampaignsWithLeads(scopeCampaignIds);
+    return res.json({ success: true, campaigns });
+  } catch (error) {
+    console.error("GET /api/admin/leads-dashboard/campaigns failed:", error);
+    return res.status(500).json({ success: false, message: "Failed to load campaigns." });
+  }
+});
+
+/*
+GET /api/admin/leads-dashboard/summary?startDate=yyyy-MM-dd&endDate=yyyy-MM-dd&campaignIds=A,B,C
+
+campaignIds is a comma-separated list — the frontend's "select all
+outbound campaigns" checkbox resolves to every id from the /campaigns
+endpoint above and sends them all explicitly here; resolveCampaignScopeMulti
+re-validates that list (or fills in the caller's full assignment set if
+omitted) server-side regardless of what the UI sent.
+
+Returns cards/chart data (per-campaign + grand totals) and the
+per-agent aggregated table in one response — see
+statsService.getLeadsCallingDashboard for the actual metric
+definitions (Contact Rate, Connect Rate, Remaining Leads).
+*/
+router.get(
+  "/leads-dashboard/summary",
+  requireRoles(...LEADS_DASHBOARD_ROLES),
+  resolveCampaignScopeMulti,
+  async (req, res) => {
+    try {
+      const { startDate, endDate } = req.query;
+      if (!startDate || !endDate) {
+        return res.status(400).json({ success: false, message: "startDate and endDate query params are required." });
+      }
+
+      // req.campaignScope (from resolveCampaignScopeMulti) is either
+      // null (admin/wfm, no explicit selection -> truly unrestricted)
+      // or an array (an explicit selection, or a scoped role's own
+      // assignment list as the "All" default) — in EVERY case, run it
+      // back through getLeadsCampaignsWithLeads so the dashboard only
+      // ever operates on OUTBOUND campaigns that actually have leads
+      // right now, never a leadless/blended campaign a scoped role
+      // happens to also be assigned to. This is also what turns
+      // admin/wfm's null ("All") into a real id list, since
+      // getLeadsCallingDashboard itself requires a concrete array —
+      // see that function's own header comment for why it never
+      // treats an empty/missing campaignIds as "everything".
+      const eligibleCampaigns = await statsService.getLeadsCampaignsWithLeads(req.campaignScope);
+      const campaignIds = eligibleCampaigns.map((c) => c.campaignId);
+
+      const dashboard = await statsService.getLeadsCallingDashboard({ startDate, endDate, campaignIds });
+      return res.json({ success: true, dashboard });
+    } catch (error) {
+      console.error("GET /api/admin/leads-dashboard/summary failed:", error);
+      return res.status(500).json({ success: false, message: error.message || "Failed to load leads calling dashboard." });
     }
   }
 );

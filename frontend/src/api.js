@@ -254,6 +254,20 @@ export const api = {
     return request(`/admin/call-flags${qs ? `?${qs}` : ""}`);
   },
 
+  // Leads Calling Dashboard — NEW. Campaign picker is OUTBOUND
+  // campaigns that actually have leads uploaded (scoped server-side to
+  // the caller's own assignments for every role except admin/wfm —
+  // see adminRoutes.js). Summary takes a comma-separated campaignIds
+  // list ("select all outbound campaigns" resolves to every id from
+  // the campaigns call above before this is sent); omitting it
+  // resolves server-side to "every campaign this role can see."
+  getLeadsDashboardCampaigns: () => request("/admin/leads-dashboard/campaigns"),
+  getLeadsDashboardSummary: (startDate, endDate, campaignIds) => {
+    const params = new URLSearchParams({ startDate, endDate });
+    if (campaignIds && campaignIds.length > 0) params.set("campaignIds", campaignIds.join(","));
+    return request(`/admin/leads-dashboard/summary?${params.toString()}`);
+  },
+
   // Campaign management — create/edit auto-creates the DID routing,
   // dialplan, and audio prompts server-side (see campaignRoutes.js).
   // create/update use FormData (not JSON.stringify) since both may
