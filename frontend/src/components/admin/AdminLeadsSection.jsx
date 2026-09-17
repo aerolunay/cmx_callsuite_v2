@@ -68,8 +68,16 @@ export default function AdminLeadsSection() {
   const [uploadCampaignId, setUploadCampaignId] = useState("");
   const [uploadFile, setUploadFile] = useState(null);
   const [uploadBusy, setUploadBusy] = useState(false);
+  const [uploadPreview, setUploadPreview] = useState(null);
   const [uploadResult, setUploadResult] = useState(null);
   const [uploadError, setUploadError] = useState("");
+
+  // Clean Up Leads (SCREENING_COMPLETED + DNC) — NEW
+  const [cleanupCampaignId, setCleanupCampaignId] = useState("");
+  const [cleanupBusy, setCleanupBusy] = useState(false);
+  const [cleanupPreview, setCleanupPreview] = useState(null);
+  const [cleanupResult, setCleanupResult] = useState(null);
+  const [cleanupError, setCleanupError] = useState("");
 
   // Autodial Rules
   const [rulesCampaignId, setRulesCampaignId] = useState("");
@@ -130,24 +138,98 @@ export default function AdminLeadsSection() {
     setSelectedDays((prev) => (prev.includes(dayKey) ? prev.filter((d) => d !== dayKey) : [...prev, dayKey]));
   }
 
+  /*
+  ==================================================
+  Upload flow — NEW two-step preview-then-confirm, per explicit
+  request. Step 1 uploads the file with mode="preview" (parses and
+  reports duplicate counts, inserts nothing). Step 2 re-submits the
+  SAME File object (kept in uploadFile state — the browser doesn't
+  need the file re-selected from the picker to send it again) with
+  mode="include" or "exclude", whichever the admin picks.
+  ==================================================
+  */
   async function handleUploadSubmit(e) {
     e.preventDefault();
     if (!uploadCampaignId || !uploadFile) return;
     setUploadBusy(true);
     setUploadError("");
     setUploadResult(null);
+    setUploadPreview(null);
     try {
       const formData = new FormData();
       formData.append("campaignId", uploadCampaignId);
       formData.append("file", uploadFile);
+      formData.append("mode", "preview");
+      const preview = await api.uploadLeads(formData);
+      setUploadPreview(preview);
+    } catch (err) {
+      setUploadError(err.message);
+    } finally {
+      setUploadBusy(false);
+    }
+  }
+
+  async function handleUploadConfirm(mode) {
+    setUploadBusy(true);
+    setUploadError("");
+    try {
+      const formData = new FormData();
+      formData.append("campaignId", uploadCampaignId);
+      formData.append("file", uploadFile);
+      formData.append("mode", mode);
       const result = await api.uploadLeads(formData);
       setUploadResult(result);
+      setUploadPreview(null);
       setUploadFile(null);
     } catch (err) {
       setUploadError(err.message);
     } finally {
       setUploadBusy(false);
     }
+  }
+
+  function handleUploadCancel() {
+    setUploadPreview(null);
+  }
+
+  /*
+  ==================================================
+  Clean Up Leads — NEW. Same preview-then-confirm pattern as upload,
+  for the same reason: this deletes real lead rows, so an admin sees
+  the count before committing, not after.
+  ==================================================
+  */
+  async function handleCleanupCheck() {
+    setCleanupBusy(true);
+    setCleanupError("");
+    setCleanupResult(null);
+    setCleanupPreview(null);
+    try {
+      const preview = await api.previewLeadsCleanup(cleanupCampaignId);
+      setCleanupPreview(preview);
+    } catch (err) {
+      setCleanupError(err.message);
+    } finally {
+      setCleanupBusy(false);
+    }
+  }
+
+  async function handleCleanupConfirm() {
+    setCleanupBusy(true);
+    setCleanupError("");
+    try {
+      const result = await api.confirmLeadsCleanup(cleanupCampaignId);
+      setCleanupResult(result);
+      setCleanupPreview(null);
+    } catch (err) {
+      setCleanupError(err.message);
+    } finally {
+      setCleanupBusy(false);
+    }
+  }
+
+  function handleCleanupCancel() {
+    setCleanupPreview(null);
   }
 
   async function handleRulesSubmit(e) {
@@ -211,7 +293,9 @@ export default function AdminLeadsSection() {
         {uploadResult && (
           <div className="success">
             Imported {uploadResult.imported} lead{uploadResult.imported === 1 ? "" : "s"}
-            {uploadResult.skipped > 0 ? ` (${uploadResult.skipped} row(s) skipped — missing phone number)` : ""}.
+            {uploadResult.skippedMissingPhone > 0 ? ` (${uploadResult.skippedMissingPhone} row(s) skipped — missing phone number)` : ""}
+            {uploadResult.skippedDuplicateWithinFile > 0 ? ` (${uploadResult.skippedDuplicateWithinFile} duplicate row(s) within the file skipped)` : ""}
+            {uploadResult.skippedDuplicateExisting > 0 ? ` (${uploadResult.skippedDuplicateExisting} number(s) already on file skipped)` : ""}.
           </div>
         )}
 
@@ -221,37 +305,147 @@ export default function AdminLeadsSection() {
           <a href="/api/admin/leads/template?format=csv">Download CSV template</a>
         </p>
 
-        <form onSubmit={handleUploadSubmit}>
-          <label className="comments-label">Campaign (Outbound only — Blended excluded)</label>
-          <select value={uploadCampaignId} onChange={(e) => setUploadCampaignId(e.target.value)} required>
-            <option value="">Select a campaign…</option>
-            {outboundCampaigns.map((c) => (
-              <option key={c.campaign_id} value={c.campaign_id}>
-                {c.campaign_name} ({c.campaign_id})
-              </option>
-            ))}
-          </select>
-          {!campaignsLoading && outboundCampaigns.length === 0 && (
-            <p style={{ fontSize: 13, color: "#888" }}>
-              No Outbound campaigns exist yet — create one under "Campaigns" (Campaign Type:
-              Outbound) first.
+        {!uploadPreview ? (
+          <form onSubmit={handleUploadSubmit}>
+            <label className="comments-label">Campaign (Outbound only — Blended excluded)</label>
+            <select value={uploadCampaignId} onChange={(e) => setUploadCampaignId(e.target.value)} required>
+              <option value="">Select a campaign…</option>
+              {outboundCampaigns.map((c) => (
+                <option key={c.campaign_id} value={c.campaign_id}>
+                  {c.campaign_name} ({c.campaign_id})
+                </option>
+              ))}
+            </select>
+            {!campaignsLoading && outboundCampaigns.length === 0 && (
+              <p style={{ fontSize: 13, color: "#888" }}>
+                No Outbound campaigns exist yet — create one under "Campaigns" (Campaign Type:
+                Outbound) first.
+              </p>
+            )}
+
+            <label className="comments-label">Lead File (CSV or XLSX)</label>
+            <input
+              type="file"
+              accept=".csv,.xlsx"
+              onChange={(e) => setUploadFile(e.target.files?.[0] || null)}
+              required
+            />
+
+            <div style={{ marginTop: 14 }}>
+              <button className="button-secondary" type="submit" disabled={uploadBusy}>
+                {uploadBusy ? "Checking…" : "Upload Leads"}
+              </button>
+            </div>
+          </form>
+        ) : (
+          <div>
+            <p>
+              <strong>{uploadPreview.totalRows}</strong> row(s) found
+              {uploadPreview.skippedMissingPhone > 0 ? `, ${uploadPreview.skippedMissingPhone} missing a phone number` : ""}.
             </p>
-          )}
-
-          <label className="comments-label">Lead File (CSV or XLSX)</label>
-          <input
-            type="file"
-            accept=".csv,.xlsx"
-            onChange={(e) => setUploadFile(e.target.files?.[0] || null)}
-            required
-          />
-
-          <div style={{ marginTop: 14 }}>
-            <button className="button-secondary" type="submit" disabled={uploadBusy}>
-              {uploadBusy ? "Uploading…" : "Upload Leads"}
-            </button>
+            <ul style={{ fontSize: 14, marginTop: 4 }}>
+              <li>{uploadPreview.duplicatesWithinFile} duplicate row(s) within this file</li>
+              <li>{uploadPreview.duplicatesAgainstExisting} number(s) already on file (any campaign)</li>
+            </ul>
+            <p style={{ fontSize: 14 }}>
+              <strong>Include duplicates:</strong> imports {uploadPreview.wouldImportIfInclude} lead(s).
+              <br />
+              <strong>Exclude duplicates:</strong> imports {uploadPreview.wouldImportIfExclude} lead(s).
+            </p>
+            <div style={{ display: "flex", gap: 10, marginTop: 14 }}>
+              <button className="button-secondary" type="button" disabled={uploadBusy} onClick={() => handleUploadConfirm("exclude")}>
+                {uploadBusy ? "Uploading…" : "Exclude Duplicates"}
+              </button>
+              <button className="button-secondary" type="button" disabled={uploadBusy} onClick={() => handleUploadConfirm("include")}>
+                {uploadBusy ? "Uploading…" : "Include Duplicates"}
+              </button>
+              <button type="button" disabled={uploadBusy} onClick={handleUploadCancel}>
+                Cancel
+              </button>
+            </div>
           </div>
-        </form>
+        )}
+      </div>
+
+      {/* ================= CLEAN UP LEADS ================= */}
+      <div className="card" style={{ marginBottom: 20 }}>
+        <h4>Clean Up Leads</h4>
+        <p style={{ fontSize: 13, color: "#888", marginTop: -6 }}>
+          Finds and removes leads whose phone number is either tagged "Screening Completed" (from
+          either outbound or inbound call history) or present on the DNC list — those numbers have
+          no legitimate reason to stay eligible for auto-dial. Every removed lead is logged
+          permanently for reference, not just deleted outright.
+        </p>
+        {cleanupError && <div className="error">{cleanupError}</div>}
+        {cleanupResult && (
+          <div className="success">
+            Deleted {cleanupResult.deleted} lead{cleanupResult.deleted === 1 ? "" : "s"}.
+          </div>
+        )}
+
+        {!cleanupPreview ? (
+          <>
+            <label className="comments-label">Campaign</label>
+            <select value={cleanupCampaignId} onChange={(e) => setCleanupCampaignId(e.target.value)}>
+              <option value="">All Campaigns</option>
+              {outboundCampaigns.map((c) => (
+                <option key={c.campaign_id} value={c.campaign_id}>
+                  {c.campaign_name} ({c.campaign_id})
+                </option>
+              ))}
+            </select>
+            <div style={{ marginTop: 14 }}>
+              <button className="button-secondary" type="button" disabled={cleanupBusy} onClick={handleCleanupCheck}>
+                {cleanupBusy ? "Checking…" : "Check for Cleanup"}
+              </button>
+            </div>
+          </>
+        ) : (
+          <div>
+            <p>
+              <strong>{cleanupPreview.totalToDelete}</strong> lead(s) qualify for removal —{" "}
+              {cleanupPreview.dncCount} on the DNC list, {cleanupPreview.screeningCompletedCount} with
+              Screening Completed.
+            </p>
+            {cleanupPreview.sample.length > 0 && (
+              <table className="call-log-table">
+                <thead>
+                  <tr>
+                    <th>Phone</th>
+                    <th>Name</th>
+                    <th>Campaign</th>
+                    <th>Reason</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {cleanupPreview.sample.map((r, i) => (
+                    <tr key={i}>
+                      <td>{r.phoneNumber}</td>
+                      <td>
+                        {r.firstName} {r.lastName}
+                      </td>
+                      <td>{r.campaignId}</td>
+                      <td>{r.reason}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            {cleanupPreview.totalToDelete > cleanupPreview.sample.length && (
+              <p style={{ fontSize: 13, color: "#888" }}>
+                …and {cleanupPreview.totalToDelete - cleanupPreview.sample.length} more, not shown.
+              </p>
+            )}
+            <div style={{ display: "flex", gap: 10, marginTop: 14 }}>
+              <button className="button-secondary" type="button" disabled={cleanupBusy || cleanupPreview.totalToDelete === 0} onClick={handleCleanupConfirm}>
+                {cleanupBusy ? "Deleting…" : `Delete ${cleanupPreview.totalToDelete} Lead(s)`}
+              </button>
+              <button type="button" disabled={cleanupBusy} onClick={handleCleanupCancel}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ================= AUTODIAL RULES ================= */}

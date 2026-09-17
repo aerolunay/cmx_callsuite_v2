@@ -333,6 +333,10 @@ export const api = {
   // routing through this fetch wrapper, so the browser handles the
   // download natively.
   uploadLeads: (formData) => request("/admin/leads/upload", { method: "POST", body: formData }),
+  previewLeadsCleanup: (campaignId) =>
+    request("/admin/leads/cleanup/preview", { method: "POST", body: JSON.stringify({ campaignId: campaignId || null }) }),
+  confirmLeadsCleanup: (campaignId) =>
+    request("/admin/leads/cleanup/confirm", { method: "POST", body: JSON.stringify({ campaignId: campaignId || null }) }),
   getDncList: () => request("/admin/dnc"),
   uploadDnc: (formData) => request("/admin/dnc/upload", { method: "POST", body: formData }),
   getAutodialRules: (campaignId) => request(`/admin/campaigns/${encodeURIComponent(campaignId)}/autodial-rules`),

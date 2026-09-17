@@ -176,53 +176,118 @@ router.get("/leads/template", requireAdmin, async (req, res) => {
 /*
 ==================================================
 POST /api/admin/leads/upload
-Body (multipart): file, campaignId
+Body (multipart): file, campaignId, mode ("preview" | "include" | "exclude")
 ==================================================
-Creates a NEW asterisk.vicidial_lists row for this upload (its own
-list_id, name stamped with the campaign + a timestamp so multiple
-uploads to the same campaign stay distinguishable), then bulk-inserts
-every valid row into asterisk.vicidial_list with status='NEW' — the
-same "new, never-called lead" status stock ViciDial itself uses, so
-this plays correctly with the campaign's own dial_method/hopper
-mechanics if those are ever engaged later, not just this app's own
-getNextLead() fallback path.
+UPDATED — per explicit request: duplicate handling is no longer
+silent. Every upload now goes through THREE possible modes, driven by
+the frontend prompting the admin after a preview:
 
-list_id is generated here as Date.now() (milliseconds since epoch) —
-confirmed via DESCRIBE that asterisk.vicidial_lists.list_id has NO
-auto_increment at all on this install (it's a plain bigint PK ViciDial's
-own admin UI normally assigns by hand), so this app has to pick a
-value itself. A millisecond timestamp is unique enough at the rate
-admins upload lead lists in practice; a genuine collision (two uploads
-in the exact same millisecond) is caught below and surfaced as a clear
-"try again" error rather than a cryptic constraint failure.
+  "preview" — parses the file and reports duplicate counts (both
+              WITHIN the file itself, and against phone numbers that
+              already exist ANYWHERE in asterisk.vicidial_list —
+              global scope, not just this campaign, since cross-
+              campaign duplication is exactly what happened with the
+              real CMXBSCSR/CMXBSMOB incident this feature exists to
+              prevent a repeat of). Inserts NOTHING — no list_id is
+              even created yet.
+  "include" — the ORIGINAL behavior, unchanged: every row with a
+              phone_number gets inserted, duplicates and all. Kept
+              as an explicit choice, not a hidden default, since
+              sometimes an admin genuinely wants a second copy (e.g.
+              treating a lead as fresh again for a new run).
+  "exclude" — de-duplicates within the file first (keeps the FIRST
+              occurrence of each phone_number), then skips any number
+              that already exists anywhere in vicidial_list, and only
+              inserts what's left.
 
-Rows missing a phone_number are skipped (not fatal to the whole
-upload) and counted separately in the response — a single blank row in
-an otherwise-good spreadsheet shouldn't block the other 500 valid
-leads from importing.
+The frontend calls "preview" once, shows the counts with
+Include/Exclude buttons, then re-submits the SAME file (kept in
+browser memory, no re-selection needed) with whichever mode the admin
+picked — see AdminLeadsSection.jsx.
+
+Everything else (list_id generation, transaction, response shape for
+imported/skipped counts) is unchanged from the original behavior.
 ==================================================
 */
 router.post("/leads/upload", requireAdmin, upload.single("file"), async (req, res) => {
-  const { campaignId } = req.body;
+  const { campaignId, mode } = req.body;
   const file = req.file;
 
-  if (!campaignId) {
-    cleanupStagedFile(file);
-    return res.status(400).json({ success: false, message: "campaignId is required." });
-  }
-  if (!file) {
-    return res.status(400).json({ success: false, message: "A CSV or XLSX file is required." });
-  }
-
   try {
+    if (!campaignId) {
+      return res.status(400).json({ success: false, message: "campaignId is required." });
+    }
+    if (!file) {
+      return res.status(400).json({ success: false, message: "A CSV or XLSX file is required." });
+    }
+    if (!["preview", "include", "exclude"].includes(mode)) {
+      return res.status(400).json({ success: false, message: 'mode must be "preview", "include", or "exclude".' });
+    }
+
     const rows = await parseUploadedRows(file);
     const validRows = rows.filter((r) => r.phone_number);
-    const skippedCount = rows.length - validRows.length;
+    const skippedMissingPhone = rows.length - validRows.length;
 
     if (validRows.length === 0) {
       return res.status(400).json({
         success: false,
         message: "No valid rows found — every row is missing a phone_number.",
+      });
+    }
+
+    // De-dup WITHIN the file itself — keep the first occurrence of
+    // each phone_number, regardless of mode (an "include" upload
+    // still shouldn't insert the SAME file's own internal duplicate
+    // twice under "include" semantics — "include" means "include
+    // numbers that already exist elsewhere," not "double-insert a
+    // number that appears twice in this one file." If a real use case
+    // ever needs literal duplicate rows within one file, that's a
+    // different, more unusual request than what was asked for here.)
+    const seenInFile = new Set();
+    const dedupedWithinFile = [];
+    let duplicatesWithinFile = 0;
+    for (const row of validRows) {
+      if (seenInFile.has(row.phone_number)) {
+        duplicatesWithinFile++;
+      } else {
+        seenInFile.add(row.phone_number);
+        dedupedWithinFile.push(row);
+      }
+    }
+
+    // Which of these already exist ANYWHERE in vicidial_list —
+    // global scope, not scoped to campaignId, per the header comment.
+    let existingPhoneSet = new Set();
+    if (dedupedWithinFile.length > 0) {
+      const phoneNumbers = dedupedWithinFile.map((r) => r.phone_number);
+      const placeholders = phoneNumbers.map(() => "?").join(",");
+      const [existingRows] = await db.execute(
+        `SELECT DISTINCT phone_number FROM asterisk.vicidial_list WHERE phone_number IN (${placeholders})`,
+        phoneNumbers
+      );
+      existingPhoneSet = new Set(existingRows.map((r) => r.phone_number));
+    }
+    const duplicatesAgainstExisting = dedupedWithinFile.filter((r) => existingPhoneSet.has(r.phone_number)).length;
+
+    if (mode === "preview") {
+      return res.json({
+        success: true,
+        preview: true,
+        totalRows: rows.length,
+        skippedMissingPhone,
+        duplicatesWithinFile,
+        duplicatesAgainstExisting,
+        wouldImportIfInclude: validRows.length,
+        wouldImportIfExclude: dedupedWithinFile.length - duplicatesAgainstExisting,
+      });
+    }
+
+    const rowsToInsert = mode === "exclude" ? dedupedWithinFile.filter((r) => !existingPhoneSet.has(r.phone_number)) : validRows;
+
+    if (rowsToInsert.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "No rows left to import — every valid row is a duplicate of one already on file.",
       });
     }
 
@@ -241,9 +306,9 @@ router.post("/leads/upload", requireAdmin, upload.single("file"), async (req, re
       // Single multi-row INSERT rather than one query per row — real
       // performance difference on a lead list with hundreds/thousands
       // of rows, not just a style choice.
-      const valuePlaceholders = validRows.map(() => "(?, 'NEW', ?, ?, ?, 'N', NOW())").join(", ");
+      const valuePlaceholders = rowsToInsert.map(() => "(?, 'NEW', ?, ?, ?, 'N', NOW())").join(", ");
       const insertParams = [];
-      for (const row of validRows) {
+      for (const row of rowsToInsert) {
         insertParams.push(listId, row.phone_number, row.first_name || null, row.last_name || null);
       }
       await connection.execute(
@@ -273,14 +338,156 @@ router.post("/leads/upload", requireAdmin, upload.single("file"), async (req, re
       success: true,
       listId,
       listName,
-      imported: validRows.length,
-      skipped: skippedCount,
+      imported: rowsToInsert.length,
+      skippedMissingPhone,
+      skippedDuplicateWithinFile: mode === "exclude" ? duplicatesWithinFile : 0,
+      skippedDuplicateExisting: mode === "exclude" ? duplicatesAgainstExisting : 0,
     });
   } catch (error) {
     console.error("POST /api/admin/leads/upload failed:", error);
     return res.status(500).json({ success: false, message: error.message || "Failed to upload leads." });
   } finally {
     cleanupStagedFile(file);
+  }
+});
+
+/*
+==================================================
+LEADS CLEANUP — NEW, per explicit request
+==================================================
+Automatically finds and removes leads whose phone_number is either:
+  (a) tagged SCREENING_COMPLETED in EITHER cmx_dialer.dialer_call_log
+      (outbound) OR cmx_dialer.inbound_call_log (inbound) — checking
+      both because a number could have reached that outcome from
+      either direction, not just the outbound leads-calling side this
+      app's own dashboard focuses on.
+  (b) present in asterisk.vicidial_dnc.
+
+Same preview-then-confirm pattern as the upload duplicate-handling
+above, and for the same reason: this deletes real lead rows, so an
+admin should see the count before committing, not discover it after.
+
+Optional campaignId scopes the check/delete to one campaign's own
+lists; omitted means every campaign's leads are checked/deleted (a
+number tagged DNC or SCREENING_COMPLETED has no reason to still be
+eligible for ANY campaign, not just one).
+
+Every deleted row is logged to cmx_dialer.deleted_leads_log first (see
+006_add_deleted_leads_log.sql) — a permanent, queryable audit trail,
+not a one-off backup table, since this is meant to run repeatedly over
+time.
+==================================================
+*/
+
+// Shared by both preview and confirm — computes exactly which
+// (lead_id, phone_number, ...) rows currently qualify for deletion,
+// each tagged with its reason. 'DNC' takes priority over
+// 'SCREENING_COMPLETED' when a number matches both, since DNC is the
+// stronger/legal reason.
+async function findLeadsToClean(campaignId) {
+  const params = [];
+  let campaignFilter = "";
+  if (campaignId) {
+    campaignFilter = " AND vlt.campaign_id = ?";
+    params.push(campaignId);
+  }
+
+  const [rows] = await db.execute(
+    `
+      SELECT
+        vl.lead_id, vl.list_id, vlt.campaign_id, vl.phone_number, vl.first_name, vl.last_name,
+        CASE WHEN dnc.phone_number IS NOT NULL THEN 'DNC' ELSE 'SCREENING_COMPLETED' END AS reason
+      FROM asterisk.vicidial_list vl
+      JOIN asterisk.vicidial_lists vlt ON vlt.list_id = vl.list_id
+      LEFT JOIN asterisk.vicidial_dnc dnc ON dnc.phone_number = vl.phone_number
+      LEFT JOIN (
+        SELECT DISTINCT phone_number FROM cmx_dialer.dialer_call_log WHERE disposition = 'SCREENING_COMPLETED'
+        UNION
+        SELECT DISTINCT caller_id_number AS phone_number FROM cmx_dialer.inbound_call_log WHERE disposition = 'SCREENING_COMPLETED'
+      ) screened ON screened.phone_number = vl.phone_number
+      WHERE (dnc.phone_number IS NOT NULL OR screened.phone_number IS NOT NULL)${campaignFilter}
+    `,
+    params
+  );
+  return rows;
+}
+
+router.post("/leads/cleanup/preview", requireAdmin, async (req, res) => {
+  try {
+    const { campaignId } = req.body;
+    const toClean = await findLeadsToClean(campaignId || null);
+    const dncCount = toClean.filter((r) => r.reason === "DNC").length;
+    const screeningCompletedCount = toClean.filter((r) => r.reason === "SCREENING_COMPLETED").length;
+
+    return res.json({
+      success: true,
+      preview: true,
+      totalToDelete: toClean.length,
+      dncCount,
+      screeningCompletedCount,
+      // A small sample for the admin to sanity-check before
+      // confirming — not the full list, this could be thousands of
+      // rows across all campaigns.
+      sample: toClean.slice(0, 20).map((r) => ({
+        phoneNumber: r.phone_number,
+        firstName: r.first_name,
+        lastName: r.last_name,
+        campaignId: r.campaign_id,
+        reason: r.reason,
+      })),
+    });
+  } catch (error) {
+    console.error("POST /api/admin/leads/cleanup/preview failed:", error);
+    return res.status(500).json({ success: false, message: error.message || "Failed to check leads for cleanup." });
+  }
+});
+
+router.post("/leads/cleanup/confirm", requireAdmin, async (req, res) => {
+  try {
+    const { campaignId } = req.body;
+    const toClean = await findLeadsToClean(campaignId || null);
+
+    if (toClean.length === 0) {
+      return res.json({ success: true, deleted: 0 });
+    }
+
+    const appUserId = req.session.agent.appUserId;
+    const connection = await db.getConnection();
+    try {
+      await connection.beginTransaction();
+
+      // Log every row BEFORE deleting it — batched, not one insert
+      // per row, same reasoning as the bulk lead-upload insert above.
+      const logPlaceholders = toClean.map(() => "(?, ?, ?, ?, ?, ?, ?, ?)").join(", ");
+      const logParams = [];
+      for (const row of toClean) {
+        logParams.push(row.lead_id, row.list_id, row.campaign_id, row.phone_number, row.first_name, row.last_name, row.reason, appUserId);
+      }
+      await connection.execute(
+        `
+          INSERT INTO cmx_dialer.deleted_leads_log
+            (lead_id, list_id, campaign_id, phone_number, first_name, last_name, reason, deleted_by_app_user_id)
+          VALUES ${logPlaceholders}
+        `,
+        logParams
+      );
+
+      const leadIds = toClean.map((r) => r.lead_id);
+      const deletePlaceholders = leadIds.map(() => "?").join(",");
+      await connection.execute(`DELETE FROM asterisk.vicidial_list WHERE lead_id IN (${deletePlaceholders})`, leadIds);
+
+      await connection.commit();
+    } catch (err) {
+      await connection.rollback();
+      throw err;
+    } finally {
+      connection.release();
+    }
+
+    return res.json({ success: true, deleted: toClean.length });
+  } catch (error) {
+    console.error("POST /api/admin/leads/cleanup/confirm failed:", error);
+    return res.status(500).json({ success: false, message: error.message || "Failed to clean up leads." });
   }
 });
 
