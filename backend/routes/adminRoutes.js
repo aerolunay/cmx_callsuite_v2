@@ -1831,12 +1831,13 @@ router.get(
           combined.phone_number,
           combined.call_started_at,
           combined.direction,
+          combined.wait_seconds,
           agg.handle_time_seconds,
           au.full_name AS agent_name,
           combined.agent_user
         FROM (
           (
-            SELECT campaign_id, phone_number, call_id, call_started_at, agent_user, 'outbound' AS direction
+            SELECT campaign_id, phone_number, call_id, call_started_at, agent_user, 'outbound' AS direction, NULL AS wait_seconds
             FROM cmx_dialer.dialer_call_log
             WHERE call_started_at >= ? AND call_started_at <= ?
             ${outboundCampaignFilter}
@@ -1845,7 +1846,7 @@ router.get(
           )
           UNION ALL
           (
-            SELECT campaign_id, caller_id_number AS phone_number, call_id, call_started_at, agent_user, 'inbound' AS direction
+            SELECT campaign_id, caller_id_number AS phone_number, call_id, call_started_at, agent_user, 'inbound' AS direction, wait_seconds
             FROM cmx_dialer.inbound_call_log
             WHERE call_started_at >= ? AND call_started_at <= ?
             ${inboundCampaignFilter}
@@ -1871,6 +1872,12 @@ router.get(
       phoneNumber: r.phone_number,
       callStartedAt: r.call_started_at,
       direction: r.direction,
+      // Only meaningful for inbound (NULL for outbound, per the union
+      // above) — how long the caller waited before reaching this
+      // agent. Already computed and persisted on inbound_call_log at
+      // disposition time (see inboundCallService.js), just wasn't
+      // being selected here until now.
+      waitSeconds: r.wait_seconds,
       handleTimeSeconds: r.handle_time_seconds,
       // Falls back to the raw vicidial_user if the app_users join
       // doesn't resolve (e.g. an agent account since deleted) — same
