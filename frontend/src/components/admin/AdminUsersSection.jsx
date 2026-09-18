@@ -63,6 +63,7 @@ export default function AdminUsersSection() {
   }
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: load-on-mount is this component's whole data-fetch pattern, same as every other list/table in this app.
     loadAll();
   }, []);
 
@@ -73,6 +74,7 @@ export default function AdminUsersSection() {
   // reason. Harmless no-op for every other access level.
   useEffect(() => {
     if (["wfm", "admin"].includes(accessLevel)) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: clearing a now-meaningless selection on an access-level transition, not a data fetch, but the same legitimate "synchronize on a specific change" case.
       setSelectedCampaigns([]);
     }
   }, [accessLevel]);

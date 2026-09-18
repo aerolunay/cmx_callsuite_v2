@@ -104,7 +104,9 @@ export default function LeadsCallingDashboardPage() {
   }
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: load-on-mount-and-filter-change is this component's whole data-fetch pattern, same as every other list/table in this app.
     if (hasAccess && campaigns.length > 0) load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasAccess, campaigns, selectedCampaignIds, startDate, endDate]);
 
   if (agent && !hasAccess) {

@@ -101,6 +101,7 @@ export default function AdminLeadsSection() {
   const [dncError, setDncError] = useState("");
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: load-on-mount is this component's whole data-fetch pattern, same as every other list/table in this app.
     setCampaignsLoading(true);
     api
       .getAdminCampaigns("type=OUTBOUND")
@@ -116,6 +117,7 @@ export default function AdminLeadsSection() {
 
   useEffect(() => {
     if (!rulesCampaignId) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: load-on-campaign-change is this component's whole data-fetch pattern, same as every other list/table in this app.
     setRulesLoading(true);
     setRulesError("");
     api

@@ -95,6 +95,7 @@ export default function VoicemailsPage() {
     // can run — avoids firing a request that's certain to 400 while
     // the auto-select from loadCampaigns() above is still in flight.
     if (!isUnrestrictedCampaignAccess && !campaignId) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: load-on-mount-and-campaign-change is this component's whole data-fetch pattern, same as every other list/table in this app.
     loadVoicemails();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agent, campaignId]);

@@ -62,7 +62,6 @@ export default function VoicemailPlaybackModal({ voicemail, url, onClose }) {
     return () => {
       wavesurfer.destroy();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [url]);
 
   function togglePlay() {

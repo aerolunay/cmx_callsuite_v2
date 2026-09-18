@@ -89,6 +89,7 @@ export function PhoneProvider({ children }) {
     // (even as a different agent, same tab) correctly re-establishes
     // it fresh.
     if (!isLoggedIn) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: tearing down phone state on a login-state transition, not a data fetch, but the same legitimate "synchronize on a specific change" case.
       setRegistered(false);
       setRegistrationError("");
       setCallState(CALL_STATES.IDLE);
@@ -315,6 +316,7 @@ export function PhoneProvider({ children }) {
   return <PhoneContext.Provider value={contextValue}>{children}</PhoneContext.Provider>;
 }
 
+// eslint-disable-next-line react-refresh/only-export-components -- usePhone deliberately lives alongside PhoneProvider (same pattern as every other context in this app); splitting it into its own file would mean updating every import site across the whole codebase for a dev-only hot-reload warning with no production impact.
 export function usePhone() {
   const ctx = useContext(PhoneContext);
   if (!ctx) {

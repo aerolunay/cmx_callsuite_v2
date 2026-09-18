@@ -35,6 +35,7 @@ export default function CallLogTable({ refreshKey, campaignId, onCallBack, canCa
     // "Main Campaign" to even make a request. Now always fetches;
     // DialerPage.jsx controls whether/when this component renders at
     // all, so there's no "too early" state left to guard against here.
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: load-on-mount-and-filter-change is this component's whole data-fetch pattern, same as every other list/table in this app.
     setLoading(true);
     api
       .getCallLog(campaignId)

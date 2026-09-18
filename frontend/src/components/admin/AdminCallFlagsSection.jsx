@@ -41,6 +41,7 @@ export default function AdminCallFlagsSection() {
   }
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: load-on-mount is this component's whole data-fetch pattern, same as every other list/table in this app.
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

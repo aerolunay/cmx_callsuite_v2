@@ -38,6 +38,7 @@ export function AuthProvider({ children }) {
   );
 }
 
+// eslint-disable-next-line react-refresh/only-export-components -- useAuth deliberately lives alongside AuthProvider (same pattern as every other context in this app); splitting it into its own file would mean updating every import site across the whole codebase for a dev-only hot-reload warning with no production impact.
 export function useAuth() {
   const ctx = useContext(AuthContext);
   if (!ctx) {

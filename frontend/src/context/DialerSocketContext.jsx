@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useRef } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef } from "react";
 
 /*
 ==================================================
@@ -88,16 +88,18 @@ export function DialerSocketProvider({ children }) {
   // object literal every render too — meaning every consumer's own
   // useEffect([ctx]) would tear down and resubscribe on every single
   // re-render of this provider (which happens often, since it sits
-  // near the top of the whole app). useRef gives subscribe a stable
-  // identity across renders; useMemo with an empty dependency array
-  // means the context VALUE object itself never changes reference
-  // either, so consumers genuinely only subscribe once.
-  const subscribeRef = useRef((listener) => {
+  // near the top of the whole app). useCallback with an empty
+  // dependency array gives subscribe the exact same stable identity
+  // across renders that the original useRef version did — but without
+  // ever reading .current during render, which React's own rules
+  // flag as unsafe (a ref read during render isn't guaranteed to
+  // reflect the latest value the way a real dependency would).
+  const subscribe = useCallback((listener) => {
     listenersRef.current.add(listener);
     return () => listenersRef.current.delete(listener);
-  });
+  }, []);
 
-  const contextValue = useMemo(() => ({ subscribe: subscribeRef.current }), []);
+  const contextValue = useMemo(() => ({ subscribe }), [subscribe]);
 
   return <DialerSocketContext.Provider value={contextValue}>{children}</DialerSocketContext.Provider>;
 }
@@ -108,14 +110,26 @@ calling convention, so DialerPage.jsx barely needs to change at all.
 Subscribes to the SHARED, app-wide connection's messages rather than
 opening its own.
 */
+// eslint-disable-next-line react-refresh/only-export-components -- useDialerSocketMessages deliberately lives alongside DialerSocketProvider (same pattern as every other context in this app); splitting it into its own file would mean updating every import site across the whole codebase for a dev-only hot-reload warning with no production impact.
 export function useDialerSocketMessages(onMessage) {
   const ctx = useContext(DialerSocketContext);
   if (!ctx) {
     throw new Error("useDialerSocketMessages must be used within a DialerSocketProvider");
   }
 
+  // REAL BUG FIX — assigning onMessageRef.current directly during
+  // render is exactly the pattern React's own rules flag: a ref write
+  // during render isn't guaranteed to happen before every consumer
+  // that might read it has already rendered with the OLD value.
+  // Moving it into its own effect is the standard fix for "keep a ref
+  // in sync with the latest callback prop, without changing the
+  // subscription's own identity/timing" — it still updates before the
+  // subscribe effect below ever fires, since effects in the same
+  // component run in declaration order.
   const onMessageRef = useRef(onMessage);
-  onMessageRef.current = onMessage;
+  useEffect(() => {
+    onMessageRef.current = onMessage;
+  }, [onMessage]);
 
   useEffect(() => {
     return ctx.subscribe((data) => onMessageRef.current(data));

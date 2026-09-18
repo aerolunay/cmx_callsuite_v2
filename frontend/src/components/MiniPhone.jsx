@@ -400,6 +400,7 @@ export function MiniPhone({
   // means old messages never bleed into a new, unrelated call.
   useEffect(() => {
     if (hasActiveCall) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: clearing stale UI state on a call-state transition, not a data fetch, but the same "synchronize on a specific change" pattern this rule is really aimed at avoiding misuse of; this usage is the legitimate case.
       setTargetError("");
     }
   }, [hasActiveCall]);
@@ -430,6 +431,7 @@ export function MiniPhone({
   // carry into the next call.
   useEffect(() => {
     if (phone.callState === phone.CALL_STATES.IDLE || phone.callState === phone.CALL_STATES.ENDED) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: resetting per-call UI state on a call-state transition, same as the effect above.
       setIsMuted(false);
       setTargetInput("");
       setTargetError("");
@@ -437,6 +439,10 @@ export function MiniPhone({
       setActiveLine(1);
       setViewingLine(1);
     }
+    // phone.CALL_STATES is a stable constant object (see the effect
+    // above for the same reasoning re: phone's stable identity) — only
+    // the actual state value needs to be a dependency here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phone.callState]);
 
   function handleToggleMute() {

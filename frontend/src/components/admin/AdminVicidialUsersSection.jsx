@@ -56,11 +56,13 @@ export default function AdminVicidialUsersSection() {
   }
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: load-on-mount is this component's whole data-fetch pattern, same as every other list/table in this app.
     loadAll();
   }, []);
 
   useEffect(() => {
     if (!canTogglePhoneExtension) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: forcing this true when the toggle itself becomes unavailable, not a data fetch, but the same legitimate "synchronize on a specific change" case.
       setCreatePhoneExtension(true);
     }
   }, [canTogglePhoneExtension]);

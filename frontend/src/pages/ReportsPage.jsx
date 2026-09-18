@@ -99,6 +99,7 @@ export default function ReportsPage() {
 
   useEffect(() => {
     if (REPORTS_ROLES.includes(agent?.accessLevel)) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: load-on-mount-and-filter-change is this component's whole data-fetch pattern, same as every other list/table in this app.
       load();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

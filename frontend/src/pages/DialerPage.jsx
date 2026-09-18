@@ -97,8 +97,17 @@ export default function DialerPage() {
   // timestamps against the browser's clock (see agentStatusService.js
   // comments — that comparison is what caused a bogus multi-hour
   // reading when server/client clocks or timezones disagreed).
+  //
+  // Initialized to null, not Date.now() — React's rules flag calling
+  // an impure function directly during render, even just once at
+  // mount. Provably safe here: the tick() effect below that reads
+  // baseAtRef.current is gated behind `if (!agentStatus) return`, and
+  // every single code path that sets agentStatus (search
+  // baseAtRef.current in this file) ALSO sets baseAtRef.current in
+  // the same breath — so this initial value is guaranteed to be
+  // overwritten before tick() ever gets a chance to read it.
   const baseElapsedRef = useRef(0);
-  const baseAtRef = useRef(Date.now());
+  const baseAtRef = useRef(null);
 
   const [lead, setLead] = useState(null);
   const [call, setCall] = useState(null); // { callId, room, status }
@@ -600,6 +609,7 @@ export default function DialerPage() {
   // the view stuck on a tab that's no longer rendered anywhere.
   useEffect(() => {
     if (!showAbandonedVoicemailTab && callLogTab === "abandonedVoicemail") {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: falling back to a still-available tab when the current one disappears, not a data fetch, but the same legitimate "synchronize on a specific change" case.
       setCallLogTab("callLog");
     }
   }, [showAbandonedVoicemailTab, callLogTab]);
@@ -926,16 +936,18 @@ export default function DialerPage() {
     setPendingManualDialNumber(null);
   }
 
-  // Conference / Blind Transfer — both act on whichever call (outbound
-  // or inbound) is currently live; the backend figures out which one
-  // via resolveActiveRoom(), so nothing here needs to know or care
-  // which direction the active call is. Errors are intentionally NOT
-  // caught here — MiniPhone owns its own busy/error state for these
-  // two actions and needs the rejection to reach it.
-  function handleConferenceAdd(target, isExtension) {
-    return api.conferenceAdd(target, isExtension);
-  }
-
+  // Blind Transfer — acts on whichever call (outbound or inbound) is
+  // currently live; the backend figures out which one via
+  // resolveActiveRoom(), so nothing here needs to know or care which
+  // direction the active call is. Errors are intentionally NOT caught
+  // here — MiniPhone owns its own busy/error state for this action and
+  // needs the rejection to reach it.
+  //
+  // handleConferenceAdd (its sibling, calling api.conferenceAdd) was
+  // removed here as genuinely dead code — no button/prop anywhere
+  // ever called it (confirmed via search across MiniPhone.jsx). The
+  // backend's own conferenceAdd endpoint is unaffected; only this
+  // unused frontend wrapper is gone.
   function handleTransferBlind(target, isExtension) {
     return api.transferBlind(target, isExtension);
   }
@@ -1143,6 +1155,11 @@ export default function DialerPage() {
   // exchange this code enables on the other end.
   const SCREENING_APP_URL = "https://scnsuite.cmxinnovations.com";
 
+  // Flagged unused only because the button that calls this is itself
+  // temporarily commented out just below (see that comment for why) —
+  // kept here, not deleted, since it's meant to come back once the
+  // other side's config is fixed, not rewritten from scratch then.
+  // eslint-disable-next-line no-unused-vars
   async function handleOpenScreeningForm() {
     setError("");
     try {

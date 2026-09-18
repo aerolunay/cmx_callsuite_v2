@@ -43,6 +43,7 @@ export default function VoicemailPlayerPage() {
   useEffect(() => {
     if (!agent || !VOICEMAIL_ROLES.includes(agent.accessLevel)) return;
 
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: load-on-mount is this component's whole data-fetch pattern, same as every other list/table in this app.
     setLoading(true);
     setError("");
     Promise.all([api.getVoicemail(voicemailLogId), api.getVoicemailPlaybackUrl(voicemailLogId)])

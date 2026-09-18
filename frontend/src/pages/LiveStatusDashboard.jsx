@@ -333,6 +333,7 @@ export default function LiveStatusDashboard() {
     // to auto-select one rather than firing a request that's certain
     // to 400.
     if (!isUnrestrictedCampaignAccess && !campaignId) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: load-on-mount-and-filter-change is this component's whole data-fetch pattern, same as every other list/table in this app.
     setLoading(true);
     load();
     const interval = setInterval(load, REFRESH_INTERVAL_MS);
