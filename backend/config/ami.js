@@ -154,6 +154,27 @@ function redirectChannel(channel, { context, exten, priority = 1 }) {
 
 /*
 ==================================================
+playDtmf — NEW, for the in-call keypad
+==================================================
+Sends one DTMF digit OUT on `channel`, toward whatever that channel is
+connected to — used to navigate a called party's IVR / enter an
+extension. Deliberately AMI-side rather than JsSIP's own sendDTMF():
+the agent's browser leg sits in a ConfBridge room, and ConfBridge
+consumes participant DTMF itself (menus) rather than passing it to the
+other participants, so tones sent from the browser never reach the
+customer at all.
+
+Asterisk's PlayDTMF holds the action open for the tone's duration, so
+awaiting each call in turn naturally keeps a multi-digit sequence in
+order.
+==================================================
+*/
+function playDtmf(channel, digit, durationMs = 250) {
+  return sendAction({ action: "PlayDTMF", channel, digit, duration: durationMs });
+}
+
+/*
+==================================================
 startRecording / stopRecording — NEW
 ==================================================
 ConfbridgeStartRecord/StopRecord record the FULL conference mix (both
@@ -258,6 +279,7 @@ module.exports = {
   originate,
   hangupChannel,
   redirectChannel,
+  playDtmf,
   isConnected,
   startRecording,
   stopRecording,

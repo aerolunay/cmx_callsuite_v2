@@ -1013,6 +1013,19 @@ export default function DialerPage() {
     }
   }
 
+  // In-call keypad (DTMF) — outbound only, for entering an extension /
+  // navigating an IVR on the number the agent dialed. Errors are left
+  // to MiniPhone to show next to the keypad itself.
+  function handleSendDtmf(digits) {
+    return api.sendDtmf(call.callId, digits);
+  }
+
+  // Line 2's keypad — works whether Line 1 is inbound or outbound, since
+  // it targets the Line 2 party (resolved server-side from the session).
+  function handleSendLineTwoDtmf(digits) {
+    return api.sendLineTwoDtmf(digits);
+  }
+
   // Unified hold toggle for MiniPhone — picks whichever call (outbound
   // or inbound) is actually active, same "MiniPhone doesn't need to
   // know which direction" pattern already used for Conference/Transfer.
@@ -1332,6 +1345,9 @@ export default function DialerPage() {
               )}
               onHold={Boolean(call?.onHold || inboundCall?.onHold)}
               onToggleHold={handlePhoneToggleHold}
+              canSendDtmf={Boolean(call && call.status === "customer_connected" && !call.onHold)}
+              onSendDtmf={call ? handleSendDtmf : null}
+              onSendLineTwoDtmf={handleSendLineTwoDtmf}
               onHangUp={handlePhoneHangUp}
               onManualDial={handleManualDial}
               onTransferBlind={handleTransferBlind}

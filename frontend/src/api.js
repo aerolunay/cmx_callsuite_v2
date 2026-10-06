@@ -128,6 +128,8 @@ export const api = {
   getLineTwoStatus: () => request("/dialer/line-two/status"),
   holdLineTwo: () => request("/dialer/line-two/hold", { method: "POST" }),
   unholdLineTwo: () => request("/dialer/line-two/unhold", { method: "POST" }),
+  sendLineTwoDtmf: (digits) =>
+    request("/dialer/line-two/dtmf", { method: "POST", body: JSON.stringify({ digits }) }),
   setStatus: (status, campaignId) =>
     request("/dialer/status", { method: "POST", body: JSON.stringify({ status, campaignId }) }),
   hasLeads: (campaignId) => request(`/dialer/has-leads?campaignId=${encodeURIComponent(campaignId)}`),
@@ -145,6 +147,8 @@ export const api = {
   endCall: (callId) => request(`/dialer/end-call/${callId}`, { method: "POST" }),
   holdCall: (callId) => request(`/dialer/hold/${callId}`, { method: "POST" }),
   unholdCall: (callId) => request(`/dialer/unhold/${callId}`, { method: "POST" }),
+  sendDtmf: (callId, digits) =>
+    request(`/dialer/dtmf/${callId}`, { method: "POST", body: JSON.stringify({ digits }) }),
   // callId is required on all 4 of these now — v2's multi-call inbound
   // rebuild means there's no more implicit "the" inbound call.
   holdInbound: (callId) => request(`/dialer/inbound/hold`, { method: "POST", body: JSON.stringify({ callId }) }),

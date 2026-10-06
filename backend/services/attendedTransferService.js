@@ -359,6 +359,37 @@ async function unholdLineTwo(active) {
   return { success: true };
 }
 
+/*
+==================================================
+sendLineTwoDtmf — NEW, per explicit request
+==================================================
+In-call keypad for Line 2 — e.g. dialing a company's main number to
+transfer to, then entering the right person's extension at its IVR
+before connecting Line 1. Only once Line 2 has actually connected,
+isn't on hold, and the agent's own audio is on Line 2 (they need to
+hear the IVR they're answering).
+==================================================
+*/
+async function sendLineTwoDtmf(active, digits) {
+  const { rawCall } = active;
+  const lineTwo = rawCall.lineTwo;
+  if (!lineTwo) {
+    throw new Error("Line 2 is not active for this call.");
+  }
+  if (!lineTwo.targetChannel) {
+    throw new Error("Can only send keypad tones once Line 2 has connected.");
+  }
+  if (lineTwo.onHold) {
+    throw new Error("Can't send keypad tones while Line 2 is on hold.");
+  }
+  if (rawCall.activeLine !== 2) {
+    throw new Error("Switch to Line 2 to send keypad tones on it.");
+  }
+
+  await dialerService.sendDtmfDigits(lineTwo.targetChannel, digits);
+  return { success: true };
+}
+
 async function completeLineTwo(active, action) {
   const { room: room1, agentChannel, customerChannel, callId, isInbound, rawCall } = active;
   const lineTwo = rawCall.lineTwo;
@@ -494,6 +525,7 @@ module.exports = {
   switchToLineTwo,
   holdLineTwo,
   unholdLineTwo,
+  sendLineTwoDtmf,
   completeLineTwo,
   cancelLineTwo,
 };

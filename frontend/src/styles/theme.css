@@ -1265,6 +1265,40 @@ away from the screen at that exact moment.
   background: #9c4a0c;
 }
 
+/* In-call keypad (DTMF) — standard 3x4 phone layout. */
+.phone-keypad {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.phone-keypad-key {
+  border: none;
+  border-radius: 10px;
+  padding: 10px 0;
+  font-size: 18px;
+  font-weight: 700;
+  font-family: monospace;
+  cursor: pointer;
+  color: white;
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.phone-keypad-key:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.phone-keypad-key:active:not(:disabled) {
+  background: rgba(255, 255, 255, 0.35);
+}
+
+.phone-keypad-key:disabled {
+  background: #3a4054;
+  color: #7c869c;
+  cursor: not-allowed;
+}
+
 .phone-hint {
   font-size: 12px;
   color: #a7afc2;

@@ -430,6 +430,22 @@ router.post("/dialer/line-two/unhold", requireAuth, async (req, res) => {
   }
 });
 
+// Line 2 keypad (DTMF) — scoped to the requesting agent's own call by
+// resolveActiveRoom, same as every other Line 2 route.
+router.post("/dialer/line-two/dtmf", requireAuth, async (req, res) => {
+  try {
+    const active = resolveActiveRoom(req.session.agent.appUserId);
+    if (!active) {
+      return res.status(409).json({ success: false, message: "You're not currently on a call." });
+    }
+    await attendedTransferService.sendLineTwoDtmf(active, req.body?.digits);
+    return res.json({ success: true });
+  } catch (error) {
+    console.error("POST /api/dialer/line-two/dtmf failed:", error);
+    return res.status(500).json({ success: false, message: error.message || "Failed to send Line 2 keypad tones." });
+  }
+});
+
 /*
 ==================================================
 CAMPAIGN LIST
@@ -982,6 +998,24 @@ router.post("/dialer/unhold/:callId", requireAuth, async (req, res) => {
   } catch (error) {
     console.error("POST /api/dialer/unhold failed:", error);
     return res.status(500).json({ success: false, message: error.message || "Failed to unhold call." });
+  }
+});
+
+// In-call keypad (DTMF) — see dialerService.sendDtmf. Unlike hold/end
+// above, this checks the callId really is the requesting agent's own
+// active call: it plays audio into a live customer call, so it
+// shouldn't be reachable by anyone who merely knows a callId.
+router.post("/dialer/dtmf/:callId", requireAuth, async (req, res) => {
+  try {
+    const ownCall = dialerService.getRawActiveCallForAgent(req.session.agent.appUserId);
+    if (!ownCall || ownCall.callId !== req.params.callId) {
+      return res.status(404).json({ success: false, message: "No matching active call for this agent." });
+    }
+    await dialerService.sendDtmf(req.params.callId, req.body?.digits);
+    return res.json({ success: true });
+  } catch (error) {
+    console.error("POST /api/dialer/dtmf failed:", error);
+    return res.status(500).json({ success: false, message: error.message || "Failed to send keypad tones." });
   }
 });
 

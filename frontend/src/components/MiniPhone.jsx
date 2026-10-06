@@ -1,12 +1,14 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { usePhone } from "../context/PhoneContext";
 import InternalTransferModal from "../modals/InternalTransferModal";
+import { playDtmfTone } from "../utils/audio";
 
 /*
 ==================================================
 MiniPhone — self-contained softphone widget, styled to read like a
-physical phone (status line, number display, circular action buttons)
-without an actual dial-pad keypad.
+physical phone (status line, number display, circular action buttons).
+The dial field is typed into; the in-call Keypad (below) is only for
+sending tones on an already-connected call, on either line.
 
 Consumes the app-wide PhoneContext (see context/PhoneContext.jsx —
 the actual JsSIP connection lives there now, not here, so it survives
@@ -32,6 +34,14 @@ JsSIP directly. DialerPage supplies:
     agent leaves) or a true 3-way (Conference, agent stays). Canceling
     hangs up Line 2 and restores the original call exactly as it was.
     See attendedTransferService.js on the backend for the full design.
+  - canSendDtmf / onSendDtmf(digits): the in-call Keypad, per explicit
+    request — enters an extension / navigates an IVR on the number the
+    agent dialed. Tones are played into the CUSTOMER's leg by the
+    backend (AMI PlayDTMF), not sent from JsSIP: the agent's own leg
+    sits in a ConfBridge room, which swallows participant DTMF.
+  - onSendLineTwoDtmf(digits): the same keypad on Line 2's panel — e.g.
+    dialing a company's main number to transfer to, then entering the
+    person's extension at its IVR. Works whichever direction Line 1 is.
 
 HANG UP correctness: initially, removing the separate End Call button
 and relying solely on JsSIP's phone.hangup() (agent-leg-only) was a
@@ -133,6 +143,9 @@ export function MiniPhone({
   canHold,
   onHold,
   onToggleHold,
+  canSendDtmf,
+  onSendDtmf,
+  onSendLineTwoDtmf,
   onHangUp,
   onManualDial,
   onStartLineTwo,
@@ -180,6 +193,17 @@ export function MiniPhone({
   const [lineTwoBusy, setLineTwoBusy] = useState(false);
 
   const [showInternalTransferModal, setShowInternalTransferModal] = useState(false);
+
+  // In-call keypad, shared by both line panels — it always sends to
+  // the line being viewed. dtmfSent holds what's been pressed on each
+  // line, shown in that line's number display like a real phone.
+  // Presses are chained onto dtmfQueueRef so each digit's request only
+  // goes out once the previous one finished — firing them concurrently
+  // could let a fast "1#" reach Asterisk as "#1".
+  const [showKeypad, setShowKeypad] = useState(false);
+  const [dtmfSent, setDtmfSent] = useState({ 1: "", 2: "" });
+  const [dtmfError, setDtmfError] = useState("");
+  const dtmfQueueRef = useRef(Promise.resolve());
 
   // Poll Line 2's real status while it's still ringing — this is how
   // the UI learns "no answer" and offers Try Again, since nothing
@@ -237,6 +261,7 @@ export function MiniPhone({
       await refreshLineTwoStatus();
       setViewingLine(2);
       setTargetInput("");
+      setDtmfSent((prev) => ({ ...prev, 2: "" }));
     } catch (err) {
       setTargetError(err.message);
     } finally {
@@ -438,12 +463,102 @@ export function MiniPhone({
       setLineTwoStatus(null);
       setActiveLine(1);
       setViewingLine(1);
+      setShowKeypad(false);
+      setDtmfSent({ 1: "", 2: "" });
+      setDtmfError("");
     }
     // phone.CALL_STATES is a stable constant object (see the effect
     // above for the same reasoning re: phone's stable identity) — only
     // the actual state value needs to be a dependency here.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phone.callState]);
+
+  function handleKeypadPress(digit) {
+    const line = viewingLine;
+    if (!keypadReady(line)) return;
+    const send = line === 2 ? onSendLineTwoDtmf : onSendDtmf;
+    setDtmfError("");
+    setDtmfSent((prev) => ({ ...prev, [line]: prev[line] + digit }));
+    playDtmfTone(digit, phone.getOutputSinkId());
+    dtmfQueueRef.current = dtmfQueueRef.current
+      .then(() => send(digit))
+      .catch((err) => setDtmfError(err.message));
+  }
+
+  // Mirrors the backend's own checks (dialerService.sendDtmf /
+  // attendedTransferService.sendLineTwoDtmf) so keys are only enabled
+  // when a press would actually go through.
+  function keypadReady(line) {
+    if (line === 1) return Boolean(canSendDtmf && onSendDtmf);
+    return Boolean(
+      lineTwoStatus?.active && lineTwoStatus.line2HasConnected && !lineTwoStatus.line2OnHold && activeLine === 2
+    );
+  }
+
+  function keypadHint(line) {
+    if (line === 1) return onHold ? "Unhold the call to use the keypad." : "Keypad works once the call connects.";
+    if (!lineTwoStatus?.line2HasConnected) return "Keypad works once Line 2 connects.";
+    if (lineTwoStatus.line2OnHold) return "Unhold Line 2 to use the keypad.";
+    return "Switch to Line 2 to use the keypad.";
+  }
+
+  function renderKeypad(line) {
+    return (
+      <>
+        <button
+          type="button"
+          className="button-secondary"
+          style={{ marginTop: 8, width: "100%" }}
+          onClick={() => setShowKeypad((prev) => !prev)}
+          // Line 1: outbound only — DialerPage passes no onSendDtmf for
+          // an inbound call, since the caller dialed us.
+          disabled={!isActive || (line === 1 && !onSendDtmf)}
+          title="Send keypad tones (extensions, IVR menus)"
+        >
+          {showKeypad ? "Hide Keypad" : "Keypad"}
+        </button>
+
+        {showKeypad && (
+          <>
+            <div className="phone-keypad">
+              {["1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "0", "#"].map((digit) => (
+                <button
+                  key={digit}
+                  type="button"
+                  className="phone-keypad-key"
+                  onClick={() => handleKeypadPress(digit)}
+                  disabled={!keypadReady(line)}
+                >
+                  {digit}
+                </button>
+              ))}
+            </div>
+            {!keypadReady(line) && <p className="phone-hint">{keypadHint(line)}</p>}
+            {dtmfError && <div className="error phone-extra-error">{dtmfError}</div>}
+          </>
+        )}
+      </>
+    );
+  }
+
+  // Physical keyboard digits/*/# work too while the keypad is open —
+  // except when the agent is typing into a field (comments, Line 2
+  // number, etc.), so notes never leak out as tones.
+  const onKeypadKeyDown = useEffectEvent((e) => {
+    if (e.ctrlKey || e.metaKey || e.altKey || !/^[0-9*#]$/.test(e.key)) return;
+    const target = e.target;
+    if (target instanceof HTMLElement && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) {
+      return;
+    }
+    e.preventDefault();
+    handleKeypadPress(e.key);
+  });
+
+  useEffect(() => {
+    if (!showKeypad) return;
+    window.addEventListener("keydown", onKeypadKeyDown);
+    return () => window.removeEventListener("keydown", onKeypadKeyDown);
+  }, [showKeypad]);
 
   function handleToggleMute() {
     setIsMuted(phone.toggleMute());
@@ -518,11 +633,13 @@ export function MiniPhone({
 
       {viewingLine === 1 ? (
         <>
+          {/* Idle: the number to dial. On a call: the keypad digits
+              sent so far (read-only — tones go out per key press). */}
           <input
             type="tel"
             className="phone-display-input"
-            placeholder="Enter a number"
-            value={dialNumber}
+            placeholder={isIdle ? "Enter a number" : ""}
+            value={isIdle ? dialNumber : dtmfSent[1]}
             onChange={handleDialNumberChange}
             disabled={!isIdle}
           />
@@ -583,6 +700,8 @@ export function MiniPhone({
                   : "You must be Ready to place a call."}
             </p>
           )}
+
+          {renderKeypad(1)}
 
           {/* Per explicit request — Internal Transfer lives only on
               Line 1's panel, disabled once Line 2 already has a live
@@ -682,7 +801,8 @@ export function MiniPhone({
         // per-line (Line 2's own target), so it's gated on Line 2
         // actually having connected to someone.
         <>
-          <input type="tel" className="phone-display-input" value="" disabled placeholder="" />
+          {/* Keypad digits sent on Line 2 so far, read-only. */}
+          <input type="tel" className="phone-display-input" value={dtmfSent[2]} disabled placeholder="" />
           <div className="phone-actions">
             <button type="button" className="phone-btn phone-btn-call" disabled>
               {lineTwoStatus.status === "ringing" ? "Ringing…" : "Connected"}
@@ -715,6 +835,8 @@ export function MiniPhone({
               Hang Up
             </button>
           </div>
+
+          {renderKeypad(2)}
 
           {/* Replaces Internal Transfer in this context, per explicit
               request — the merge action, agent decides afterward

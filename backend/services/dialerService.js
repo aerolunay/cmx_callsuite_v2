@@ -1243,6 +1243,57 @@ async function unholdCall(callId) {
 
 /*
 ==================================================
+sendDtmf (outbound) — NEW, for the in-call keypad
+==================================================
+Per explicit request — lets the agent enter an extension / navigate an
+IVR on the number they dialed. Plays each digit OUT on the customer's
+channel (see ami.playDtmf for why this can't be done from the agent's
+own JsSIP leg).
+
+Once customer_connected, customerChannel is the Local half that
+ConfbridgeJoin reported — the one sitting IN the room. Sending a digit
+on it passes through the Local pair to the trunk leg and out to the
+far end. Before that, customerChannel is still the OriginateResponse
+half (wrong direction), which is one more reason to require
+customer_connected here — there's no IVR to talk to before answer
+anyway. Blocked while on hold, since the customer's channel is parked
+in the cmxhold MOH loop then, not in the room.
+
+sendDtmfDigits is the shared part, also used by Line 2's keypad (see
+attendedTransferService.sendLineTwoDtmf, whose external-number target
+is the same in-room Local half, so the same direction applies). Digits
+are sent strictly in order, one at a time; a failure partway stops the
+rest so the IVR never sees a half-skipped sequence.
+==================================================
+*/
+const DTMF_DIGITS_PATTERN = /^[0-9*#]{1,32}$/;
+
+async function sendDtmfDigits(channel, digits) {
+  if (typeof digits !== "string" || !DTMF_DIGITS_PATTERN.test(digits)) {
+    throw new Error("Digits must be 1-32 characters of 0-9, * or #.");
+  }
+  for (const digit of digits) {
+    await ami.playDtmf(channel, digit);
+  }
+}
+
+async function sendDtmf(callId, digits) {
+  const call = activeCalls.get(callId);
+  if (!call) {
+    throw new Error(`No active call found for callId ${callId}.`);
+  }
+  if (call.status !== "customer_connected" || !call.customerChannel) {
+    throw new Error("Can only send keypad tones once the call has connected.");
+  }
+  if (call.onHold) {
+    throw new Error("Can't send keypad tones while the call is on hold.");
+  }
+
+  await sendDtmfDigits(call.customerChannel, digits);
+}
+
+/*
+==================================================
 saveDisposition
 ==================================================
 Per spec:
@@ -1589,6 +1640,8 @@ module.exports = {
   endCall,
   holdCall,
   unholdCall,
+  sendDtmf,
+  sendDtmfDigits,
   saveDisposition,
   // NEW — exported per explicit request: the new agent-facing
   // callback-disposition routes (see dialerRoutes.js's PATCH
