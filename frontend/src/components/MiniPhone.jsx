@@ -159,8 +159,9 @@ function isDialableNumber(number) {
   return /^\d{10}$/.test(digits);
 }
 
-// Per explicit request — shown as a tooltip (bubble under the display,
-// and on the disabled Call button), not a line of text. "" when the
+// Per explicit request — shown as a tooltip bubble under the display,
+// and ONLY after the agent clicks Call (or presses Enter) with an
+// incomplete number — never while they're still typing. "" when the
 // number is fine or nothing's been typed yet.
 function dialNumberHint(number) {
   if (!number || isDialableNumber(number)) return "";
@@ -451,6 +452,16 @@ export function MiniPhone({
   // lineOneAutoExt, so it can never outlive a dial that didn't start).
   const [lineTwoAutoExt, setLineTwoAutoExt] = useState("");
 
+  // Which line's "Enter a 10-digit number" tooltip is showing (null =
+  // none). Set by clicking Call with too few digits; cleared as soon as
+  // the number changes, or after a few seconds.
+  const [dialHintLine, setDialHintLine] = useState(null);
+  useEffect(() => {
+    if (dialHintLine === null) return;
+    const timer = setTimeout(() => setDialHintLine(null), 4000);
+    return () => clearTimeout(timer);
+  }, [dialHintLine]);
+
   useEffect(() => () => clearTimeout(longPressTimerRef.current), []);
 
   // Poll Line 2's real status while it's still ringing — this is how
@@ -502,7 +513,11 @@ export function MiniPhone({
 
   async function handleStartLineTwo() {
     const { number, ext } = splitDialString(targetInput);
-    if (!isDialableNumber(number)) return;
+    if (!number) return;
+    if (!isDialableNumber(number)) {
+      setDialHintLine(2);
+      return;
+    }
     setTargetError("");
     setLineTwoBusy(true);
     try {
@@ -762,6 +777,7 @@ export function MiniPhone({
 
   function setDialValue(line, value) {
     (line === 1 ? setDialNumber : setTargetInput)(sanitizeDialInput(value));
+    setDialHintLine(null);
   }
 
   function handleKeypadPress(key) {
@@ -865,7 +881,11 @@ export function MiniPhone({
 
   function handleCall() {
     const { number, ext } = splitDialString(dialNumber);
-    if (!canDial || !isDialableNumber(number)) return;
+    if (!canDial || !number) return;
+    if (!isDialableNumber(number)) {
+      setDialHintLine(1);
+      return;
+    }
     onManualDial(number, ext);
     setDialNumber("");
     setDtmfSent((prev) => ({ ...prev, 1: "" }));
@@ -933,7 +953,7 @@ export function MiniPhone({
                 {ICONS.backspace}
               </button>
             )}
-            {dialNumberHint(number) && (
+            {dialHintLine === line && dialNumberHint(number) && (
               <div className="phone-display-tooltip" role="status">
                 {dialNumberHint(number)}
               </div>
@@ -1064,9 +1084,10 @@ export function MiniPhone({
                 variant="call"
                 icon={ICONS.call}
                 label="Call"
-                title={dialNumberHint(splitDialString(dialNumber).number) || undefined}
                 onClick={handleCall}
-                disabled={!canDial || !isDialableNumber(splitDialString(dialNumber).number)}
+                // Clickable with any digits — an incomplete number shows
+                // the tooltip instead of dialing (see handleCall).
+                disabled={!canDial || !splitDialString(dialNumber).number}
               />
             )}
             {isIncoming ? (
@@ -1147,9 +1168,9 @@ export function MiniPhone({
                 variant="call"
                 icon={ICONS.call}
                 label={lineTwoBusy ? "Calling…" : lineTwoFailed ? "Try Again" : "Call"}
-                title={dialNumberHint(splitDialString(targetInput).number) || "Call on Line 2"}
+                title="Call on Line 2"
                 onClick={handleStartLineTwo}
-                disabled={lineTwoBusy || !isDialableNumber(splitDialString(targetInput).number)}
+                disabled={lineTwoBusy || !splitDialString(targetInput).number}
               />
             )}
             {lineTwoFailed ? (
