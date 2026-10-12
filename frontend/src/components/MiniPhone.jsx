@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { usePhone } from "../context/PhoneContext";
 import InternalTransferModal from "../modals/InternalTransferModal";
 import { useAvailableTransferAgents } from "../hooks/useAvailableTransferAgents";
@@ -62,13 +62,15 @@ onHangUp (DialerPage's api.endCall/endInboundCall — which hangs up
 BOTH channels via AMI and explicitly triggers markCallEnded) before
 also calling phone.hangup() for JsSIP's own local cleanup.
 
-Per explicit request, the call controls are ALWAYS visible on both
-lines — Mute, Hold, Keypad (show/hide toggle) and Internal Transfer
-(Connect Line 1 on Line 2), then the green Call and red Hang Up — each
-just enabled/disabled for the current state. Call/Hang Up become
-Answer/Decline while ringing, and Try Again/Give Up after a Line 2 no
-answer. Only the keypad itself can be hidden; that choice is
-remembered per browser.
+Per explicit request, laid out to save space: the Keypad show/hide
+toggle sits beside the number display, and the call controls are ONE
+always-visible row — Call / Hang Up (a single button that toggles: Hang
+Up while on a call, Call otherwise), Mute, Hold, and Internal Transfer
+(Connect Line 1 on Line 2) — each just enabled/disabled for the current
+state. While ringing the first two are Answer / Decline, and after a
+Line 2 no answer they're Try Again / Give Up (Mute can't apply in
+either case, so its slot holds the red button). Only the keypad itself
+can be hidden; that choice is remembered per browser.
 
 The dial display is digits only up to the first comma (the phone
 number), then 0-9 * # and more commas (the extension / pauses).
@@ -274,26 +276,9 @@ const ICONS = {
 
 // Round softphone button with an optional caption underneath.
 // variant: "neutral" (Mute/Hold/Transfer) | "call" (green) | "end" (red).
-// active = engaged Mute/Hold (warning color); toggled = an on/off view
-// toggle that's currently on (Keypad shown).
-function RoundButton({
-  icon,
-  label,
-  title,
-  onClick,
-  disabled,
-  variant = "neutral",
-  active = false,
-  toggled = false,
-  large = false,
-}) {
-  const className = [
-    "phone-round",
-    `phone-round-${variant}`,
-    active ? "phone-round-active" : "",
-    toggled ? "phone-round-toggled" : "",
-    large ? "phone-round-lg" : "",
-  ]
+// active = engaged Mute/Hold (warning color).
+function RoundButton({ icon, label, title, onClick, disabled, variant = "neutral", active = false }) {
+  const className = ["phone-round", `phone-round-${variant}`, active ? "phone-round-active" : ""]
     .filter(Boolean)
     .join(" ");
   // The tooltip also lives on the wrapper: a disabled <button> swallows
@@ -738,6 +723,13 @@ export function MiniPhone({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phone.callState]);
 
+  const isIdle = phone.callState === phone.CALL_STATES.IDLE || phone.callState === phone.CALL_STATES.ENDED;
+  const isIncoming = phone.callState === phone.CALL_STATES.INCOMING;
+  const isActive = phone.callState === phone.CALL_STATES.ACTIVE;
+  const canDial = phone.registered && agentStatus === "READY" && !hasActiveCall && isIdle;
+  const lineTwoFailed = Boolean(lineTwoStatus?.active && lineTwoStatus.status === "failed");
+  const lineTwoLive = Boolean(lineTwoStatus?.active && lineTwoStatus.status !== "failed"); // ringing or connected
+
   // "dial" while that line's panel is still taking a number to dial
   // (Line 1 idle; Line 2 not dialed yet or needing a retry), "dtmf"
   // once it's on a call.
@@ -822,13 +814,16 @@ export function MiniPhone({
     handleKeypadPress(key);
   }
 
-  // Physical keyboard works too once the agent has clicked into the
-  // phone (focus anywhere inside the widget) — scoped to the widget
-  // rather than the whole page so typing elsewhere (notes, comments)
-  // can never leak out as tones. The display input handles its own
-  // typing natively, so keys aimed at an input are left alone.
-  function handleWidgetKeyDown(e) {
-    if (e.ctrlKey || e.metaKey || e.altKey) return;
+  // Physical keyboard — the number row AND the numeric keypad (both
+  // report the digit itself as e.key, NumLock on) — per explicit
+  // request, works anywhere on the Dialer page, no need to click into
+  // the phone first: type a number before dialing, or an extension /
+  // IVR option during a call. Never while the cursor is in a text
+  // field (notes, comments, dropdowns), so typing there can't leak out
+  // as tones; the display input handles its own typing natively.
+  // Held-down keys don't auto-repeat tones.
+  const onPageKeyDown = useEffectEvent((e) => {
+    if (e.ctrlKey || e.metaKey || e.altKey || e.repeat) return;
     const target = e.target;
     if (target instanceof HTMLElement && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) {
       return;
@@ -840,7 +835,12 @@ export function MiniPhone({
       e.preventDefault();
       handleBackspace(viewingLine);
     }
-  }
+  });
+
+  useEffect(() => {
+    window.addEventListener("keydown", onPageKeyDown);
+    return () => window.removeEventListener("keydown", onPageKeyDown);
+  }, []);
 
   function handleToggleMute() {
     setIsMuted(phone.toggleMute());
@@ -871,13 +871,6 @@ export function MiniPhone({
     setDtmfSent((prev) => ({ ...prev, 1: "" }));
   }
 
-  const isIdle = phone.callState === phone.CALL_STATES.IDLE || phone.callState === phone.CALL_STATES.ENDED;
-  const isIncoming = phone.callState === phone.CALL_STATES.INCOMING;
-  const isActive = phone.callState === phone.CALL_STATES.ACTIVE;
-  const canDial = phone.registered && agentStatus === "READY" && !hasActiveCall && isIdle;
-  const lineTwoFailed = Boolean(lineTwoStatus?.active && lineTwoStatus.status === "failed");
-  const lineTwoLive = Boolean(lineTwoStatus?.active && lineTwoStatus.status !== "failed"); // ringing or connected
-
   function callStateText(line) {
     if (line === 1) {
       if (isIncoming) return "Incoming call";
@@ -900,8 +893,11 @@ export function MiniPhone({
       return (
         <>
           <div className="phone-call-state">{callStateText(line)}</div>
-          <div className="phone-display">
-            <input type="tel" className="phone-display-input" value={dtmfSent[line]} disabled readOnly />
+          <div className="phone-display-row">
+            <div className="phone-display">
+              <input type="tel" className="phone-display-input" value={dtmfSent[line]} disabled readOnly />
+            </div>
+            {renderKeypadToggle()}
           </div>
           {autoExt && <p className="phone-hint phone-hint-center">Ext {autoExt} dials automatically after answer.</p>}
         </>
@@ -913,34 +909,37 @@ export function MiniPhone({
     const startDial = line === 1 ? handleCall : handleStartLineTwo;
     return (
       <>
-        <div className="phone-display">
-          <input
-            type="tel"
-            className="phone-display-input"
-            placeholder="Enter number"
-            value={value}
-            onChange={(e) => setDialValue(line, e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") startDial();
-            }}
-            disabled={!keypadReady(line)}
-          />
-          {value && keypadReady(line) && (
-            <button
-              type="button"
-              className="phone-display-backspace"
-              onClick={() => handleBackspace(line)}
-              title="Delete"
-              aria-label="Delete"
-            >
-              {ICONS.backspace}
-            </button>
-          )}
-          {dialNumberHint(number) && (
-            <div className="phone-display-tooltip" role="status">
-              {dialNumberHint(number)}
-            </div>
-          )}
+        <div className="phone-display-row">
+          <div className="phone-display">
+            <input
+              type="tel"
+              className="phone-display-input"
+              placeholder="Enter number"
+              value={value}
+              onChange={(e) => setDialValue(line, e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") startDial();
+              }}
+              disabled={!keypadReady(line)}
+            />
+            {value && keypadReady(line) && (
+              <button
+                type="button"
+                className="phone-display-backspace"
+                onClick={() => handleBackspace(line)}
+                title="Delete"
+                aria-label="Delete"
+              >
+                {ICONS.backspace}
+              </button>
+            )}
+            {dialNumberHint(number) && (
+              <div className="phone-display-tooltip" role="status">
+                {dialNumberHint(number)}
+              </div>
+            )}
+          </div>
+          {renderKeypadToggle()}
         </div>
         {isDialableNumber(number) && ext && (
           <p className="phone-hint phone-hint-center">Ext {ext} dials automatically after answer.</p>
@@ -992,19 +991,25 @@ export function MiniPhone({
     saveKeypadPreference(next);
   }
 
+  // Icon-only, beside the number display (see renderDisplay).
   function renderKeypadToggle() {
+    const label = showKeypad ? "Hide keypad" : "Show keypad";
     return (
-      <RoundButton
-        icon={ICONS.keypad}
-        label={showKeypad ? "Hide Keypad" : "Keypad"}
-        toggled={showKeypad}
+      <button
+        type="button"
+        className={`phone-keypad-toggle${showKeypad ? " phone-keypad-toggle-on" : ""}`}
         onClick={handleToggleKeypad}
-      />
+        title={label}
+        aria-label={label}
+        aria-pressed={showKeypad}
+      >
+        {ICONS.keypad}
+      </button>
     );
   }
 
   return (
-    <div className="phone-widget" onKeyDown={handleWidgetKeyDown}>
+    <div className="phone-widget">
       <div className="phone-widget-status">
         <span className={`phone-status-dot ${statusDotClass(phone, agentStatus)}`} />
         {statusLabel(phone, agentStatus)}
@@ -1041,13 +1046,40 @@ export function MiniPhone({
           {renderKeypad(1)}
 
           <div className="phone-controls">
-            <RoundButton
-              icon={isMuted ? ICONS.micOff : ICONS.mic}
-              label={isMuted ? "Unmute" : "Mute"}
-              active={isMuted}
-              onClick={handleToggleMute}
-              disabled={!isActive}
-            />
+            {isIncoming ? (
+              <RoundButton variant="call" icon={ICONS.call} label="Answer" onClick={phone.answer} />
+            ) : isActive ? (
+              <RoundButton
+                variant="end"
+                icon={ICONS.hangup}
+                label="Hang Up"
+                // Hang Up is disabled while a Line 2 action is actually
+                // in flight — re-enabled the instant it resolves.
+                title={lineTwoBusy ? "Please wait for the Line 2 action to finish" : undefined}
+                onClick={handleHangUpClick}
+                disabled={lineTwoBusy}
+              />
+            ) : (
+              <RoundButton
+                variant="call"
+                icon={ICONS.call}
+                label="Call"
+                title={dialNumberHint(splitDialString(dialNumber).number) || undefined}
+                onClick={handleCall}
+                disabled={!canDial || !isDialableNumber(splitDialString(dialNumber).number)}
+              />
+            )}
+            {isIncoming ? (
+              <RoundButton variant="end" icon={ICONS.hangup} label="Decline" onClick={handleHangUpClick} />
+            ) : (
+              <RoundButton
+                icon={isMuted ? ICONS.micOff : ICONS.mic}
+                label={isMuted ? "Unmute" : "Mute"}
+                active={isMuted}
+                onClick={handleToggleMute}
+                disabled={!isActive}
+              />
+            )}
             <RoundButton
               icon={onHold ? ICONS.resume : ICONS.pause}
               label={onHold ? "Unhold" : "Hold"}
@@ -1055,7 +1087,6 @@ export function MiniPhone({
               onClick={onToggleHold}
               disabled={!canHold}
             />
-            {renderKeypadToggle()}
             {/* Per explicit request — Internal Transfer lives only on
                 Line 1's panel, disabled once Line 2 already has a live
                 call (can't start a second Line 2 while one exists), or
@@ -1069,33 +1100,6 @@ export function MiniPhone({
                 setShowInternalTransferModal(true);
               }}
               disabled={!isActive || lineTwoBusy || !campaignId || Boolean(lineTwoStatus?.active) || noTransferAgents}
-            />
-          </div>
-
-          <div className="phone-main-actions">
-            {isIncoming ? (
-              <RoundButton large variant="call" icon={ICONS.call} label="Answer" onClick={phone.answer} />
-            ) : (
-              <RoundButton
-                large
-                variant="call"
-                icon={ICONS.call}
-                label="Call"
-                title={dialNumberHint(splitDialString(dialNumber).number) || undefined}
-                onClick={handleCall}
-                disabled={!canDial || !isDialableNumber(splitDialString(dialNumber).number)}
-              />
-            )}
-            <RoundButton
-              large
-              variant="end"
-              icon={ICONS.hangup}
-              label={isIncoming ? "Decline" : "Hang Up"}
-              // Hang Up is disabled while a Line 2 action is actually
-              // in flight — re-enabled the instant it resolves.
-              title={lineTwoBusy ? "Please wait for the Line 2 action to finish" : undefined}
-              onClick={handleHangUpClick}
-              disabled={(!isIncoming && !isActive) || lineTwoBusy}
             />
           </div>
 
@@ -1129,13 +1133,42 @@ export function MiniPhone({
           {renderKeypad(2)}
 
           <div className="phone-controls">
-            <RoundButton
-              icon={isMuted ? ICONS.micOff : ICONS.mic}
-              label={isMuted ? "Unmute" : "Mute"}
-              active={isMuted}
-              onClick={handleToggleMute}
-              disabled={!lineTwoLive || !isActive}
-            />
+            {lineTwoLive ? (
+              <RoundButton
+                variant="end"
+                icon={ICONS.hangup}
+                label="Hang Up"
+                title="Hang up Line 2, return to Line 1"
+                onClick={handleHangUpLineTwoClick}
+                disabled={lineTwoBusy}
+              />
+            ) : (
+              <RoundButton
+                variant="call"
+                icon={ICONS.call}
+                label={lineTwoBusy ? "Calling…" : lineTwoFailed ? "Try Again" : "Call"}
+                title={dialNumberHint(splitDialString(targetInput).number) || "Call on Line 2"}
+                onClick={handleStartLineTwo}
+                disabled={lineTwoBusy || !isDialableNumber(splitDialString(targetInput).number)}
+              />
+            )}
+            {lineTwoFailed ? (
+              <RoundButton
+                variant="end"
+                icon={ICONS.hangup}
+                label="Give Up"
+                onClick={handleCancelLineTwoClick}
+                disabled={lineTwoBusy}
+              />
+            ) : (
+              <RoundButton
+                icon={isMuted ? ICONS.micOff : ICONS.mic}
+                label={isMuted ? "Unmute" : "Mute"}
+                active={isMuted}
+                onClick={handleToggleMute}
+                disabled={!lineTwoLive || !isActive}
+              />
+            )}
             <RoundButton
               icon={lineTwoStatus?.line2OnHold ? ICONS.resume : ICONS.pause}
               label={lineTwoStatus?.line2OnHold ? "Unhold" : "Hold"}
@@ -1144,7 +1177,6 @@ export function MiniPhone({
               onClick={lineTwoStatus?.line2OnHold ? handleUnholdLineTwoClick : handleHoldLineTwoClick}
               disabled={!lineTwoLive || !lineTwoStatus.line2HasConnected || lineTwoBusy}
             />
-            {renderKeypadToggle()}
             {/* Replaces Internal Transfer in this context, per explicit
                 request — the merge action, agent decides afterward
                 (via the normal Hang Up) whether to leave or stay on. */}
@@ -1153,29 +1185,6 @@ export function MiniPhone({
               label="Connect Line 1"
               onClick={() => handleCompleteLineTwoClick("conference")}
               disabled={!lineTwoLive || lineTwoBusy}
-            />
-          </div>
-
-          <div className="phone-main-actions">
-            <RoundButton
-              large
-              variant="call"
-              icon={ICONS.call}
-              label={lineTwoBusy ? "Calling…" : lineTwoFailed ? "Try Again" : "Call"}
-              title={
-                lineTwoLive ? undefined : dialNumberHint(splitDialString(targetInput).number) || "Call on Line 2"
-              }
-              onClick={handleStartLineTwo}
-              disabled={lineTwoLive || lineTwoBusy || !isDialableNumber(splitDialString(targetInput).number)}
-            />
-            <RoundButton
-              large
-              variant="end"
-              icon={ICONS.hangup}
-              label={lineTwoFailed ? "Give Up" : "Hang Up"}
-              title={lineTwoLive ? "Hang up Line 2, return to Line 1" : undefined}
-              onClick={lineTwoFailed ? handleCancelLineTwoClick : handleHangUpLineTwoClick}
-              disabled={!(lineTwoLive || lineTwoFailed) || lineTwoBusy}
             />
           </div>
 

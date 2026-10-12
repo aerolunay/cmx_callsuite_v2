@@ -1319,6 +1319,50 @@ away from the screen at that exact moment.
   border-bottom-color: #ffffff;
 }
 
+/* Number display + the Keypad show/hide toggle on its right — per
+   explicit request, the toggle lives here to save a row. */
+.phone-display-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.phone-display-row .phone-display {
+  flex: 1;
+  min-width: 0;
+  margin-bottom: 0;
+}
+
+.phone-keypad-toggle {
+  flex: 0 0 auto;
+  width: 46px;
+  height: 46px;
+  border: none;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  background: rgba(255, 255, 255, 0.15);
+  cursor: pointer;
+}
+
+.phone-keypad-toggle:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+/* Keypad shown — a light fill, deliberately not the orange "engaged"
+   Mute/Hold color. */
+.phone-keypad-toggle-on {
+  background: rgba(255, 255, 255, 0.85);
+  color: var(--cmx-navy);
+}
+
+.phone-keypad-toggle-on:hover {
+  background: #ffffff;
+}
+
 /* Small caption above the display while on a call (Calling / Connected / On hold). */
 .phone-call-state {
   text-align: center;
@@ -1383,20 +1427,14 @@ away from the screen at that exact moment.
   color: #a7afc2;
 }
 
-/* Round call controls — Mute/Hold/Transfer row, then the big green
-   Call / red Hang Up underneath, 3CX-style. */
+/* Round call controls — per explicit request, ONE row to save space:
+   Call/Hang Up (a single toggling button), Mute, Hold, Internal
+   Transfer (Connect Line 1 on Line 2). */
 .phone-controls {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: 8px;
-  margin: 4px 0 14px;
-}
-
-.phone-main-actions {
-  display: flex;
-  justify-content: center;
-  gap: 40px;
-  margin-bottom: 8px;
+  margin: 4px 0 8px;
 }
 
 .phone-round-wrap {
@@ -1437,16 +1475,6 @@ away from the screen at that exact moment.
   cursor: not-allowed;
 }
 
-.phone-round-lg {
-  width: 64px;
-  height: 64px;
-}
-
-.phone-round-lg svg {
-  width: 28px;
-  height: 28px;
-}
-
 .phone-round-call {
   background: var(--cmx-success);
 }
@@ -1471,17 +1499,6 @@ away from the screen at that exact moment.
 
 .phone-round-active:hover:not(:disabled) {
   background: #9c4a0c;
-}
-
-/* On/off view toggle that's currently on (Keypad shown) — a light
-   fill, deliberately not the orange "engaged" Mute/Hold color. */
-.phone-round-toggled {
-  background: rgba(255, 255, 255, 0.85);
-  color: var(--cmx-navy);
-}
-
-.phone-round-toggled:hover:not(:disabled) {
-  background: #ffffff;
 }
 
 .phone-round-label {

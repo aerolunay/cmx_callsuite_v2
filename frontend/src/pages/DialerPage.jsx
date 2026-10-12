@@ -203,6 +203,13 @@ export default function DialerPage() {
   // shows them, unchanged.
   const isCompact = useMediaQuery(COMPACT_DIALER_QUERY);
   const [showHistoryCompact, setShowHistoryCompact] = useState(false);
+  // Hidden again every time the window becomes narrow — same rule as
+  // StatsPanel's own compact default.
+  const [appliedCompact, setAppliedCompact] = useState(isCompact);
+  if (isCompact !== appliedCompact) {
+    setAppliedCompact(isCompact);
+    if (isCompact) setShowHistoryCompact(false);
+  }
   // NEW — per explicit request: manual-dial callback blocking. When a
   // manually-dialed number already has a pending (status = 'NEW')
   // entry in the Abandoned & Voicemail tab, the call is blocked
@@ -1711,7 +1718,7 @@ export default function DialerPage() {
 
             {/* Stats moved here per redesign request — right column,
                 above Call Logs, each stat as its own card. */}
-            <StatsPanel refreshKey={callLogVersion} campaignId={statsCampaignFilter} />
+            <StatsPanel refreshKey={callLogVersion} campaignId={statsCampaignFilter} compact={isCompact} />
 
             {/* Browser-tab-style switcher between Call Logs and the
                 combined Abandoned & Voicemail feed — per explicit

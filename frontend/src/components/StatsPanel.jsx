@@ -19,8 +19,18 @@ const STAT_ROWS = [
 // refreshKey is bumped by the parent whenever something happened that
 // could change today's numbers (a disposition saved, an agent status
 // transition over the WebSocket) — event-driven refetch, not polling.
-export default function StatsPanel({ refreshKey, campaignId }) {
-  const [expanded, setExpanded] = useState(true);
+//
+// compact — per explicit request: collapsed by default in the Dialer's
+// narrow-window layout (agents shrink it beside other tools), expanded at
+// full width. Re-applied whenever the window crosses that width; the
+// agent can still toggle it either way in between.
+export default function StatsPanel({ refreshKey, campaignId, compact = false }) {
+  const [expanded, setExpanded] = useState(!compact);
+  const [appliedCompact, setAppliedCompact] = useState(compact);
+  if (compact !== appliedCompact) {
+    setAppliedCompact(compact);
+    setExpanded(!compact);
+  }
   const [stats, setStats] = useState(null);
   const [error, setError] = useState("");
 
