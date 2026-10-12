@@ -522,6 +522,17 @@ export default function DialerPage() {
     // react to locally — this WS message is the ONLY signal the
     // frontend gets that the call is over.
     if (message.type === "callAutoResolved") {
+      // Per explicit request — "moved to the next lead" only makes sense
+      // for an OUTBOUND campaign's lead call. Blended campaigns have no
+      // leads, and a manually typed number (lead_id 0) isn't a lead
+      // either — those just say what happened. Read BEFORE the state
+      // below is cleared (this handler always sees the latest call/lead
+      // — see useDialerSocketMessages).
+      const endedCampaignId = call && call.callId === message.callId ? call.campaignId : null;
+      const endedCampaignType = myCampaigns.find((c) => c.campaign_id === endedCampaignId)?.campaign_type;
+      const wasLeadCall = Boolean(lead && Number(lead.lead_id) !== 0);
+      const nextLeadSuffix = endedCampaignType === "OUTBOUND" && wasLeadCall ? " — moved to the next lead." : ".";
+
       setCall((prev) => (prev && prev.callId === message.callId ? null : prev));
       setLead((prev) => (prev ? null : prev));
       setDisposition("");
@@ -532,11 +543,11 @@ export default function DialerPage() {
 
       const label =
         message.outcome === "machine"
-          ? "Answering machine detected — moved to the next lead."
+          ? "Answering machine detected"
           : message.outcome === "busy"
-            ? "Line was busy — moved to the next lead."
-            : "No answer — moved to the next lead.";
-      setAutoResolvedNotice(label);
+            ? "Line was busy"
+            : "No answer";
+      setAutoResolvedNotice(label + nextLeadSuffix);
     }
 
     if (message.type === "inboundCall") {
