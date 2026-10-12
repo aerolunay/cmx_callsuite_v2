@@ -399,6 +399,17 @@ function normalizePhoneNumber(phoneNumber) {
   return digits;
 }
 
+// REAL BUG FIX, confirmed live: a 9-digit manual dial ("804222111")
+// went all the way through — the agent's phone was rung first — and
+// only then did the customer-leg Originate fail with Asterisk's own
+// "Extension does not exist." (no outbound pattern matches). Both
+// outbound patterns need exactly 10 digits once normalized, so checking
+// that up front (see the start-call route) rejects it before anything
+// is dialed, with a message the agent can actually act on.
+function isDialablePhoneNumber(phoneNumber) {
+  return /^\d{10}$/.test(normalizePhoneNumber(String(phoneNumber || "")));
+}
+
 function startCall({
   appUserId,
   agentUser,
@@ -641,9 +652,26 @@ function startCall({
 
         resolve({ callId, room });
       } catch (err) {
+        // REAL BUG FIX, confirmed live: the agent's own leg has ALREADY
+        // joined the room by this point (that's what got us here), and
+        // nothing used to hang it up — the agent was left sitting alone
+        // in an empty ConfBridge, phone showing "On call", while their
+        // status had already gone back to READY.
+        if (callState.agentChannel) {
+          await ami.hangupChannel(callState.agentChannel).catch((hangupErr) => {
+            if (ami.isExpectedAlreadyGoneError(hangupErr)) return;
+            console.error(`[dialerService] Failed to hang up agent channel after customer dial failed:`, hangupErr.message);
+          });
+        }
         await discardNeverConnectedCall(callState);
         releaseRoomSuffix(suffix);
-        reject(err);
+        // Asterisk's own wording ("Extension does not exist.") reads to
+        // an agent like a phone-extension problem — say what it means.
+        reject(
+          /extension does not exist/i.test(err.message)
+            ? new Error(`Couldn't dial ${phoneNumber} — there's no outbound route for that number. Check the number and try again.`)
+            : err
+        );
       }
     };
 
@@ -1695,6 +1723,7 @@ function getActiveCallPhoneNumbers() {
 module.exports = {
   getNextLead,
   startCall,
+  isDialablePhoneNumber,
   getCallStatus,
   getActiveCallForAgent,
   getRawActiveCallForAgent,

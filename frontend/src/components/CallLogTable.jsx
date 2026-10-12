@@ -8,7 +8,10 @@ import { formatDate } from "../utils/format";
 // interval — it only refetches when something actually changed.
 // onCallBack is called with the raw row when the agent confirms the
 // "Call Back" popup for it.
-export default function CallLogTable({ refreshKey, campaignId, onCallBack, canCallBack }) {
+// compact — per explicit request, for the Dialer's narrow-window layout:
+// just Number, Name and Call Date/Time (double-click Call Back still
+// works the same).
+export default function CallLogTable({ refreshKey, campaignId, onCallBack, canCallBack, compact = false }) {
   const [rows, setRows] = useState([]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -116,7 +119,32 @@ export default function CallLogTable({ refreshKey, campaignId, onCallBack, canCa
 
       {!loading && !error && rows.length === 0 && <p>No calls logged today.</p>}
 
-      {!loading && rows.length > 0 && (
+      {!loading && rows.length > 0 && compact && (
+        <table className="call-log-table call-log-table-compact">
+          <thead>
+            <tr>
+              <th>Number</th>
+              <th>Name</th>
+              <th>Call Date/Time</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr
+                key={`${row.direction}-${row.call_log_id}`}
+                onDoubleClick={(e) => handleRowDoubleClick(row, e)}
+                className={canCallBack ? "call-log-row" : ""}
+              >
+                <td>{row.phone_number}</td>
+                <td>{`${row.first_name || ""} ${row.last_name || ""}`.trim() || "—"}</td>
+                <td>{formatDate(row.call_started_at)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      {!loading && rows.length > 0 && !compact && (
         <table className="call-log-table">
           <thead>
             <tr>

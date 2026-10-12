@@ -3,6 +3,7 @@ import { Link, useNavigate, useLocation } from "react-router-dom";
 import Header from "../components/Header";
 import Setup2FAModal from "../modals/Setup2FAModal";
 import { useAuth } from "../context/AuthContext";
+import { openDialerTab, usesSeparateDialerTab } from "../utils/appTabs";
 
 export default function LandingPage() {
   const { agent, setTotpEnabled } = useAuth();
@@ -36,8 +37,11 @@ export default function LandingPage() {
   // hanging").
   //
   // Fixed by making this redirect role-aware, per explicit request:
-  //   - agent/supervisor -> /dialer (they actively work campaigns —
-  //     the dialer IS their default landing spot)
+  //   - agent -> /dialer (the dialer IS their default landing spot)
+  //   - supervisor -> /live-status — UPDATED, per explicit request: the
+  //     Dialer always opens in its own tab for this role (see
+  //     utils/appTabs.js), so this main tab lands on their other work
+  //     instead, and they open the Dialer tab from the header
   //   - training_quality -> /live-status ("Agent Status" — lands here
   //     by default even though, per CampaignSelectPage.jsx's own new
   //     role guard below, they CAN still navigate to /dialer and
@@ -53,13 +57,13 @@ export default function LandingPage() {
     if (location.state?.justLoggedIn) return;
     if (!agent) return;
 
-    if (["agent", "supervisor"].includes(agent.accessLevel)) {
+    if (agent.accessLevel === "agent") {
       navigate("/dialer", { replace: true });
     } else if (["admin", "wfm"].includes(agent.accessLevel)) {
       navigate("/admin", { replace: true });
     } else {
-      // training_quality, account_manager, and anything else not
-      // covered above.
+      // supervisor, training_quality, account_manager, and anything
+      // else not covered above.
       navigate("/live-status", { replace: true });
     }
   }, [location.state, agent, navigate]);
@@ -92,9 +96,18 @@ export default function LandingPage() {
               <p>
                 Your phone extension: <strong>{agent.extension}</strong>
               </p>
-              <Link to="/select-campaign">
-                <button className="button-secondary">Start working a campaign</button>
-              </Link>
+              {usesSeparateDialerTab(agent.accessLevel) ? (
+                // Per explicit request — the Dialer gets its own tab for
+                // this role; it bounces to the campaign picker itself
+                // when no campaign is chosen yet.
+                <button className="button-secondary" onClick={openDialerTab}>
+                  Start working a campaign
+                </button>
+              ) : (
+                <Link to="/select-campaign">
+                  <button className="button-secondary">Start working a campaign</button>
+                </Link>
+              )}
             </>
           ) : ["admin", "account_manager", "wfm"].includes(agent.accessLevel) ? (
             <p>Your account doesn't work campaigns directly — see the nav above for what's available to you.</p>

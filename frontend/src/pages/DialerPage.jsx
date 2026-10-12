@@ -18,6 +18,7 @@ import { formatDuration, durationColorFor } from "../utils/format";
 import { playConnectedBeep } from "../utils/audio";
 import { useFlashingTitle } from "../hooks/useFlashingTitle";
 import { usePhone } from "../context/PhoneContext";
+import { useMediaQuery, COMPACT_DIALER_QUERY } from "../hooks/useMediaQuery";
 
 
 // Agent-selectable statuses. IN_CALL and AFTER_CALL_WORK are set only
@@ -193,6 +194,15 @@ export default function DialerPage() {
   // below. Per explicit request: the two live in the same container,
   // switched between rather than both always showing at once.
   const [callLogTab, setCallLogTab] = useState("callLog"); // "callLog" | "abandonedVoicemail"
+
+  // Per explicit request — agents shrink this window to make room for
+  // other tools. Below 900px wide the page goes single-column with the
+  // phone filling the width, and Call Logs / Abandoned & Voicemail move
+  // into a section that's hidden by default (showHistoryCompact) with a
+  // summarized Number / Name / Call Date-Time table. Full width always
+  // shows them, unchanged.
+  const isCompact = useMediaQuery(COMPACT_DIALER_QUERY);
+  const [showHistoryCompact, setShowHistoryCompact] = useState(false);
   // NEW — per explicit request: manual-dial callback blocking. When a
   // manually-dialed number already has a pending (status = 'NEW')
   // entry in the Abandoned & Voicemail tab, the call is blocked
@@ -867,6 +877,9 @@ export default function DialerPage() {
         dialExtension: dialExtension || "",
       });
     } catch (err) {
+      // The call never started — don't leave the failed number sitting
+      // in Contact Details as if it were the current contact.
+      setLead(null);
       setError(err.message);
     } finally {
       setBusy(false);
@@ -930,6 +943,7 @@ export default function DialerPage() {
   function handleDismissCallbackBlock() {
     setShowCallbackBlockModal(false);
     setCallLogTab("abandonedVoicemail");
+    setShowHistoryCompact(true); // the row it points to must actually be visible in the compact layout too
   }
 
   function handleConfirmManualDialCampaign(campaignId) {
@@ -1710,57 +1724,78 @@ export default function DialerPage() {
                 showAbandonedVoicemailTab's own comment above — an
                 Outbound-only agent/filter sees just Call Logs, with
                 no tab bar at all, same as before this feature existed. */}
-            {showAbandonedVoicemailTab && (
-              <div className="card" style={{ padding: 0, marginBottom: 0 }}>
-                <div style={{ display: "flex", borderBottom: "1px solid #e5e7eb" }}>
-                  <button
-                    type="button"
-                    onClick={() => setCallLogTab("callLog")}
-                    style={{
-                      flex: 1,
-                      padding: "10px 16px",
-                      border: "none",
-                      background: "transparent",
-                      cursor: "pointer",
-                      fontWeight: callLogTab === "callLog" ? 600 : 400,
-                      borderBottom: callLogTab === "callLog" ? "2px solid #1e7e34" : "2px solid transparent",
-                    }}
-                  >
-                    Call Logs
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setCallLogTab("abandonedVoicemail")}
-                    style={{
-                      flex: 1,
-                      padding: "10px 16px",
-                      border: "none",
-                      background: "transparent",
-                      cursor: "pointer",
-                      fontWeight: callLogTab === "abandonedVoicemail" ? 600 : 400,
-                      borderBottom: callLogTab === "abandonedVoicemail" ? "2px solid #1e7e34" : "2px solid transparent",
-                    }}
-                  >
-                    Abandoned & Voicemail
-                  </button>
-                </div>
-              </div>
+            {/* Compact (narrow window) only — history is hidden by
+                default there to keep the phone in view; full width
+                always shows it. */}
+            {isCompact && (
+              <button
+                type="button"
+                className="button-secondary history-toggle"
+                onClick={() => setShowHistoryCompact((prev) => !prev)}
+                aria-expanded={showHistoryCompact}
+              >
+                {showHistoryCompact ? "▾ Hide " : "▸ Show "}
+                {showAbandonedVoicemailTab ? "Call Logs, Abandoned & Voicemail" : "Call Logs"}
+              </button>
             )}
 
-            {callLogTab === "abandonedVoicemail" && showAbandonedVoicemailTab ? (
-              <AbandonedVoicemailTable
-                campaignId={statsCampaignFilter}
-                highlightKey={callbackBlockKey}
-                onCallback={handleAbandonedVoicemailCallback}
-                refreshKey={callLogVersion}
-              />
-            ) : (
-              <CallLogTable
-                refreshKey={callLogVersion}
-                campaignId={statsCampaignFilter}
-                onCallBack={handleCallBack}
-                canCallBack={agentStatus?.status === "READY"}
-              />
+            {(!isCompact || showHistoryCompact) && (
+              <>
+                {showAbandonedVoicemailTab && (
+                  <div className="card" style={{ padding: 0, marginBottom: 0 }}>
+                    <div style={{ display: "flex", borderBottom: "1px solid #e5e7eb" }}>
+                      <button
+                        type="button"
+                        onClick={() => setCallLogTab("callLog")}
+                        style={{
+                          flex: 1,
+                          padding: "10px 16px",
+                          border: "none",
+                          background: "transparent",
+                          cursor: "pointer",
+                          fontWeight: callLogTab === "callLog" ? 600 : 400,
+                          borderBottom: callLogTab === "callLog" ? "2px solid #1e7e34" : "2px solid transparent",
+                        }}
+                      >
+                        Call Logs
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setCallLogTab("abandonedVoicemail")}
+                        style={{
+                          flex: 1,
+                          padding: "10px 16px",
+                          border: "none",
+                          background: "transparent",
+                          cursor: "pointer",
+                          fontWeight: callLogTab === "abandonedVoicemail" ? 600 : 400,
+                          borderBottom: callLogTab === "abandonedVoicemail" ? "2px solid #1e7e34" : "2px solid transparent",
+                        }}
+                      >
+                        Abandoned & Voicemail
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {callLogTab === "abandonedVoicemail" && showAbandonedVoicemailTab ? (
+                  <AbandonedVoicemailTable
+                    campaignId={statsCampaignFilter}
+                    highlightKey={callbackBlockKey}
+                    onCallback={handleAbandonedVoicemailCallback}
+                    refreshKey={callLogVersion}
+                    compact={isCompact}
+                  />
+                ) : (
+                  <CallLogTable
+                    refreshKey={callLogVersion}
+                    campaignId={statsCampaignFilter}
+                    onCallBack={handleCallBack}
+                    canCallBack={agentStatus?.status === "READY"}
+                    compact={isCompact}
+                  />
+                )}
+              </>
             )}
           </div>
         </div>

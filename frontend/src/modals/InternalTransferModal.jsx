@@ -1,5 +1,4 @@
-import { useEffect, useState } from "react";
-import { api } from "../api";
+import { useState } from "react";
 
 /*
 ==================================================
@@ -19,43 +18,28 @@ choice to hang up or stay on is what actually distinguishes a handoff
 from a true 3-way, not the button). This modal now has a single
 Transfer action instead of two.
 
+UPDATED, per explicit request — lists only agents who can actually
+take the transfer right now (status READY), supplied by MiniPhone via
+the shared useAvailableTransferAgents hook so this list and the
+Internal Transfer button's enabled state always agree. agents is null
+while the first load is still in flight. A note underneath points
+agents to Line 2 for outside numbers, which this modal can't dial.
+
 Selection is just local UI state (radio-button-style row highlight) —
 nothing is sent to the backend until Transfer is actually clicked.
 ==================================================
 */
-const STATUS_LABELS = {
-  READY: "Ready",
-  NOT_READY: "Not Ready",
-  IN_CALL: "On a Call",
-  ON_HOLD: "On Hold",
-  AFTER_CALL_WORK: "After Call Work",
-  MICROSIP_OUTBOUND: "On a Call",
-  LOGGED_OUT: "Logged Out",
-  AD_HOC: "Ad Hoc",
-  LUNCH_BREAK: "Lunch/Break",
-  BIO_BREAK: "Bio Break",
-  ADMIN: "Admin",
-  MEETING: "Meeting",
-  TRAINING: "Training",
-};
-
-export default function InternalTransferModal({ campaignId, onClose, onTransfer }) {
-  const [agents, setAgents] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+export default function InternalTransferModal({ agents, error, onClose, onTransfer }) {
   const [selectedExtension, setSelectedExtension] = useState(null);
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
-    api
-      .getCampaignAgents(campaignId)
-      .then((data) => setAgents(data.agents || []))
-      .catch((err) => setError(err.message))
-      .finally(() => setLoading(false));
-  }, [campaignId]);
+  // The list refreshes while the modal is open — if the picked agent
+  // stops being Ready in the meantime, their row disappears and the
+  // selection no longer counts.
+  const selectionAvailable = Boolean(agents?.some((a) => a.extension === selectedExtension));
 
   async function handleTransferClick() {
-    if (!selectedExtension) return;
+    if (!selectionAvailable) return;
     setBusy(true);
     try {
       await onTransfer(selectedExtension);
@@ -76,10 +60,10 @@ export default function InternalTransferModal({ campaignId, onClose, onTransfer 
 
         {error && <div className="error">{error}</div>}
 
-        {loading ? (
+        {agents === null ? (
           <p>Loading…</p>
         ) : agents.length === 0 ? (
-          <p>No other agents are assigned to this campaign.</p>
+          <p>No agents on this campaign are Ready right now.</p>
         ) : (
           <table className="call-log-table">
             <thead>
@@ -87,7 +71,6 @@ export default function InternalTransferModal({ campaignId, onClose, onTransfer 
                 <th></th>
                 <th>Name</th>
                 <th>Extension</th>
-                <th>Status</th>
               </tr>
             </thead>
             <tbody>
@@ -107,7 +90,6 @@ export default function InternalTransferModal({ campaignId, onClose, onTransfer 
                   </td>
                   <td>{a.fullName}</td>
                   <td>{a.extension}</td>
-                  <td>{STATUS_LABELS[a.status] || a.status}</td>
                 </tr>
               ))}
             </tbody>
@@ -119,11 +101,16 @@ export default function InternalTransferModal({ campaignId, onClose, onTransfer 
             type="button"
             className="button-secondary"
             onClick={handleTransferClick}
-            disabled={!selectedExtension || busy}
+            disabled={!selectionAvailable || busy}
           >
             {busy ? "Transferring…" : "Transfer"}
           </button>
         </div>
+
+        <p style={{ fontSize: 13, color: "#667085", margin: "14px 0 0" }}>
+          Transferring to an outside number? Use <strong>Line 2</strong> instead: put this call on hold, switch to Line
+          2, dial the number, then use Connect Line 1.
+        </p>
       </div>
     </div>
   );

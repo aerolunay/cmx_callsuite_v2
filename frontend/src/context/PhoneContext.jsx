@@ -1,7 +1,9 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { useLocation } from "react-router-dom";
 import JsSIP from "jssip";
 import { api } from "../api";
 import { useAuth } from "./AuthContext";
+import { isDialerTabPath } from "../utils/appTabs";
 
 /*
 ==================================================
@@ -46,14 +48,123 @@ const CALL_STATES = {
 
 const PhoneContext = createContext(null);
 
+/*
+==================================================
+One phone per browser: the Dialer tab owns it — per explicit request
+==================================================
+Every tab of this app runs its own PhoneProvider, and each extension
+allows two registrations (max_contacts = 2, see adminRoutes.js). With
+the Dialer in its own tab (supervisor/training_quality — see
+utils/appTabs.js) plus a main tab, BOTH would register, and Asterisk
+could ring the main tab for a call the Dialer tab placed — where
+nothing auto-answers it, so it times out.
+
+So: while any tab is on the dialer, it holds the DIALER_TAB_LOCK Web
+Lock, and every OTHER tab unregisters its phone (stands down) — as soon
+as it's not mid-call, so e.g. a Silent Listen in progress isn't cut
+off. When the Dialer tab closes or leaves the dialer, the lock is
+released and the other tabs register again on their own.
+
+Web Locks rather than a heartbeat timer on purpose: Chrome throttles
+background-tab timers to as little as once a minute, and the Dialer
+tab is usually in the background — a heartbeat would go stale and make
+other tabs wrongly register too. A held lock is released by the
+browser itself when the tab closes, and waiting on it costs nothing.
+DIALER_TAB_CHANNEL just tells already-open tabs "a Dialer tab just
+took the lock — re-check now". Browsers without Web Locks keep the old
+behavior (every tab registers).
+==================================================
+*/
+const DIALER_TAB_LOCK = "cmx-dialer-tab";
+const DIALER_TAB_CHANNEL = "cmx-dialer-tab";
+
 export function PhoneProvider({ children }) {
   const { agent } = useAuth();
   const isLoggedIn = Boolean(agent);
+  const location = useLocation();
+  const isDialerTab = isDialerTabPath(location.pathname);
+  const [dialerOpenElsewhere, setDialerOpenElsewhere] = useState(false);
 
   const [registered, setRegistered] = useState(false);
   const [registrationError, setRegistrationError] = useState("");
   const [callState, setCallState] = useState(CALL_STATES.IDLE);
   const [remoteIdentity, setRemoteIdentity] = useState("");
+
+  // This tab is on the dialer: hold the lock (and announce it) until it
+  // isn't — or the tab closes, which releases it automatically.
+  useEffect(() => {
+    if (!isLoggedIn || !isDialerTab || !navigator.locks || typeof BroadcastChannel === "undefined") return;
+    const controller = new AbortController();
+    let release = null;
+    navigator.locks
+      .request(DIALER_TAB_LOCK, { signal: controller.signal }, () => {
+        const channel = new BroadcastChannel(DIALER_TAB_CHANNEL);
+        channel.postMessage("dialer-tab-opened");
+        channel.close();
+        return new Promise((resolve) => {
+          release = resolve;
+        });
+      })
+      .catch(() => {
+        // Aborted before it was granted (another Dialer tab holds it —
+        // this one simply keeps its own phone, same as before).
+      });
+    return () => {
+      controller.abort();
+      release?.();
+    };
+  }, [isLoggedIn, isDialerTab]);
+
+  // Any other tab: is a Dialer tab open somewhere? Checked on load and
+  // whenever one announces itself; a pending lock request then waits —
+  // free — until that Dialer tab lets go.
+  useEffect(() => {
+    if (!isLoggedIn || isDialerTab || !navigator.locks || typeof BroadcastChannel === "undefined") return;
+    let cancelled = false;
+    let waitController = null;
+
+    async function watch() {
+      waitController?.abort();
+      let snapshot;
+      try {
+        snapshot = await navigator.locks.query();
+      } catch {
+        return;
+      }
+      if (cancelled) return;
+      if (!(snapshot.held || []).some((lock) => lock.name === DIALER_TAB_LOCK)) {
+        setDialerOpenElsewhere(false);
+        return;
+      }
+      setDialerOpenElsewhere(true);
+      const controller = new AbortController();
+      waitController = controller;
+      navigator.locks
+        .request(DIALER_TAB_LOCK, { signal: controller.signal }, () => {
+          // Granted = the Dialer tab is gone. Returning releases it at once.
+          if (!cancelled) setDialerOpenElsewhere(false);
+        })
+        .catch(() => {
+          // Aborted — a re-check or this effect's cleanup replaced it.
+        });
+    }
+
+    watch();
+    const channel = new BroadcastChannel(DIALER_TAB_CHANNEL);
+    channel.onmessage = (event) => {
+      if (event.data === "dialer-tab-opened") watch();
+    };
+    return () => {
+      cancelled = true;
+      waitController?.abort();
+      channel.close();
+    };
+  }, [isLoggedIn, isDialerTab]);
+
+  // Stand down only between calls — never drop one in progress.
+  const midCall = callState === CALL_STATES.ACTIVE || callState === CALL_STATES.INCOMING;
+  const standDown = !isDialerTab && dialerOpenElsewhere;
+  const phoneEnabled = isLoggedIn && (!standDown || midCall);
 
   const uaRef = useRef(null);
   const sessionRef = useRef(null);
@@ -88,7 +199,12 @@ export function PhoneProvider({ children }) {
     // the connection down (ua.stop() below), and logging back in
     // (even as a different agent, same tab) correctly re-establishes
     // it fresh.
-    if (!isLoggedIn) {
+    //
+    // UPDATED — now gated on phoneEnabled (logged in AND not standing
+    // down for a Dialer tab elsewhere — see the "One phone per browser"
+    // note above), so standing down / taking the phone back reuses this
+    // exact same teardown / re-register path as logout / login.
+    if (!phoneEnabled) {
       // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: tearing down phone state on a login-state transition, not a data fetch, but the same legitimate "synchronize on a specific change" case.
       setRegistered(false);
       setRegistrationError("");
@@ -241,10 +357,10 @@ export function PhoneProvider({ children }) {
 
     init();
 
-    // Runs on logout (isLoggedIn flips to false, re-running this
-    // effect) as well as an actual full page unload/reload or the
-    // whole React tree unmounting — not on ordinary in-app route
-    // changes while still logged in, since isLoggedIn doesn't change
+    // Runs on logout or standing down (phoneEnabled flips to false,
+    // re-running this effect) as well as an actual full page
+    // unload/reload or the whole React tree unmounting — not on
+    // ordinary in-app route changes, since phoneEnabled doesn't change
     // then and this effect doesn't re-run at all.
     return () => {
       cancelled = true;
@@ -253,7 +369,7 @@ export function PhoneProvider({ children }) {
         uaRef.current = null;
       }
     };
-  }, [isLoggedIn]);
+  }, [phoneEnabled]);
 
   const answer = useCallback(() => {
     if (sessionRef.current && sessionIsIncomingRef.current) {
@@ -309,8 +425,23 @@ export function PhoneProvider({ children }) {
       // remoteAudioRef fresh on every call, not captured once, so it
       // always reflects whatever's actually live right now.
       getOutputSinkId: () => remoteAudioRef.current?.sinkId || "",
+      // true in a non-Dialer tab while a Dialer tab holds the phone
+      // (see "One phone per browser" above) — InboundCallRedirector
+      // uses it to leave this tab alone, since the call rings there.
+      dialerOpenElsewhere: !isDialerTab && dialerOpenElsewhere,
     }),
-    [registered, registrationError, callState, remoteIdentity, answer, hangup, toggleMute, dial]
+    [
+      registered,
+      registrationError,
+      callState,
+      remoteIdentity,
+      answer,
+      hangup,
+      toggleMute,
+      dial,
+      isDialerTab,
+      dialerOpenElsewhere,
+    ]
   );
 
   return <PhoneContext.Provider value={contextValue}>{children}</PhoneContext.Provider>;

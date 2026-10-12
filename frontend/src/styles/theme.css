@@ -731,7 +731,9 @@ away from the screen at that exact moment.
    Mobile (default): single column, natural DOM order —
      status bar -> dial button -> contact details -> call status ->
      disposition -> call log (always last, so always "at the bottom").
-   Desktop (>=900px): two columns — main flow on the left, contact
+   Desktop (>=900px — was 700px; per explicit request, agents shrink
+     this window beside other tools, and between 700-900px the phone
+     got squeezed into a ~1/3 column): two columns — main flow on the left, contact
      details top-right + call log bottom-right. Achieved by rendering
      ContactDetailsCard TWICE (once inline in .dialer-main for mobile,
      once in .dialer-side for desktop) and toggling which copy is
@@ -750,7 +752,7 @@ away from the screen at that exact moment.
   display: block;
 }
 
-@media (min-width: 700px) {
+@media (min-width: 900px) {
   .dialer-layout {
     grid-template-columns: 1fr 2fr;
     gap: 20px;
@@ -775,6 +777,66 @@ away from the screen at that exact moment.
   .contact-desktop-only {
     display: block;
   }
+}
+
+/* ===== Compact dialer (narrow window), per explicit request =====
+   Same width as COMPACT_DIALER_QUERY in hooks/useMediaQuery.js. The
+   phone and status bar fill the window instead of stopping at 420px,
+   page padding shrinks, and the header wraps instead of overflowing.
+   Call history goes behind the .history-toggle button (DialerPage). */
+@media (max-width: 899px) {
+  .page-content.page-content-wide {
+    padding: 12px;
+  }
+
+  /* Without this the single grid column grows to its widest child's
+     content and pushes the whole page past the window's right edge. */
+  .dialer-main,
+  .dialer-side {
+    min-width: 0;
+  }
+
+  /* Two-part selector so it beats .stats-grid-4's own rule, which
+     comes later in this file. */
+  .dialer-side .stats-grid-4 {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .dialer-main .status-bar,
+  .dialer-main .phone-widget {
+    max-width: none;
+  }
+
+  .header {
+    height: auto;
+    min-height: 72px;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 8px 12px;
+  }
+
+  .header-right {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .header-admin-link {
+    margin-right: 0;
+  }
+
+  .header-user .meta {
+    display: none;
+  }
+}
+
+.history-toggle {
+  width: 100%;
+  margin-bottom: 12px;
+  text-align: left;
+}
+
+.call-log-table-compact td {
+  white-space: nowrap;
 }
 
 /* ===== Contact details card ===== */
@@ -1227,6 +1289,36 @@ away from the screen at that exact moment.
   color: white;
 }
 
+/* "Enter a 10-digit number" prompt — per explicit request, a tooltip
+   bubble hanging off the display rather than a line of text, so it
+   overlays the keypad instead of pushing the layout down. */
+.phone-display-tooltip {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: #ffffff;
+  color: var(--cmx-navy);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  pointer-events: none;
+}
+
+.phone-display-tooltip::before {
+  content: "";
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 6px solid transparent;
+  border-bottom-color: #ffffff;
+}
+
 /* Small caption above the display while on a call (Calling / Connected / On hold). */
 .phone-call-state {
   text-align: center;
@@ -1295,7 +1387,7 @@ away from the screen at that exact moment.
    Call / red Hang Up underneath, 3CX-style. */
 .phone-controls {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 8px;
   margin: 4px 0 14px;
 }
@@ -1338,6 +1430,10 @@ away from the screen at that exact moment.
 
 .phone-round:disabled {
   opacity: 0.35;
+  pointer-events: none; /* lets hover reach the wrapper's tooltip (e.g. "No agents available") */
+}
+
+.phone-round-wrap-disabled {
   cursor: not-allowed;
 }
 
@@ -1377,8 +1473,21 @@ away from the screen at that exact moment.
   background: #9c4a0c;
 }
 
+/* On/off view toggle that's currently on (Keypad shown) — a light
+   fill, deliberately not the orange "engaged" Mute/Hold color. */
+.phone-round-toggled {
+  background: rgba(255, 255, 255, 0.85);
+  color: var(--cmx-navy);
+}
+
+.phone-round-toggled:hover:not(:disabled) {
+  background: #ffffff;
+}
+
 .phone-round-label {
+  max-width: 84px;
   font-size: 11px;
+  line-height: 1.25;
   color: #cfd6e4;
   text-align: center;
 }

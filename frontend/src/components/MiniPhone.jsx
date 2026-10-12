@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { usePhone } from "../context/PhoneContext";
 import InternalTransferModal from "../modals/InternalTransferModal";
+import { useAvailableTransferAgents } from "../hooks/useAvailableTransferAgents";
 import { playDtmfTone } from "../utils/audio";
 
 /*
@@ -61,10 +62,13 @@ onHangUp (DialerPage's api.endCall/endInboundCall — which hangs up
 BOTH channels via AMI and explicitly triggers markCallEnded) before
 also calling phone.hangup() for JsSIP's own local cleanup.
 
-Controls follow the call state like a real softphone, rather than
-showing every button disabled: idle shows just the green Call button;
-ringing shows Answer/Decline; on a call shows Mute/Hold/Transfer (or
-Connect Line 1 on Line 2) plus a red Hang Up.
+Per explicit request, the call controls are ALWAYS visible on both
+lines — Mute, Hold, Keypad (show/hide toggle) and Internal Transfer
+(Connect Line 1 on Line 2), then the green Call and red Hang Up — each
+just enabled/disabled for the current state. Call/Hang Up become
+Answer/Decline while ringing, and Try Again/Give Up after a Line 2 no
+answer. Only the keypad itself can be hidden; that choice is
+remembered per browser.
 
 The dial display is digits only up to the first comma (the phone
 number), then 0-9 * # and more commas (the extension / pauses).
@@ -87,6 +91,27 @@ const isAutoAnswerStatus = (status) => status === "READY" || status === "IN_CALL
 
 // Matches the backend's own limit (dialerService.normalizeAutoDtmf).
 const MAX_EXT_LENGTH = 40;
+
+// Keypad show/hide, per explicit request — a per-browser convenience
+// (localStorage), so it can be missing or blocked; the keypad simply
+// defaults to shown then.
+const KEYPAD_PREF_KEY = "cmx.miniphone.showKeypad";
+
+function readKeypadPreference() {
+  try {
+    return localStorage.getItem(KEYPAD_PREF_KEY) !== "0";
+  } catch {
+    return true;
+  }
+}
+
+function saveKeypadPreference(show) {
+  try {
+    localStorage.setItem(KEYPAD_PREF_KEY, show ? "1" : "0");
+  } catch {
+    // Not remembered next time — harmless.
+  }
+}
 
 // Holding the * key types a comma (pause), the same as most mobile
 // dialers — the only way to enter one from the on-screen keypad.
@@ -121,6 +146,24 @@ function splitDialString(value) {
   if (commaAt === -1) return { number: value, ext: "" };
   const ext = value.slice(commaAt + 1);
   return { number: value.slice(0, commaAt), ext: /[0-9*#]/.test(ext) ? ext : "" };
+}
+
+// Same rule as the backend's dialerService.isDialablePhoneNumber — the
+// outbound dialplan only routes 10 digits (or 11 with a leading 1).
+// Anything else used to ring the agent first and then fail in Asterisk
+// with "Extension does not exist."
+function isDialableNumber(number) {
+  const digits = number.length === 11 && number.startsWith("1") ? number.slice(1) : number;
+  return /^\d{10}$/.test(digits);
+}
+
+// Per explicit request — shown as a tooltip (bubble under the display,
+// and on the disabled Call button), not a line of text. "" when the
+// number is fine or nothing's been typed yet.
+function dialNumberHint(number) {
+  if (!number || isDialableNumber(number)) return "";
+  if (number.length < 10) return `Enter a 10-digit number — ${number.length} so far`;
+  return "Enter a 10-digit number (or 11 starting with 1)";
 }
 
 const KEYPAD_KEYS = [
@@ -215,6 +258,11 @@ const ICONS = {
       <path d="M6 21V9a9 9 0 0 0 9 9" />
     </Icon>
   ),
+  keypad: (
+    <Icon>
+      {[5, 12, 19].flatMap((y) => [5, 12, 19].map((x) => <circle key={`${x}-${y}`} cx={x} cy={y} r="1.5" />))}
+    </Icon>
+  ),
   backspace: (
     <Icon>
       <path d="M21 4H8l-7 8 7 8h13a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2z" />
@@ -226,24 +274,40 @@ const ICONS = {
 
 // Round softphone button with an optional caption underneath.
 // variant: "neutral" (Mute/Hold/Transfer) | "call" (green) | "end" (red).
-function RoundButton({ icon, label, title, onClick, disabled, variant = "neutral", active = false, large = false }) {
+// active = engaged Mute/Hold (warning color); toggled = an on/off view
+// toggle that's currently on (Keypad shown).
+function RoundButton({
+  icon,
+  label,
+  title,
+  onClick,
+  disabled,
+  variant = "neutral",
+  active = false,
+  toggled = false,
+  large = false,
+}) {
   const className = [
     "phone-round",
     `phone-round-${variant}`,
     active ? "phone-round-active" : "",
+    toggled ? "phone-round-toggled" : "",
     large ? "phone-round-lg" : "",
   ]
     .filter(Boolean)
     .join(" ");
+  // The tooltip also lives on the wrapper: a disabled <button> swallows
+  // hover in some browsers, so the reason it's disabled (e.g. "No
+  // agents available") would otherwise never show. CSS lets hover pass
+  // through a disabled button to this wrapper.
   return (
-    <div className="phone-round-wrap">
+    <div className={`phone-round-wrap${disabled ? " phone-round-wrap-disabled" : ""}`} title={title || label}>
       <button
         type="button"
         className={className}
         onClick={onClick}
         disabled={disabled}
-        title={title || label}
-        aria-label={title || label}
+        aria-label={label || title}
       >
         {icon}
       </button>
@@ -369,6 +433,16 @@ export function MiniPhone({
 
   const [showInternalTransferModal, setShowInternalTransferModal] = useState(false);
 
+  // Ready agents on this campaign, kept fresh while on a call — drives
+  // both the Internal Transfer button ("No agents available") and the
+  // modal's list. null = not loaded yet (unknown, NOT "none").
+  const {
+    agents: transferAgents,
+    error: transferAgentsError,
+    refresh: refreshTransferAgents,
+  } = useAvailableTransferAgents(campaignId, phone.callState === phone.CALL_STATES.ACTIVE);
+  const noTransferAgents = transferAgents !== null && transferAgents.length === 0;
+
   // Keypad, shared by both line panels — it always acts on the line
   // being viewed. Before that line is dialed it types into its display
   // (dialNumber / targetInput); on a call it sends tones. dtmfSent
@@ -382,6 +456,7 @@ export function MiniPhone({
   const dtmfQueueRef = useRef(Promise.resolve());
   const longPressTimerRef = useRef(null);
   const longPressFiredRef = useRef(false);
+  const [showKeypad, setShowKeypad] = useState(readKeypadPreference);
 
   // Dial with extension — the part after the comma in the display,
   // auto-sent by the backend once the far end answers (see
@@ -442,7 +517,7 @@ export function MiniPhone({
 
   async function handleStartLineTwo() {
     const { number, ext } = splitDialString(targetInput);
-    if (!number) return;
+    if (!isDialableNumber(number)) return;
     setTargetError("");
     setLineTwoBusy(true);
     try {
@@ -790,7 +865,7 @@ export function MiniPhone({
 
   function handleCall() {
     const { number, ext } = splitDialString(dialNumber);
-    if (!canDial || !number) return;
+    if (!canDial || !isDialableNumber(number)) return;
     onManualDial(number, ext);
     setDialNumber("");
     setDtmfSent((prev) => ({ ...prev, 1: "" }));
@@ -800,6 +875,8 @@ export function MiniPhone({
   const isIncoming = phone.callState === phone.CALL_STATES.INCOMING;
   const isActive = phone.callState === phone.CALL_STATES.ACTIVE;
   const canDial = phone.registered && agentStatus === "READY" && !hasActiveCall && isIdle;
+  const lineTwoFailed = Boolean(lineTwoStatus?.active && lineTwoStatus.status === "failed");
+  const lineTwoLive = Boolean(lineTwoStatus?.active && lineTwoStatus.status !== "failed"); // ringing or connected
 
   function callStateText(line) {
     if (line === 1) {
@@ -832,7 +909,7 @@ export function MiniPhone({
     }
 
     const value = dialValue(line);
-    const { ext } = splitDialString(value);
+    const { number, ext } = splitDialString(value);
     const startDial = line === 1 ? handleCall : handleStartLineTwo;
     return (
       <>
@@ -859,12 +936,15 @@ export function MiniPhone({
               {ICONS.backspace}
             </button>
           )}
+          {dialNumberHint(number) && (
+            <div className="phone-display-tooltip" role="status">
+              {dialNumberHint(number)}
+            </div>
+          )}
         </div>
-        <p className="phone-hint phone-hint-center">
-          {ext
-            ? `Ext ${ext} dials automatically after answer.`
-            : "Optional: add an extension after a comma (hold ✱), e.g. 5551234567,101 — or use the keypad once connected"}
-        </p>
+        {isDialableNumber(number) && ext && (
+          <p className="phone-hint phone-hint-center">Ext {ext} dials automatically after answer.</p>
+        )}
       </>
     );
   }
@@ -874,29 +954,52 @@ export function MiniPhone({
     const ready = keypadReady(line);
     return (
       <>
-        <div className="phone-keypad">
-          {KEYPAD_KEYS.map(([key, sub]) => (
-            <button
-              key={key}
-              type="button"
-              className="phone-keypad-key"
-              onClick={() => handleKeyClick(key)}
-              onPointerDown={() => handleKeyPointerDown(key)}
-              onPointerUp={cancelLongPress}
-              onPointerLeave={cancelLongPress}
-              disabled={!ready}
-              title={key === "*" && mode === "dial" ? "Hold for a comma (pause before an extension)" : undefined}
-            >
-              <span className="phone-keypad-digit">{key === "*" ? "✱" : key}</span>
-              <span className="phone-keypad-sub">{sub}</span>
-            </button>
-          ))}
-        </div>
-        {!ready && mode === "dtmf" && !(line === 1 && isIncoming) && (
-          <p className="phone-hint phone-hint-center">{keypadHint(line)}</p>
+        {showKeypad && (
+          <>
+            <div className="phone-keypad">
+              {KEYPAD_KEYS.map(([key, sub]) => (
+                <button
+                  key={key}
+                  type="button"
+                  className="phone-keypad-key"
+                  onClick={() => handleKeyClick(key)}
+                  onPointerDown={() => handleKeyPointerDown(key)}
+                  onPointerUp={cancelLongPress}
+                  onPointerLeave={cancelLongPress}
+                  disabled={!ready}
+                  title={key === "*" && mode === "dial" ? "Hold for a comma (pause before an extension)" : undefined}
+                >
+                  <span className="phone-keypad-digit">{key === "*" ? "✱" : key}</span>
+                  <span className="phone-keypad-sub">{sub}</span>
+                </button>
+              ))}
+            </div>
+            {!ready && mode === "dtmf" && !(line === 1 && isIncoming) && (
+              <p className="phone-hint phone-hint-center">{keypadHint(line)}</p>
+            )}
+          </>
         )}
+        {/* Outside the keypad: keyboard digits still send tones while
+            it's hidden, so their errors must still show. */}
         {dtmfError && <div className="error phone-extra-error">{dtmfError}</div>}
       </>
+    );
+  }
+
+  function handleToggleKeypad() {
+    const next = !showKeypad;
+    setShowKeypad(next);
+    saveKeypadPreference(next);
+  }
+
+  function renderKeypadToggle() {
+    return (
+      <RoundButton
+        icon={ICONS.keypad}
+        label={showKeypad ? "Hide Keypad" : "Keypad"}
+        toggled={showKeypad}
+        onClick={handleToggleKeypad}
+      />
     );
   }
 
@@ -937,65 +1040,64 @@ export function MiniPhone({
           {renderDisplay(1)}
           {renderKeypad(1)}
 
-          {isIdle ? (
-            <div className="phone-main-actions">
+          <div className="phone-controls">
+            <RoundButton
+              icon={isMuted ? ICONS.micOff : ICONS.mic}
+              label={isMuted ? "Unmute" : "Mute"}
+              active={isMuted}
+              onClick={handleToggleMute}
+              disabled={!isActive}
+            />
+            <RoundButton
+              icon={onHold ? ICONS.resume : ICONS.pause}
+              label={onHold ? "Unhold" : "Hold"}
+              active={onHold}
+              onClick={onToggleHold}
+              disabled={!canHold}
+            />
+            {renderKeypadToggle()}
+            {/* Per explicit request — Internal Transfer lives only on
+                Line 1's panel, disabled once Line 2 already has a live
+                call (can't start a second Line 2 while one exists), or
+                when no agent on the campaign is Ready to take it. */}
+            <RoundButton
+              icon={ICONS.transfer}
+              label="Internal Transfer"
+              title={noTransferAgents ? "No agents available" : "Internal Transfer"}
+              onClick={() => {
+                refreshTransferAgents();
+                setShowInternalTransferModal(true);
+              }}
+              disabled={!isActive || lineTwoBusy || !campaignId || Boolean(lineTwoStatus?.active) || noTransferAgents}
+            />
+          </div>
+
+          <div className="phone-main-actions">
+            {isIncoming ? (
+              <RoundButton large variant="call" icon={ICONS.call} label="Answer" onClick={phone.answer} />
+            ) : (
               <RoundButton
                 large
                 variant="call"
                 icon={ICONS.call}
-                title="Call"
+                label="Call"
+                title={dialNumberHint(splitDialString(dialNumber).number) || undefined}
                 onClick={handleCall}
-                disabled={!canDial || !splitDialString(dialNumber).number}
+                disabled={!canDial || !isDialableNumber(splitDialString(dialNumber).number)}
               />
-            </div>
-          ) : isIncoming ? (
-            <div className="phone-main-actions">
-              <RoundButton large variant="call" icon={ICONS.call} label="Answer" onClick={phone.answer} />
-              <RoundButton large variant="end" icon={ICONS.hangup} label="Decline" onClick={handleHangUpClick} />
-            </div>
-          ) : (
-            <>
-              <div className="phone-controls">
-                <RoundButton
-                  icon={isMuted ? ICONS.micOff : ICONS.mic}
-                  label={isMuted ? "Unmute" : "Mute"}
-                  active={isMuted}
-                  onClick={handleToggleMute}
-                  disabled={!isActive}
-                />
-                <RoundButton
-                  icon={onHold ? ICONS.resume : ICONS.pause}
-                  label={onHold ? "Unhold" : "Hold"}
-                  active={onHold}
-                  onClick={onToggleHold}
-                  disabled={!canHold}
-                />
-                {/* Per explicit request — Internal Transfer lives only on
-                    Line 1's panel, disabled once Line 2 already has a
-                    live call (can't start a second Line 2 while one
-                    exists). */}
-                <RoundButton
-                  icon={ICONS.transfer}
-                  label="Transfer"
-                  title="Internal Transfer"
-                  onClick={() => setShowInternalTransferModal(true)}
-                  disabled={!isActive || lineTwoBusy || !campaignId || Boolean(lineTwoStatus?.active)}
-                />
-              </div>
-              <div className="phone-main-actions">
-                <RoundButton
-                  large
-                  variant="end"
-                  icon={ICONS.hangup}
-                  // Hang Up is disabled while a Line 2 action is actually
-                  // in flight — re-enabled the instant it resolves.
-                  title={lineTwoBusy ? "Please wait for the Line 2 action to finish" : "Hang Up"}
-                  onClick={handleHangUpClick}
-                  disabled={!isActive || lineTwoBusy}
-                />
-              </div>
-            </>
-          )}
+            )}
+            <RoundButton
+              large
+              variant="end"
+              icon={ICONS.hangup}
+              label={isIncoming ? "Decline" : "Hang Up"}
+              // Hang Up is disabled while a Line 2 action is actually
+              // in flight — re-enabled the instant it resolves.
+              title={lineTwoBusy ? "Please wait for the Line 2 action to finish" : undefined}
+              onClick={handleHangUpClick}
+              disabled={(!isIncoming && !isActive) || lineTwoBusy}
+            />
+          </div>
 
           {!canDial && isIdle && (
             <p className="phone-hint phone-hint-center">
@@ -1009,82 +1111,40 @@ export function MiniPhone({
 
           {targetError && <div className="error phone-extra-error">{targetError}</div>}
         </>
-      ) : !lineTwoStatus?.active ? (
-        // Line 2 tab selected, but nothing dialed yet — an empty
-        // panel matching Line 1's own layout. Purely a local view
-        // change to get here; nothing backend-side happens until Call
-        // is actually clicked.
-        <>
-          {renderDisplay(2)}
-          {renderKeypad(2)}
-          <div className="phone-main-actions">
-            <RoundButton
-              large
-              variant="call"
-              icon={ICONS.call}
-              title="Call on Line 2"
-              onClick={handleStartLineTwo}
-              disabled={lineTwoBusy || !splitDialString(targetInput).number}
-            />
-          </div>
-          {lineTwoBusy && <p className="phone-hint phone-hint-center">Calling…</p>}
-          {targetError && <div className="error phone-extra-error">{targetError}</div>}
-        </>
-      ) : lineTwoStatus.status === "failed" ? (
-        // Per explicit request: if Line 2 doesn't pick up, the agent
-        // must be able to try dialing again — reusing the same
-        // private room, Line 1 stays held throughout.
-        <>
-          <div className="error phone-extra-error">Line 2 didn't answer.</div>
-          {renderDisplay(2)}
-          {renderKeypad(2)}
-          <div className="phone-main-actions">
-            <RoundButton
-              large
-              variant="call"
-              icon={ICONS.call}
-              label={lineTwoBusy ? "Calling…" : "Try Again"}
-              onClick={handleStartLineTwo}
-              disabled={lineTwoBusy || !splitDialString(targetInput).number}
-            />
-            <RoundButton
-              large
-              variant="end"
-              icon={ICONS.hangup}
-              label="Give Up"
-              onClick={handleCancelLineTwoClick}
-              disabled={lineTwoBusy}
-            />
-          </div>
-          {targetError && <div className="error phone-extra-error">{targetError}</div>}
-        </>
       ) : (
-        // Line 2 is ringing or connected. Mute/Hang Up reuse the same
-        // underlying JsSIP session state as Line 1 (isActive) — it's
-        // the agent's own single audio session throughout; only WHICH
-        // ASTERISK ROOM it's server-side-redirected to changes when
-        // switching lines, not the session itself. Hold is genuinely
-        // per-line (Line 2's own target), so it's gated on Line 2
-        // actually having connected to someone.
+        // Line 2 — three states share one layout: not dialed yet (or a
+        // no-answer retry), and ringing/connected. Mute/Hang Up reuse
+        // the same underlying JsSIP session state as Line 1 (isActive)
+        // — it's the agent's own single audio session throughout; only
+        // WHICH ASTERISK ROOM it's server-side-redirected to changes
+        // when switching lines, not the session itself. Hold is
+        // genuinely per-line (Line 2's own target), so it's gated on
+        // Line 2 actually having connected to someone.
         <>
+          {/* Per explicit request: if Line 2 doesn't pick up, the agent
+              must be able to try dialing again — reusing the same
+              private room, Line 1 stays held throughout. */}
+          {lineTwoFailed && <div className="error phone-extra-error">Line 2 didn't answer.</div>}
           {renderDisplay(2)}
           {renderKeypad(2)}
+
           <div className="phone-controls">
             <RoundButton
               icon={isMuted ? ICONS.micOff : ICONS.mic}
               label={isMuted ? "Unmute" : "Mute"}
               active={isMuted}
               onClick={handleToggleMute}
-              disabled={!isActive}
+              disabled={!lineTwoLive || !isActive}
             />
             <RoundButton
-              icon={lineTwoStatus.line2OnHold ? ICONS.resume : ICONS.pause}
-              label={lineTwoStatus.line2OnHold ? "Unhold" : "Hold"}
-              title={lineTwoStatus.line2OnHold ? "Unhold Line 2" : "Hold Line 2"}
-              active={lineTwoStatus.line2OnHold}
-              onClick={lineTwoStatus.line2OnHold ? handleUnholdLineTwoClick : handleHoldLineTwoClick}
-              disabled={!lineTwoStatus.line2HasConnected || lineTwoBusy}
+              icon={lineTwoStatus?.line2OnHold ? ICONS.resume : ICONS.pause}
+              label={lineTwoStatus?.line2OnHold ? "Unhold" : "Hold"}
+              title={lineTwoStatus?.line2OnHold ? "Unhold Line 2" : "Hold Line 2"}
+              active={Boolean(lineTwoStatus?.line2OnHold)}
+              onClick={lineTwoStatus?.line2OnHold ? handleUnholdLineTwoClick : handleHoldLineTwoClick}
+              disabled={!lineTwoLive || !lineTwoStatus.line2HasConnected || lineTwoBusy}
             />
+            {renderKeypadToggle()}
             {/* Replaces Internal Transfer in this context, per explicit
                 request — the merge action, agent decides afterward
                 (via the normal Hang Up) whether to leave or stay on. */}
@@ -1092,26 +1152,41 @@ export function MiniPhone({
               icon={ICONS.merge}
               label="Connect Line 1"
               onClick={() => handleCompleteLineTwoClick("conference")}
-              disabled={lineTwoBusy}
+              disabled={!lineTwoLive || lineTwoBusy}
             />
           </div>
+
           <div className="phone-main-actions">
+            <RoundButton
+              large
+              variant="call"
+              icon={ICONS.call}
+              label={lineTwoBusy ? "Calling…" : lineTwoFailed ? "Try Again" : "Call"}
+              title={
+                lineTwoLive ? undefined : dialNumberHint(splitDialString(targetInput).number) || "Call on Line 2"
+              }
+              onClick={handleStartLineTwo}
+              disabled={lineTwoLive || lineTwoBusy || !isDialableNumber(splitDialString(targetInput).number)}
+            />
             <RoundButton
               large
               variant="end"
               icon={ICONS.hangup}
-              title="Hang up Line 2, return to Line 1"
-              onClick={handleHangUpLineTwoClick}
-              disabled={lineTwoBusy}
+              label={lineTwoFailed ? "Give Up" : "Hang Up"}
+              title={lineTwoLive ? "Hang up Line 2, return to Line 1" : undefined}
+              onClick={lineTwoFailed ? handleCancelLineTwoClick : handleHangUpLineTwoClick}
+              disabled={!(lineTwoLive || lineTwoFailed) || lineTwoBusy}
             />
           </div>
+
           {targetError && <div className="error phone-extra-error">{targetError}</div>}
         </>
       )}
 
       {showInternalTransferModal && (
         <InternalTransferModal
-          campaignId={campaignId}
+          agents={transferAgents}
+          error={transferAgentsError}
           onClose={() => setShowInternalTransferModal(false)}
           onTransfer={handlePickedExtensionStartLineTwo}
         />

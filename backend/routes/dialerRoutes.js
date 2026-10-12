@@ -887,6 +887,15 @@ router.post("/dialer/start-call", requireAuth, async (req, res) => {
       });
     }
 
+    // Checked BEFORE anything is dialed — otherwise the agent's phone is
+    // rung first and only then does Asterisk reject the number.
+    if (!dialerService.isDialablePhoneNumber(phoneNumber)) {
+      return res.status(400).json({
+        success: false,
+        message: `${phoneNumber} isn't a valid phone number — it needs 10 digits (or 11 starting with 1).`,
+      });
+    }
+
     // Optional extension to auto-dial once answered (the ",101" part of
     // MiniPhone's dial string) — validated up front so a bad one rejects the dial rather
     // than being silently dropped mid-call.

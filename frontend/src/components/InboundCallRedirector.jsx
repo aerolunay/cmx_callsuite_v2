@@ -1,5 +1,6 @@
 import { useLocation, useNavigate } from "react-router-dom";
 import { useDialerSocketMessages } from "../context/DialerSocketContext";
+import { usePhone } from "../context/PhoneContext";
 
 /*
 ==================================================
@@ -32,9 +33,16 @@ export default function InboundCallRedirector() {
   const navigate = useNavigate();
   const location = useLocation();
 
+  const phone = usePhone();
+
   useDialerSocketMessages((message) => {
     if (message.type !== "inboundCall" || message.status !== "ringing_agent") return;
     if (location.pathname === "/dialer") return; // already there, nothing to do
+    // Per explicit request — supervisor/training_quality keep the Dialer
+    // in its own tab, which owns the phone (see PhoneContext.jsx): the
+    // call is ringing THERE, so this tab stays where it is rather than
+    // turning into a second Dialer.
+    if (phone.dialerOpenElsewhere) return;
     navigate("/dialer");
   });
 

@@ -47,7 +47,11 @@ action here, matching the agent-facing playback-url route's own
 restriction — agents can listen, not download.
 ==================================================
 */
-export default function AbandonedVoicemailTable({ campaignId, highlightKey, onCallback, refreshKey }) {
+// compact — per explicit request, for the Dialer's narrow-window layout:
+// just Number, Name and Call Date/Time. Callback stays one click away
+// (the number itself is the Callback button there); Details and
+// voicemail Play are left to the full-width view.
+export default function AbandonedVoicemailTable({ campaignId, highlightKey, onCallback, refreshKey, compact = false }) {
   const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" }); // yyyy-MM-dd
 
   const [startDate, setStartDate] = useState(today);
@@ -158,7 +162,50 @@ export default function AbandonedVoicemailTable({ campaignId, highlightKey, onCa
 
       {!loading && !error && rows.length === 0 && <p>No abandoned calls or voicemails for these filters.</p>}
 
-      {!loading && rows.length > 0 && (
+      {!loading && rows.length > 0 && compact && (
+        <table className="call-log-table call-log-table-compact">
+          <thead>
+            <tr>
+              <th>Number</th>
+              <th>Name</th>
+              <th>Call Date/Time</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => {
+              const key = rowKey(row);
+              const isHighlighted = highlightKey === key;
+              return (
+                <tr
+                  key={`${key}-${row.timestamp}`}
+                  ref={isHighlighted ? highlightRef : null}
+                  className={isHighlighted ? "call-log-row-highlighted" : undefined}
+                >
+                  <td>
+                    <button
+                      type="button"
+                      className="link"
+                      style={{ padding: 0 }}
+                      onClick={() => onCallback(row)}
+                      title="Callback"
+                    >
+                      {row.callerIdNumber || "Unknown"}
+                    </button>{" "}
+                    <span className={`direction-badge direction-${row.type === "voicemail" ? "callback" : "inbound"}`}>
+                      {row.type === "voicemail" ? "VM" : "Abandoned"}
+                    </span>
+                  </td>
+                  {/* Only the caller's number is captured for these. */}
+                  <td>—</td>
+                  <td>{formatDate(row.timestamp)}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+
+      {!loading && rows.length > 0 && !compact && (
         <table className="call-log-table">
           <thead>
             <tr>
