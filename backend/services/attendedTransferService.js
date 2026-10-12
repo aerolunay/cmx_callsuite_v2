@@ -117,7 +117,7 @@ async function unholdChannelIntoRoom(channel, room) {
   await ami.redirectChannel(channel, { context: "trunkinbound", exten: room });
 }
 
-async function startLineTwo(active, target, isExtension) {
+async function startLineTwo(active, target, isExtension, autoDtmf = null) {
   const { room: room1, agentChannel, callId, isInbound, rawCall } = active;
 
   const existing = rawCall.lineTwo;
@@ -232,6 +232,16 @@ async function startLineTwo(active, target, isExtension) {
       if (result.success) {
         lineTwoState.targetChannel = result.channel;
         lineTwoState.status = "connected";
+        // Dial-with-extension — see dialerService.runAutoDtmf. Stops if
+        // Line 2 is held, canceled, completed or replaced partway.
+        if (autoDtmf) {
+          dialerService.runAutoDtmf(
+            () => lineTwoState.targetChannel,
+            autoDtmf,
+            () => rawCall.lineTwo === lineTwoState && !lineTwoState.onHold && !lineTwoState.settled,
+            `Line 2 of call ${callId}`
+          );
+        }
       } else {
         lineTwoState.status = "failed";
         lineTwoState.failureReason = result.reason;

@@ -7,8 +7,8 @@ import { playDtmfTone } from "../utils/audio";
 ==================================================
 MiniPhone — self-contained softphone widget, styled to read like a
 physical phone (status line, number display, circular action buttons).
-The dial field is typed into; the in-call Keypad (below) is only for
-sending tones on an already-connected call, on either line.
+The Keypad works on both lines: before dialing it's a dial pad for
+the Number/Ext fields; on a connected call it sends tones.
 
 Consumes the app-wide PhoneContext (see context/PhoneContext.jsx —
 the actual JsSIP connection lives there now, not here, so it survives
@@ -42,6 +42,10 @@ JsSIP directly. DialerPage supplies:
   - onSendLineTwoDtmf(digits): the same keypad on Line 2's panel — e.g.
     dialing a company's main number to transfer to, then entering the
     person's extension at its IVR. Works whichever direction Line 1 is.
+  - onManualDial(phoneNumber, dialExtension) / onStartLineTwo(target,
+    isExtension, dialExtension): dialExtension is the optional Ext
+    field, auto-dialed by the backend once answered. lineOneAutoExt is
+    the one riding on the current Line 1 call, shown as a reminder.
 
 HANG UP correctness: initially, removing the separate End Call button
 and relying solely on JsSIP's phone.hangup() (agent-leg-only) was a
@@ -77,6 +81,9 @@ app's extensions are named like "bsmsc901", not purely numeric.
 // session yet) is the normal, expected result of having just been
 // READY a moment ago, not a different manual status the agent chose.
 const isAutoAnswerStatus = (status) => status === "READY" || status === "IN_CALL";
+
+// Matches the backend's own limit (dialerService.normalizeAutoDtmf).
+const MAX_EXT_LENGTH = 40;
 
 // Same small label set as LiveStatusDashboard.jsx's STATE_LABELS —
 // kept as its own local copy rather than a shared import, matching
@@ -146,6 +153,7 @@ export function MiniPhone({
   canSendDtmf,
   onSendDtmf,
   onSendLineTwoDtmf,
+  lineOneAutoExt,
   onHangUp,
   onManualDial,
   onStartLineTwo,
@@ -200,10 +208,26 @@ export function MiniPhone({
   // Presses are chained onto dtmfQueueRef so each digit's request only
   // goes out once the previous one finished — firing them concurrently
   // could let a fast "1#" reach Asterisk as "#1".
+  //
+  // Before a line is dialed, the same keypad instead types into that
+  // panel's Number or Ext field (whichever was focused last —
+  // keypadField), like a real phone's dial pad.
   const [showKeypad, setShowKeypad] = useState(false);
   const [dtmfSent, setDtmfSent] = useState({ 1: "", 2: "" });
   const [dtmfError, setDtmfError] = useState("");
   const dtmfQueueRef = useRef(Promise.resolve());
+  const [keypadField, setKeypadField] = useState("number"); // "number" | "ext"
+
+  // Dial with extension, per explicit request — optional Ext fields
+  // next to Line 1's and Line 2's number. Passed along with the dial
+  // and auto-sent by the backend once the far end answers (see
+  // dialerService.runAutoDtmf). lineTwoAutoExt remembers what went out
+  // with the current Line 2 dial, purely to tell the agent it's coming
+  // (Line 1's equivalent comes from DialerPage's own call object, as
+  // lineOneAutoExt, so it can never outlive a dial that didn't start).
+  const [dialExt, setDialExt] = useState("");
+  const [targetExt, setTargetExt] = useState("");
+  const [lineTwoAutoExt, setLineTwoAutoExt] = useState("");
 
   // Poll Line 2's real status while it's still ringing — this is how
   // the UI learns "no answer" and offers Try Again, since nothing
@@ -257,11 +281,14 @@ export function MiniPhone({
     setTargetError("");
     setLineTwoBusy(true);
     try {
-      await onStartLineTwo(targetInput.trim(), false);
+      await onStartLineTwo(targetInput.trim(), false, targetExt);
       await refreshLineTwoStatus();
       setViewingLine(2);
       setTargetInput("");
+      setTargetExt("");
+      setKeypadField("number");
       setDtmfSent((prev) => ({ ...prev, 2: "" }));
+      setLineTwoAutoExt(targetExt);
     } catch (err) {
       setTargetError(err.message);
     } finally {
@@ -466,6 +493,8 @@ export function MiniPhone({
       setShowKeypad(false);
       setDtmfSent({ 1: "", 2: "" });
       setDtmfError("");
+      setTargetExt("");
+      setLineTwoAutoExt("");
     }
     // phone.CALL_STATES is a stable constant object (see the effect
     // above for the same reasoning re: phone's stable identity) — only
@@ -473,9 +502,30 @@ export function MiniPhone({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phone.callState]);
 
+  // "dial" while that line's panel is still taking a number to dial
+  // (Line 1 idle; Line 2 not dialed yet or needing a retry), "dtmf"
+  // once it's on a call.
+  function keypadMode(line) {
+    if (line === 1) return isIdle ? "dial" : "dtmf";
+    return lineTwoStatus?.active && lineTwoStatus.status !== "failed" ? "dtmf" : "dial";
+  }
+
   function handleKeypadPress(digit) {
     const line = viewingLine;
     if (!keypadReady(line)) return;
+
+    if (keypadMode(line) === "dial") {
+      if (keypadField === "ext") {
+        (line === 1 ? setDialExt : setTargetExt)((prev) => (prev + digit).slice(0, MAX_EXT_LENGTH));
+      } else if (/^\d$/.test(digit)) {
+        (line === 1 ? setDialNumber : setTargetInput)((prev) => prev + digit);
+      } else {
+        return; // phone numbers are digits only — * and # only make sense in Ext
+      }
+      playDtmfTone(digit, phone.getOutputSinkId());
+      return;
+    }
+
     const send = line === 2 ? onSendLineTwoDtmf : onSendDtmf;
     setDtmfError("");
     setDtmfSent((prev) => ({ ...prev, [line]: prev[line] + digit }));
@@ -489,6 +539,7 @@ export function MiniPhone({
   // attendedTransferService.sendLineTwoDtmf) so keys are only enabled
   // when a press would actually go through.
   function keypadReady(line) {
+    if (keypadMode(line) === "dial") return line === 1 ? isIdle : !lineTwoBusy;
     if (line === 1) return Boolean(canSendDtmf && onSendDtmf);
     return Boolean(
       lineTwoStatus?.active && lineTwoStatus.line2HasConnected && !lineTwoStatus.line2OnHold && activeLine === 2
@@ -502,24 +553,57 @@ export function MiniPhone({
     return "Switch to Line 2 to use the keypad.";
   }
 
+  // Optional extension to auto-dial once this line's call is answered.
+  // "," = a 2-second pause (see dialerService.runAutoDtmf).
+  function renderExtInput(line) {
+    const value = line === 1 ? dialExt : targetExt;
+    const setValue = line === 1 ? setDialExt : setTargetExt;
+    return (
+      <input
+        type="text"
+        inputMode="tel"
+        className="phone-ext-input"
+        placeholder="Ext (optional)"
+        title="Dialed automatically about 2 seconds after the call is answered. Use , for an extra 2-second pause (e.g. 1,,101)."
+        value={value}
+        onChange={(e) => setValue(e.target.value.replace(/[^0-9*#,]/g, "").slice(0, MAX_EXT_LENGTH))}
+        onFocus={() => setKeypadField("ext")}
+        disabled={line === 1 ? !isIdle : lineTwoBusy}
+      />
+    );
+  }
+
   function renderKeypad(line) {
+    const mode = keypadMode(line);
+    const autoExt = line === 1 ? lineOneAutoExt : lineTwoAutoExt;
     return (
       <>
+        {mode === "dtmf" && autoExt && (
+          <p className="phone-hint">
+            Ext {autoExt} is dialed automatically once answered — use the Keypad if the menu needs more.
+          </p>
+        )}
+
         <button
           type="button"
           className="button-secondary"
           style={{ marginTop: 8, width: "100%" }}
           onClick={() => setShowKeypad((prev) => !prev)}
-          // Line 1: outbound only — DialerPage passes no onSendDtmf for
-          // an inbound call, since the caller dialed us.
-          disabled={!isActive || (line === 1 && !onSendDtmf)}
-          title="Send keypad tones (extensions, IVR menus)"
+          // In-call on Line 1: outbound only — DialerPage passes no
+          // onSendDtmf for an inbound call, since the caller dialed us.
+          disabled={mode === "dial" ? !keypadReady(line) : !isActive || (line === 1 && !onSendDtmf)}
+          title={mode === "dial" ? "Dial pad" : "Send keypad tones (extensions, IVR menus)"}
         >
           {showKeypad ? "Hide Keypad" : "Keypad"}
         </button>
 
         {showKeypad && (
           <>
+            {mode === "dial" && (
+              <p className="phone-hint">
+                Typing into {keypadField === "ext" ? "Ext" : "the number"} — click the other field to switch.
+              </p>
+            )}
             <div className="phone-keypad">
               {["1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "0", "#"].map((digit) => (
                 <button
@@ -590,8 +674,11 @@ export function MiniPhone({
 
   function handleCall() {
     if (!canDial || !dialNumber.trim()) return;
-    onManualDial(dialNumber.trim());
+    onManualDial(dialNumber.trim(), dialExt);
     setDialNumber("");
+    setDialExt("");
+    setKeypadField("number");
+    setDtmfSent((prev) => ({ ...prev, 1: "" }));
   }
 
   const isIdle = phone.callState === phone.CALL_STATES.IDLE || phone.callState === phone.CALL_STATES.ENDED;
@@ -641,8 +728,10 @@ export function MiniPhone({
             placeholder={isIdle ? "Enter a number" : ""}
             value={isIdle ? dialNumber : dtmfSent[1]}
             onChange={handleDialNumberChange}
+            onFocus={() => setKeypadField("number")}
             disabled={!isIdle}
           />
+          {isIdle && renderExtInput(1)}
 
           <div className="phone-actions">
             <button
@@ -730,8 +819,10 @@ export function MiniPhone({
             placeholder="Enter a number"
             value={targetInput}
             onChange={(e) => setTargetInput(e.target.value.replace(/\D/g, ""))}
+            onFocus={() => setKeypadField("number")}
             disabled={lineTwoBusy}
           />
+          {renderExtInput(2)}
           <div className="phone-actions">
             <button
               type="button"
@@ -751,6 +842,7 @@ export function MiniPhone({
               Hang Up
             </button>
           </div>
+          {renderKeypad(2)}
           {targetError && <div className="error phone-extra-error">{targetError}</div>}
         </>
       ) : lineTwoStatus.status === "failed" ? (
@@ -765,8 +857,10 @@ export function MiniPhone({
             placeholder="Enter a number"
             value={targetInput}
             onChange={(e) => setTargetInput(e.target.value.replace(/\D/g, ""))}
+            onFocus={() => setKeypadField("number")}
             disabled={lineTwoBusy}
           />
+          {renderExtInput(2)}
           <div className="phone-actions">
             <button
               type="button"
@@ -791,6 +885,7 @@ export function MiniPhone({
               Give Up
             </button>
           </div>
+          {renderKeypad(2)}
         </>
       ) : (
         // Line 2 is ringing or connected. Mute/Hang Up reuse the same

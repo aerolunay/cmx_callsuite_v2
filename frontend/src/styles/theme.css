@@ -1265,7 +1265,32 @@ away from the screen at that exact moment.
   background: #9c4a0c;
 }
 
-/* In-call keypad (DTMF) — standard 3x4 phone layout. */
+/* Optional extension under the number — auto-dialed once answered. */
+.phone-ext-input {
+  width: 100%;
+  box-sizing: border-box;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 10px;
+  padding: 8px 14px;
+  color: white;
+  font-size: 14px;
+  font-family: monospace;
+  letter-spacing: 1px;
+  margin: -6px 0 14px;
+}
+
+.phone-ext-input::placeholder {
+  color: #8994ab;
+  font-family: inherit;
+  letter-spacing: normal;
+}
+
+.phone-ext-input:disabled {
+  opacity: 0.5;
+}
+
+/* Keypad — standard 3x4 phone layout. Dial pad before a call, DTMF during one. */
 .phone-keypad {
   display: grid;
   grid-template-columns: repeat(3, 1fr);

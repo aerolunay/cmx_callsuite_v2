@@ -277,9 +277,19 @@ rationale and exact dialplan patterns this relies on.
 */
 router.post("/dialer/line-two/start", requireAuth, async (req, res) => {
   try {
-    const { target, isExtension } = req.body;
+    // isExtension = target is an internal agent extension (Internal
+    // Transfer); dialExtension = an extension to auto-dial at an
+    // external number's IVR once it answers. Two different things.
+    const { target, isExtension, dialExtension } = req.body;
     if (!target) {
       return res.status(400).json({ success: false, message: "target is required." });
+    }
+
+    let autoDtmf;
+    try {
+      autoDtmf = isExtension ? null : dialerService.normalizeAutoDtmf(dialExtension);
+    } catch (err) {
+      return res.status(400).json({ success: false, message: err.message });
     }
 
     const active = resolveActiveRoom(req.session.agent.appUserId);
@@ -287,7 +297,7 @@ router.post("/dialer/line-two/start", requireAuth, async (req, res) => {
       return res.status(409).json({ success: false, message: "You're not currently on a call." });
     }
 
-    const result = await attendedTransferService.startLineTwo(active, target, Boolean(isExtension));
+    const result = await attendedTransferService.startLineTwo(active, target, Boolean(isExtension), autoDtmf);
 
     if (!result.success) {
       return res.status(502).json({
@@ -868,13 +878,23 @@ restore ContactDetailsCard fully, not just the lead's ID/phone number.
 */
 router.post("/dialer/start-call", requireAuth, async (req, res) => {
   try {
-    const { campaignId, leadId, phoneNumber, lead, callType } = req.body;
+    const { campaignId, leadId, phoneNumber, lead, callType, dialExtension } = req.body;
 
     if (!campaignId || leadId === undefined || leadId === null || !phoneNumber) {
       return res.status(400).json({
         success: false,
         message: "campaignId, leadId, and phoneNumber are all required.",
       });
+    }
+
+    // Optional extension to auto-dial once answered (MiniPhone's Ext
+    // field) — validated up front so a bad one rejects the dial rather
+    // than being silently dropped mid-call.
+    let autoDtmf;
+    try {
+      autoDtmf = dialerService.normalizeAutoDtmf(dialExtension);
+    } catch (err) {
+      return res.status(400).json({ success: false, message: err.message });
     }
 
     const [campaignRows] = await db.execute(
@@ -957,6 +977,7 @@ router.post("/dialer/start-call", requireAuth, async (req, res) => {
       callType,
       shouldRunAmd,
       outboundTrunk,
+      autoDtmf,
     });
 
     return res.json({ success: true, ...result });

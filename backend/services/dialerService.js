@@ -411,6 +411,7 @@ function startCall({
   callType = "REGULAR",
   shouldRunAmd = true,
   outboundTrunk,
+  autoDtmf = null, // extension to auto-dial once answered — see runAutoDtmf
 }) {
   // REAL BUG FIX, per explicit request — see agentStatusService.js's
   // own claimAgentForOutboundDial/releaseAgentForOutboundDial comment
@@ -496,6 +497,7 @@ function startCall({
       lineTwo: null, // see attendedTransferService.js
       activeLine: 1, // which room the agent's OWN channel currently sits in — 1 or 2
       xferConfTarget: null, // set by attendedTransferService.js's completeLineTwo — the number/extension a Line 2 Xfer/Conf went to, read by saveDisposition below
+      autoDtmf,
     };
 
     activeCalls.set(callId, callState);
@@ -839,6 +841,15 @@ function registerCallEventTracking() {
           call.ringSeconds = Math.floor((new Date() - call.ringingCustomerAt) / 1000);
         }
         broadcastCallStatus(call);
+
+        if (call.autoDtmf) {
+          runAutoDtmf(
+            () => call.customerChannel,
+            call.autoDtmf,
+            () => call.status === "customer_connected" && !call.onHold,
+            `call ${call.callId}`
+          );
+        }
 
         // UPDATED — was hardcoded to `call.campaignId === "CMXBSMSC"`
         // only. Now checks the real campaign_recording column on
@@ -1294,6 +1305,57 @@ async function sendDtmf(callId, digits) {
 
 /*
 ==================================================
+Auto-dialed extension ("dial with extension") — NEW, per explicit request
+==================================================
+Lets the agent type a number AND its extension up front (MiniPhone's
+Ext field, Line 1 manual dial or Line 2), instead of waiting for the
+answer and tapping the keypad by hand. Once the far end answers, waits
+AUTO_DTMF_INITIAL_DELAY_MS (most IVRs accept digits during their
+greeting), then sends the sequence. Each "," is an extra
+AUTO_DTMF_PAUSE_MS pause — the usual phone convention, for IVRs that
+need a menu choice and a wait first (e.g. "1,,101").
+
+Fire-and-forget: a failure is logged, not thrown — the call itself is
+fine, and the agent can always finish with the in-call keypad.
+isStillValid is re-checked before every step so a hangup/hold/cancel
+partway stops the rest rather than playing tones into the wrong place.
+==================================================
+*/
+const AUTO_DTMF_PATTERN = /^[0-9*#,]{1,40}$/;
+const AUTO_DTMF_INITIAL_DELAY_MS = 2000;
+const AUTO_DTMF_PAUSE_MS = 2000;
+
+// null for "nothing to auto-dial"; throws on anything malformed so the
+// route can reject it BEFORE placing the call, not silently drop it.
+function normalizeAutoDtmf(value) {
+  if (value === undefined || value === null) return null;
+  const trimmed = String(value).replace(/\s+/g, "");
+  if (!trimmed) return null;
+  if (!AUTO_DTMF_PATTERN.test(trimmed) || !/[0-9*#]/.test(trimmed)) {
+    throw new Error("Extension may only contain 0-9, *, # and , (pause), up to 40 characters.");
+  }
+  return trimmed;
+}
+
+function runAutoDtmf(getChannel, sequence, isStillValid, label) {
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  (async () => {
+    await sleep(AUTO_DTMF_INITIAL_DELAY_MS);
+    for (const step of sequence) {
+      if (!isStillValid()) return;
+      if (step === ",") {
+        await sleep(AUTO_DTMF_PAUSE_MS);
+        continue;
+      }
+      await ami.playDtmf(getChannel(), step);
+    }
+  })().catch((err) => {
+    console.error(`[dialerService] Auto-dialing extension failed for ${label}:`, err.message);
+  });
+}
+
+/*
+==================================================
 saveDisposition
 ==================================================
 Per spec:
@@ -1642,6 +1704,8 @@ module.exports = {
   unholdCall,
   sendDtmf,
   sendDtmfDigits,
+  normalizeAutoDtmf,
+  runAutoDtmf,
   saveDisposition,
   // NEW — exported per explicit request: the new agent-facing
   // callback-disposition routes (see dialerRoutes.js's PATCH

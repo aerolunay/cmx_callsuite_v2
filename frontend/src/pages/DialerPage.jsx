@@ -89,6 +89,7 @@ export default function DialerPage() {
   // instead and never shows this popup at all). Holds the phone
   // number waiting on a campaign pick; null means the popup is closed.
   const [pendingManualDialNumber, setPendingManualDialNumber] = useState(null);
+  const [pendingManualDialExtension, setPendingManualDialExtension] = useState(""); // carried alongside the number through the campaign-pick popup
   const [agentStatus, setAgentStatus] = useState(null); // { status, elapsedSeconds }
   const [statusDraft, setStatusDraft] = useState("NOT_READY");
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
@@ -849,20 +850,21 @@ export default function DialerPage() {
   // Shared by both the direct (single-campaign) path and the popup's
   // confirm handler below — the actual dial only ever happens here,
   // once a campaign is genuinely known one way or another.
-  async function placeManualDial(campaignId, phoneNumber) {
+  async function placeManualDial(campaignId, phoneNumber, dialExtension) {
     setError("");
     setBusy(true);
     try {
       const manualLead = { lead_id: 0, first_name: "", last_name: "", phone_number: phoneNumber };
       setLead(manualLead);
 
-      const callData = await api.startCall(campaignId, 0, phoneNumber, manualLead, "REGULAR");
+      const callData = await api.startCall(campaignId, 0, phoneNumber, manualLead, "REGULAR", dialExtension);
       setCall({
         callId: callData.callId,
         room: callData.room,
         status: "ringing_agent",
         callType: "REGULAR",
         campaignId,
+        dialExtension: dialExtension || "",
       });
     } catch (err) {
       setError(err.message);
@@ -878,7 +880,9 @@ export default function DialerPage() {
   // a small "Call from which campaign?" popup (see the JSX near the
   // bottom of this file) and defers the actual dial to
   // handleConfirmManualDialCampaign below, once the agent picks one.
-  async function handleManualDial(phoneNumber) {
+  // dialExtension (optional) — MiniPhone's Ext field, auto-dialed by the
+  // backend once the call is answered (see dialerService.runAutoDtmf).
+  async function handleManualDial(phoneNumber, dialExtension) {
     if (agentStatus?.status !== "READY") {
       setError("You must be Ready to place a call.");
       return;
@@ -909,11 +913,12 @@ export default function DialerPage() {
     }
 
     if (outboundCampaign) {
-      placeManualDial(outboundCampaign.campaign_id, phoneNumber);
+      placeManualDial(outboundCampaign.campaign_id, phoneNumber, dialExtension);
       return;
     }
 
     if (workingCampaigns.length > 1) {
+      setPendingManualDialExtension(dialExtension || "");
       setPendingManualDialNumber(phoneNumber);
       return;
     }
@@ -929,7 +934,7 @@ export default function DialerPage() {
   function handleConfirmManualDialCampaign(campaignId) {
     const phoneNumber = pendingManualDialNumber;
     setPendingManualDialNumber(null);
-    if (phoneNumber) placeManualDial(campaignId, phoneNumber);
+    if (phoneNumber) placeManualDial(campaignId, phoneNumber, pendingManualDialExtension);
   }
 
   function handleCancelManualDialCampaign() {
@@ -955,8 +960,8 @@ export default function DialerPage() {
   // Same pass-through pattern as Conference/Transfer above — MiniPhone
   // owns its own busy/error state for these, errors intentionally
   // reach it uncaught.
-  function handleStartLineTwo(target, isExtension) {
-    return api.startLineTwo(target, isExtension);
+  function handleStartLineTwo(target, isExtension, dialExtension) {
+    return api.startLineTwo(target, isExtension, dialExtension);
   }
 
   function handleCompleteLineTwo(action) {
@@ -1348,6 +1353,7 @@ export default function DialerPage() {
               canSendDtmf={Boolean(call && call.status === "customer_connected" && !call.onHold)}
               onSendDtmf={call ? handleSendDtmf : null}
               onSendLineTwoDtmf={handleSendLineTwoDtmf}
+              lineOneAutoExt={call?.dialExtension || ""}
               onHangUp={handlePhoneHangUp}
               onManualDial={handleManualDial}
               onTransferBlind={handleTransferBlind}
@@ -1768,7 +1774,10 @@ export default function DialerPage() {
         <div className="modal-overlay" onClick={handleCancelManualDialCampaign}>
           <div className="modal-card" style={{ width: "min(90vw, 420px)" }} onClick={(e) => e.stopPropagation()}>
             <h3 style={{ marginTop: 0 }}>Call from which campaign?</h3>
-            <p style={{ fontSize: 14, color: "#667085" }}>Calling {pendingManualDialNumber}</p>
+            <p style={{ fontSize: 14, color: "#667085" }}>
+              Calling {pendingManualDialNumber}
+              {pendingManualDialExtension && ` ext. ${pendingManualDialExtension}`}
+            </p>
             {workingCampaigns.map((c) => (
               <button
                 key={c.campaign_id}

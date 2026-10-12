@@ -119,8 +119,14 @@ export const api = {
     request("/dialer/conference-add", { method: "POST", body: JSON.stringify({ target, isExtension }) }),
   transferBlind: (target, isExtension) =>
     request("/dialer/transfer-blind", { method: "POST", body: JSON.stringify({ target, isExtension }) }),
-  startLineTwo: (target, isExtension) =>
-    request("/dialer/line-two/start", { method: "POST", body: JSON.stringify({ target, isExtension }) }),
+  // dialExtension (optional): auto-dialed at an external number's IVR
+  // once it answers — not to be confused with isExtension (internal
+  // agent extension target).
+  startLineTwo: (target, isExtension, dialExtension) =>
+    request("/dialer/line-two/start", {
+      method: "POST",
+      body: JSON.stringify({ target, isExtension, dialExtension }),
+    }),
   completeLineTwo: (action) =>
     request("/dialer/line-two/complete", { method: "POST", body: JSON.stringify({ action }) }),
   cancelLineTwo: () => request("/dialer/line-two/cancel", { method: "POST" }),
@@ -137,10 +143,11 @@ export const api = {
   // Dialer
   nextLead: (campaignId) =>
     request("/dialer/next-lead", { method: "POST", body: JSON.stringify({ campaignId }) }),
-  startCall: (campaignId, leadId, phoneNumber, lead, callType) =>
+  // dialExtension (optional): auto-dialed once the call is answered.
+  startCall: (campaignId, leadId, phoneNumber, lead, callType, dialExtension) =>
     request("/dialer/start-call", {
       method: "POST",
-      body: JSON.stringify({ campaignId, leadId, phoneNumber, lead, callType }),
+      body: JSON.stringify({ campaignId, leadId, phoneNumber, lead, callType, dialExtension }),
     }),
   getCurrentCall: () => request("/dialer/current-call"),
   getCurrentInboundCall: () => request("/dialer/inbound/current"),
