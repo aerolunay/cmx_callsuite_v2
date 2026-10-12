@@ -1178,150 +1178,213 @@ away from the screen at that exact moment.
   background: var(--cmx-warning);
 }
 
+/* Number display — one dial string (number, then optionally ",ext"),
+   centered like a real softphone's display, backspace on the right. */
+.phone-display {
+  position: relative;
+  margin-bottom: 6px;
+}
+
 .phone-display-input {
   width: 100%;
   box-sizing: border-box;
   background: rgba(255, 255, 255, 0.08);
   border: 1px solid rgba(255, 255, 255, 0.15);
   border-radius: 10px;
-  padding: 12px 14px;
+  padding: 12px 44px;
   color: white;
-  font-size: 18px;
+  font-size: 22px;
   font-family: monospace;
   letter-spacing: 1px;
-  margin-bottom: 14px;
+  text-align: center;
 }
 
 .phone-display-input::placeholder {
   color: #8994ab;
-  font-family: inherit;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 16px;
   letter-spacing: normal;
 }
 
 .phone-display-input:disabled {
-  opacity: 0.5;
+  opacity: 0.7;
 }
 
-.phone-actions {
+.phone-display-backspace {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
   display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin-bottom: 4px;
-}
-
-.phone-btn {
-  flex: 1 1 calc(50% - 5px);
-  min-width: 70px;
+  padding: 6px;
   border: none;
-  border-radius: 24px;
-  padding: 12px 8px;
-  font-size: 13px;
-  font-weight: 700;
+  background: none;
+  color: #a7afc2;
   cursor: pointer;
+}
+
+.phone-display-backspace:hover {
   color: white;
-  background: #4a5473;
 }
 
-.phone-btn:disabled {
-  background: #3a4054;
-  color: #7c869c;
-  cursor: not-allowed;
-}
-
-.phone-btn-call {
-  background: var(--cmx-success);
-}
-
-.phone-btn-call:hover:not(:disabled) {
-  background: #176430;
-}
-
-.phone-btn-end {
-  background: var(--cmx-danger);
-}
-
-.phone-btn-end:hover:not(:disabled) {
-  background: #96271d;
-}
-
-.phone-btn-mute:not(:disabled) {
-  background: rgba(255, 255, 255, 0.15);
-}
-
-.phone-btn-mute:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.25);
-}
-
-/* Per explicit request — Mute/Hold need a visibly distinct color
-   while actively engaged, for both Line 1 and Line 2 independently.
-   Applied via an extra "phone-btn-active" class alongside
-   phone-btn-mute, rather than replacing it — same base sizing/shape,
-   just a different background. */
-.phone-btn-mute.phone-btn-active:not(:disabled) {
-  background: var(--cmx-warning);
-}
-
-.phone-btn-mute.phone-btn-active:hover:not(:disabled) {
-  background: #9c4a0c;
-}
-
-/* Optional extension under the number — auto-dialed once answered. */
-.phone-ext-input {
-  width: 100%;
-  box-sizing: border-box;
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  border-radius: 10px;
-  padding: 8px 14px;
-  color: white;
-  font-size: 14px;
-  font-family: monospace;
+/* Small caption above the display while on a call (Calling / Connected / On hold). */
+.phone-call-state {
+  text-align: center;
+  font-size: 11px;
   letter-spacing: 1px;
-  margin: -6px 0 14px;
+  text-transform: uppercase;
+  color: #a7afc2;
+  margin-bottom: 6px;
 }
 
-.phone-ext-input::placeholder {
-  color: #8994ab;
-  font-family: inherit;
-  letter-spacing: normal;
-}
-
-.phone-ext-input:disabled {
-  opacity: 0.5;
-}
-
-/* Keypad — standard 3x4 phone layout. Dial pad before a call, DTMF during one. */
+/* Keypad — round 3x4 keys with letters, always visible. Dial pad
+   before a call, DTMF during one. */
 .phone-keypad {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
-  margin-top: 10px;
+  grid-template-columns: repeat(3, 64px);
+  justify-content: center;
+  gap: 10px 22px;
+  margin: 12px 0 14px;
 }
 
 .phone-keypad-key {
+  width: 64px;
+  height: 64px;
   border: none;
-  border-radius: 10px;
-  padding: 10px 0;
-  font-size: 18px;
-  font-weight: 700;
-  font-family: monospace;
-  cursor: pointer;
+  border-radius: 50%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
   color: white;
-  background: rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.1);
+  cursor: pointer;
+  user-select: none;
+  touch-action: manipulation;
+  transition: background 0.15s;
 }
 
 .phone-keypad-key:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.25);
+  background: rgba(255, 255, 255, 0.2);
 }
 
 .phone-keypad-key:active:not(:disabled) {
-  background: rgba(255, 255, 255, 0.35);
+  background: rgba(255, 255, 255, 0.32);
 }
 
 .phone-keypad-key:disabled {
-  background: #3a4054;
-  color: #7c869c;
+  opacity: 0.35;
   cursor: not-allowed;
+}
+
+.phone-keypad-digit {
+  font-size: 24px;
+  font-weight: 500;
+}
+
+.phone-keypad-sub {
+  min-height: 9px;
+  margin-top: 3px;
+  font-size: 9px;
+  letter-spacing: 1.5px;
+  color: #a7afc2;
+}
+
+/* Round call controls — Mute/Hold/Transfer row, then the big green
+   Call / red Hang Up underneath, 3CX-style. */
+.phone-controls {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin: 4px 0 14px;
+}
+
+.phone-main-actions {
+  display: flex;
+  justify-content: center;
+  gap: 40px;
+  margin-bottom: 8px;
+}
+
+.phone-round-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.phone-round {
+  width: 52px;
+  height: 52px;
+  border: none;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  background: rgba(255, 255, 255, 0.15);
+  cursor: pointer;
+  transition: background 0.15s, transform 0.05s;
+}
+
+.phone-round:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.phone-round:active:not(:disabled) {
+  transform: scale(0.95);
+}
+
+.phone-round:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.phone-round-lg {
+  width: 64px;
+  height: 64px;
+}
+
+.phone-round-lg svg {
+  width: 28px;
+  height: 28px;
+}
+
+.phone-round-call {
+  background: var(--cmx-success);
+}
+
+.phone-round-call:hover:not(:disabled) {
+  background: #176430;
+}
+
+.phone-round-end {
+  background: var(--cmx-danger);
+}
+
+.phone-round-end:hover:not(:disabled) {
+  background: #96271d;
+}
+
+/* Per explicit request — Mute/Hold need a visibly distinct color
+   while actively engaged, for both Line 1 and Line 2 independently. */
+.phone-round-active {
+  background: var(--cmx-warning);
+}
+
+.phone-round-active:hover:not(:disabled) {
+  background: #9c4a0c;
+}
+
+.phone-round-label {
+  font-size: 11px;
+  color: #cfd6e4;
+  text-align: center;
+}
+
+.phone-hint-center {
+  text-align: center;
 }
 
 .phone-hint {

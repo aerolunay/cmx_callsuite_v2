@@ -880,8 +880,9 @@ export default function DialerPage() {
   // a small "Call from which campaign?" popup (see the JSX near the
   // bottom of this file) and defers the actual dial to
   // handleConfirmManualDialCampaign below, once the agent picks one.
-  // dialExtension (optional) — MiniPhone's Ext field, auto-dialed by the
-  // backend once the call is answered (see dialerService.runAutoDtmf).
+  // dialExtension (optional) — the part after the comma in MiniPhone's
+  // display ("5551234567,101"), auto-dialed by the backend once the call
+  // is answered (see dialerService.runAutoDtmf).
   async function handleManualDial(phoneNumber, dialExtension) {
     if (agentStatus?.status !== "READY") {
       setError("You must be Ready to place a call.");

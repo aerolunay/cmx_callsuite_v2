@@ -887,8 +887,8 @@ router.post("/dialer/start-call", requireAuth, async (req, res) => {
       });
     }
 
-    // Optional extension to auto-dial once answered (MiniPhone's Ext
-    // field) — validated up front so a bad one rejects the dial rather
+    // Optional extension to auto-dial once answered (the ",101" part of
+    // MiniPhone's dial string) — validated up front so a bad one rejects the dial rather
     // than being silently dropped mid-call.
     let autoDtmf;
     try {

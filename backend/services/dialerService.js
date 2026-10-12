@@ -1308,8 +1308,8 @@ async function sendDtmf(callId, digits) {
 Auto-dialed extension ("dial with extension") — NEW, per explicit request
 ==================================================
 Lets the agent type a number AND its extension up front (MiniPhone's
-Ext field, Line 1 manual dial or Line 2), instead of waiting for the
-answer and tapping the keypad by hand. Once the far end answers, waits
+"5551234567,101" dial string, Line 1 manual dial or Line 2), instead
+of waiting for the answer and tapping the keypad by hand. Once the far end answers, waits
 AUTO_DTMF_INITIAL_DELAY_MS (most IVRs accept digits during their
 greeting), then sends the sequence. Each "," is an extra
 AUTO_DTMF_PAUSE_MS pause — the usual phone convention, for IVRs that
