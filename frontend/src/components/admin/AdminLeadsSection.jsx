@@ -296,6 +296,7 @@ export default function AdminLeadsSection() {
           <div className="success">
             Imported {uploadResult.imported} lead{uploadResult.imported === 1 ? "" : "s"}
             {uploadResult.skippedMissingPhone > 0 ? ` (${uploadResult.skippedMissingPhone} row(s) skipped — missing phone number)` : ""}
+            {uploadResult.skippedInvalidPhone > 0 ? ` (${uploadResult.skippedInvalidPhone} row(s) skipped — phone number isn't 10 digits)` : ""}
             {uploadResult.skippedDuplicateWithinFile > 0 ? ` (${uploadResult.skippedDuplicateWithinFile} duplicate row(s) within the file skipped)` : ""}
             {uploadResult.skippedDuplicateExisting > 0 ? ` (${uploadResult.skippedDuplicateExisting} number(s) already on file skipped)` : ""}.
           </div>
@@ -345,6 +346,12 @@ export default function AdminLeadsSection() {
               <strong>{uploadPreview.totalRows}</strong> row(s) found
               {uploadPreview.skippedMissingPhone > 0 ? `, ${uploadPreview.skippedMissingPhone} missing a phone number` : ""}.
             </p>
+            {uploadPreview.skippedInvalidPhone > 0 && (
+              <div className="error">
+                {uploadPreview.skippedInvalidPhone} row(s) will be skipped — the phone number isn't 10 digits
+                (or 11 starting with 1), e.g. {uploadPreview.invalidPhoneExamples.join(", ")}.
+              </div>
+            )}
             <ul style={{ fontSize: 14, marginTop: 4 }}>
               <li>{uploadPreview.duplicatesWithinFile} duplicate row(s) within this file</li>
               <li>{uploadPreview.duplicatesAgainstExisting} number(s) already on file (any campaign)</li>

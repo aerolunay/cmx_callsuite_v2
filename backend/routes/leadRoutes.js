@@ -146,6 +146,18 @@ async function parseUploadedRows(file) {
   return rows;
 }
 
+// A lead's phone number as the bare 10 digits the outbound routes dial,
+// or null if it can't be dialed. Formatting is ignored ("(646) 801-6974",
+// "+1 646-801-6974"), and an 11-digit number keeps its last 10 only when
+// it starts with 1 — same rule as dialerService.js's isDialablePhoneNumber.
+function cleanLeadPhoneNumber(phoneNumber) {
+  let digits = String(phoneNumber).replace(/\D/g, "");
+  if (digits.length === 11 && digits.startsWith("1")) {
+    digits = digits.slice(1);
+  }
+  return digits.length === 10 ? digits : null;
+}
+
 function cleanupStagedFile(file) {
   if (!file) return;
   fs.unlink(file.path, (err) => {
@@ -225,13 +237,35 @@ router.post("/leads/upload", requireAdmin, upload.single("file"), async (req, re
     }
 
     const rows = await parseUploadedRows(file);
-    const validRows = rows.filter((r) => r.phone_number);
-    const skippedMissingPhone = rows.length - validRows.length;
+    const rowsWithPhone = rows.filter((r) => r.phone_number);
+    const skippedMissingPhone = rows.length - rowsWithPhone.length;
+
+    // Per explicit request — numbers are checked HERE, on upload, rather
+    // than when an agent dials: a lead that can't be dialed (the outbound
+    // routes need exactly 10 digits) never makes it into vicidial_list.
+    // Stored cleaned up to the bare 10 digits so duplicate checks below
+    // compare like with like.
+    const validRows = [];
+    const invalidPhoneNumbers = [];
+    for (const row of rowsWithPhone) {
+      const cleaned = cleanLeadPhoneNumber(row.phone_number);
+      if (cleaned) {
+        validRows.push({ ...row, phone_number: cleaned });
+      } else {
+        invalidPhoneNumbers.push(row.phone_number);
+      }
+    }
+    const skippedInvalidPhone = invalidPhoneNumbers.length;
+    // A few examples so the admin knows what to fix, not the whole list.
+    const invalidPhoneExamples = invalidPhoneNumbers.slice(0, 5);
 
     if (validRows.length === 0) {
       return res.status(400).json({
         success: false,
-        message: "No valid rows found — every row is missing a phone_number.",
+        message:
+          skippedInvalidPhone > 0
+            ? `No valid rows found — every phone_number is missing or isn't 10 digits (e.g. ${invalidPhoneExamples.join(", ")}).`
+            : "No valid rows found — every row is missing a phone_number.",
       });
     }
 
@@ -275,6 +309,8 @@ router.post("/leads/upload", requireAdmin, upload.single("file"), async (req, re
         preview: true,
         totalRows: rows.length,
         skippedMissingPhone,
+        skippedInvalidPhone,
+        invalidPhoneExamples,
         duplicatesWithinFile,
         duplicatesAgainstExisting,
         wouldImportIfInclude: validRows.length,
@@ -340,6 +376,7 @@ router.post("/leads/upload", requireAdmin, upload.single("file"), async (req, re
       listName,
       imported: rowsToInsert.length,
       skippedMissingPhone,
+      skippedInvalidPhone,
       skippedDuplicateWithinFile: mode === "exclude" ? duplicatesWithinFile : 0,
       skippedDuplicateExisting: mode === "exclude" ? duplicatesAgainstExisting : 0,
     });
