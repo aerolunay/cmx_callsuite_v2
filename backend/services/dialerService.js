@@ -277,6 +277,13 @@ const TERMINAL_LEAD_STATUSES = "('DNC', 'NI', 'DC', 'PU', 'CALLBK', 'SCRN', 'NOT
 // number screened that way still looked fresh on its own lead.
 // Indexed by sql/009_add_call_log_phone_indexes.sql.
 const CLOSED_OUT_DISPOSITIONS = "('SCREENING_COMPLETED', 'CALL_ENDED', 'NOT_INTERESTED', 'DO_NOT_CALL')";
+// Per explicit request — an inbound call from the number with any of these
+// outcomes also means the person was reached, so their outbound lead isn't
+// redialed (a scheduled callback is handled by its own mechanism). Caller
+// Hung Up / Ghost Call / Misrouted Call still allow a redial.
+const INBOUND_CLOSED_OUT_DISPOSITIONS =
+  "('SCREENING_COMPLETED', 'CALL_ENDED', 'NOT_INTERESTED', 'DO_NOT_CALL', " +
+  "'INFO_PROVIDED', 'CALLBACK_REQUESTED', 'XFER_CONF', 'TRANSFERRED', 'UNABLE_TO_COMPLETE_SCREENING')";
 
 // Shared by both getNextLead queries. Per explicit request — a lead that
 // was already dialed (or closed out) must never be dialed again, and that
@@ -301,7 +308,7 @@ const LEAD_ELIGIBILITY_SQL = `
         AND NOT EXISTS (
           SELECT 1 FROM cmx_dialer.inbound_call_log i
           WHERE i.caller_id_number IN (l.phone_number, CONCAT('1', l.phone_number), CONCAT('+1', l.phone_number))
-            AND i.disposition IN ${CLOSED_OUT_DISPOSITIONS}
+            AND i.disposition IN ${INBOUND_CLOSED_OUT_DISPOSITIONS}
         )`;
 
 async function getNextLead(campaignId) {
@@ -1657,8 +1664,14 @@ async function saveDisposition({
     // table's sole column is phone_number (confirmed via DESCRIBE,
     // not assumed) — INSERT IGNORE since it's the table's own PK, so
     // a number already on the list is a harmless no-op, not an error.
+    //
+    // Stored as the bare 10 digits, the same form leads are stored in —
+    // a manual dial typed as "1646..." or "+1 646-..." would otherwise
+    // never match its lead's "646..." in the DNC checks.
     if (disposition === "DO_NOT_CALL") {
-      await connection.execute(`INSERT IGNORE INTO vicidial_dnc (phone_number) VALUES (?)`, [phoneNumber]);
+      const digits = String(phoneNumber).replace(/\D/g, "");
+      const dncNumber = digits.length === 11 && digits.startsWith("1") ? digits.slice(1) : digits;
+      await connection.execute(`INSERT IGNORE INTO vicidial_dnc (phone_number) VALUES (?)`, [dncNumber]);
     }
 
     await connection.commit();

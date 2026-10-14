@@ -14,6 +14,7 @@ require("dotenv").config();
 
 const db = require("./config/db");
 const ws = require("./config/ws");
+const leadCleanupService = require("./services/leadCleanupService");
 require("./services/inboundCallService"); // self-registers AMI listeners on require
 require("./services/microsipOutboundService").start(); // Phase 8 — direct MicroSIP outbound detection
 const authRoutes = require("./routes/authRoutes");
@@ -260,6 +261,9 @@ async function startServer() {
     ws.attach(httpServer, sessionStore);
 
     httpServer.listen(PORT, () => {
+      // Per explicit request — removes DNC/Screening Completed leads every
+      // hour in case nobody clicks Admin's "Clean Up Leads".
+      leadCleanupService.startHourlyCleanup();
       console.log(`CMX Dialer API running on port ${PORT}`);
       console.log(`Environment: ${process.env.NODE_ENV || "development"}`);
       console.log(`Frontend URL: ${FRONTEND_URL}`);

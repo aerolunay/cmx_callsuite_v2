@@ -8,6 +8,7 @@ const ExcelJS = require("exceljs");
 const { parse: parseCsvSync } = require("csv-parse/sync");
 const { stringify: stringifyCsvSync } = require("csv-stringify/sync");
 const db = require("../config/db");
+const leadCleanupService = require("../services/leadCleanupService");
 
 const router = express.Router();
 
@@ -413,46 +414,17 @@ Every deleted row is logged to cmx_dialer.deleted_leads_log first (see
 006_add_deleted_leads_log.sql) — a permanent, queryable audit trail,
 not a one-off backup table, since this is meant to run repeatedly over
 time.
+
+The logic itself lives in services/leadCleanupService.js, which also
+runs it automatically every hour (all campaigns, no preview) in case
+nobody clicks the button.
 ==================================================
 */
-
-// Shared by both preview and confirm — computes exactly which
-// (lead_id, phone_number, ...) rows currently qualify for deletion,
-// each tagged with its reason. 'DNC' takes priority over
-// 'SCREENING_COMPLETED' when a number matches both, since DNC is the
-// stronger/legal reason.
-async function findLeadsToClean(campaignId) {
-  const params = [];
-  let campaignFilter = "";
-  if (campaignId) {
-    campaignFilter = " AND vlt.campaign_id = ?";
-    params.push(campaignId);
-  }
-
-  const [rows] = await db.execute(
-    `
-      SELECT
-        vl.lead_id, vl.list_id, vlt.campaign_id, vl.phone_number, vl.first_name, vl.last_name,
-        CASE WHEN dnc.phone_number IS NOT NULL THEN 'DNC' ELSE 'SCREENING_COMPLETED' END AS reason
-      FROM asterisk.vicidial_list vl
-      JOIN asterisk.vicidial_lists vlt ON vlt.list_id = vl.list_id
-      LEFT JOIN asterisk.vicidial_dnc dnc ON dnc.phone_number = vl.phone_number
-      LEFT JOIN (
-        SELECT DISTINCT phone_number FROM cmx_dialer.dialer_call_log WHERE disposition = 'SCREENING_COMPLETED'
-        UNION
-        SELECT DISTINCT caller_id_number AS phone_number FROM cmx_dialer.inbound_call_log WHERE disposition = 'SCREENING_COMPLETED'
-      ) screened ON screened.phone_number = vl.phone_number
-      WHERE (dnc.phone_number IS NOT NULL OR screened.phone_number IS NOT NULL)${campaignFilter}
-    `,
-    params
-  );
-  return rows;
-}
 
 router.post("/leads/cleanup/preview", requireAdmin, async (req, res) => {
   try {
     const { campaignId } = req.body;
-    const toClean = await findLeadsToClean(campaignId || null);
+    const toClean = await leadCleanupService.findLeadsToClean(campaignId || null);
     const dncCount = toClean.filter((r) => r.reason === "DNC").length;
     const screeningCompletedCount = toClean.filter((r) => r.reason === "SCREENING_COMPLETED").length;
 
@@ -482,46 +454,11 @@ router.post("/leads/cleanup/preview", requireAdmin, async (req, res) => {
 router.post("/leads/cleanup/confirm", requireAdmin, async (req, res) => {
   try {
     const { campaignId } = req.body;
-    const toClean = await findLeadsToClean(campaignId || null);
-
-    if (toClean.length === 0) {
-      return res.json({ success: true, deleted: 0 });
-    }
-
-    const appUserId = req.session.agent.appUserId;
-    const connection = await db.getConnection();
-    try {
-      await connection.beginTransaction();
-
-      // Log every row BEFORE deleting it — batched, not one insert
-      // per row, same reasoning as the bulk lead-upload insert above.
-      const logPlaceholders = toClean.map(() => "(?, ?, ?, ?, ?, ?, ?, ?)").join(", ");
-      const logParams = [];
-      for (const row of toClean) {
-        logParams.push(row.lead_id, row.list_id, row.campaign_id, row.phone_number, row.first_name, row.last_name, row.reason, appUserId);
-      }
-      await connection.execute(
-        `
-          INSERT INTO cmx_dialer.deleted_leads_log
-            (lead_id, list_id, campaign_id, phone_number, first_name, last_name, reason, deleted_by_app_user_id)
-          VALUES ${logPlaceholders}
-        `,
-        logParams
-      );
-
-      const leadIds = toClean.map((r) => r.lead_id);
-      const deletePlaceholders = leadIds.map(() => "?").join(",");
-      await connection.execute(`DELETE FROM asterisk.vicidial_list WHERE lead_id IN (${deletePlaceholders})`, leadIds);
-
-      await connection.commit();
-    } catch (err) {
-      await connection.rollback();
-      throw err;
-    } finally {
-      connection.release();
-    }
-
-    return res.json({ success: true, deleted: toClean.length });
+    const { deleted } = await leadCleanupService.runLeadCleanup({
+      campaignId: campaignId || null,
+      appUserId: req.session.agent.appUserId,
+    });
+    return res.json({ success: true, deleted });
   } catch (error) {
     console.error("POST /api/admin/leads/cleanup/confirm failed:", error);
     return res.status(500).json({ success: false, message: error.message || "Failed to clean up leads." });
