@@ -314,17 +314,94 @@ async function getNextLead(campaignId) {
   // Auto Dial — a campaign outside its own configured hours should
   // never dial, regardless of which path triggered it.
   const [ruleRows] = await db.execute(
-    `SELECT calling_days, calling_start_time, calling_end_time
+    `SELECT calling_days, calling_start_time, calling_end_time,
+            max_attempts_busy, max_attempts_no_answer, max_attempts_machine, attempt_interval_minutes
      FROM cmx_dialer.campaign_autodial_rules WHERE campaign_id = ?`,
     [campaignId]
   );
-  const rules = ruleRows[0] || { calling_days: "mon-fri", calling_start_time: "09:00", calling_end_time: "18:00" };
+  // Same defaults as leadRoutes.js's AUTODIAL_RULE_DEFAULTS.
+  const rules = ruleRows[0] || {
+    calling_days: "mon-fri",
+    calling_start_time: "09:00",
+    calling_end_time: "18:00",
+    max_attempts_busy: 3,
+    max_attempts_no_answer: 3,
+    max_attempts_machine: 3,
+    attempt_interval_minutes: 60,
+  };
 
   if (!isWithinCallingHours(rules)) {
     const err = new Error("Outside this campaign's configured calling hours.");
     err.code = "OUTSIDE_CALLING_HOURS";
     throw err;
   }
+
+  const lead = await pickFreshLead(campaignId);
+  if (lead) return lead;
+
+  // Every lead in the list has now been dialed once this cycle — start the
+  // next cycle with the automatic No Answer / Machine / Busy outcomes.
+  const reopened = await startRetryCycle(campaignId, rules);
+  return reopened > 0 ? pickFreshLead(campaignId) : null;
+}
+
+/*
+Per explicit request — automatic No Answer / Machine / Busy outcomes are
+never redialed straight away. The whole list is dialed once first (every
+lead with called_since_last_reset = 'N'); only once none are left does
+this reopen the retryable ones, each for exactly one more dial, as the
+next cycle. Dialing marks a lead called again (markLeadDialed), so a
+reopened lead can't come back until the cycle after that.
+
+Still bounded by the campaign's autodial rules (Admin -> Leads/Auto-Dial):
+a lead is only reopened once its own interval has passed since its last
+attempt, and while today's attempts for its last outcome are under that
+outcome's max. Leads not reopened yet are simply picked up by a later
+cycle — getNextLead runs again on every pull and on the frontend's
+no-leads re-check.
+*/
+const RETRYABLE_LEAD_STATUSES = "('NA', 'AM', 'B')"; // AUTODIAL_OUTCOME_INFO's statuses
+
+async function startRetryCycle(campaignId, rules) {
+  // Same date recordAutodialAttempt writes, so "today" matches its counters.
+  const today = new Date().toISOString().slice(0, 10);
+  // A lead whose number is ringing right now must not be reopened under it.
+  const inCallLeadIds = [...activeCalls.values()].map((c) => Number(c.leadId)).filter((id) => id > 0);
+  const inCallFilter = inCallLeadIds.length ? `AND l.lead_id NOT IN (${inCallLeadIds.map(() => "?").join(",")})` : "";
+
+  const [result] = await db.execute(
+    `
+      UPDATE vicidial_list l
+      JOIN vicidial_lists vl ON vl.list_id = l.list_id
+      LEFT JOIN cmx_dialer.lead_autodial_state s ON s.lead_id = l.lead_id
+      SET l.called_since_last_reset = 'N'
+      WHERE vl.campaign_id = ?
+        AND l.called_since_last_reset = 'Y'
+        AND l.status IN ${RETRYABLE_LEAD_STATUSES}
+        AND (s.last_attempt_at IS NULL OR s.last_attempt_at <= NOW() - INTERVAL ? MINUTE)
+        AND (
+          s.lead_id IS NULL OR s.attempts_date <> ?
+          OR (l.status = 'NA' AND s.attempts_no_answer_today < ?)
+          OR (l.status = 'AM' AND s.attempts_machine_today < ?)
+          OR (l.status = 'B' AND s.attempts_busy_today < ?)
+        )
+        ${inCallFilter}
+    `,
+    [
+      campaignId,
+      rules.attempt_interval_minutes,
+      today,
+      rules.max_attempts_no_answer,
+      rules.max_attempts_machine,
+      rules.max_attempts_busy,
+      ...inCallLeadIds,
+    ]
+  );
+  return result.affectedRows;
+}
+
+// One lead that hasn't been dialed yet this cycle, or null.
+async function pickFreshLead(campaignId) {
 
   // REAL BUG FIX: the hopper query used to skip the
   // called_since_last_reset check, and nothing ever removed a dialed
