@@ -266,6 +266,44 @@ function isWithinCallingHours({ calling_days, calling_start_time, calling_end_ti
   return currentMinutes >= startMinutes && currentMinutes < endMinutes;
 }
 
+// Vicidial statuses that mean "never dial this lead again" — every
+// terminal disposition in DISPOSITION_TO_VICIDIAL_STATUS below.
+const TERMINAL_LEAD_STATUSES = "('DNC', 'NI', 'DC', 'PU', 'CALLBK', 'SCRN', 'NOTELIG')";
+
+// Per explicit request — a number ever disposed as one of these is never
+// dialed again, however it got that disposition. Checked against the call
+// logs too, not just vicidial_list.status, because a callback or manual
+// dial (lead_id 0) and an inbound call never update any lead row — so a
+// number screened that way still looked fresh on its own lead.
+// Indexed by sql/009_add_call_log_phone_indexes.sql.
+const CLOSED_OUT_DISPOSITIONS = "('SCREENING_COMPLETED', 'CALL_ENDED', 'NOT_INTERESTED', 'DO_NOT_CALL')";
+
+// Shared by both getNextLead queries. Per explicit request — a lead that
+// was already dialed (or closed out) must never be dialed again, and that
+// has to hold for the PHONE NUMBER, not just the lead row: the same number
+// can sit on several lead rows (an "Include duplicates" upload, or another
+// list/campaign). So besides this row's own status/reset flag, skip it when
+// ANY other row with the same number is terminal (Screening Completed, Not
+// Interested, ...) or was already called in this pass.
+const LEAD_ELIGIBILITY_SQL = `
+        AND l.called_since_last_reset = 'N'
+        AND l.status NOT IN ${TERMINAL_LEAD_STATUSES}
+        AND NOT EXISTS (SELECT 1 FROM vicidial_dnc d WHERE d.phone_number = l.phone_number)
+        AND NOT EXISTS (
+          SELECT 1 FROM vicidial_list o
+          WHERE o.phone_number = l.phone_number AND o.lead_id <> l.lead_id
+            AND (o.status IN ${TERMINAL_LEAD_STATUSES} OR o.called_since_last_reset = 'Y')
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM cmx_dialer.dialer_call_log c
+          WHERE c.phone_number = l.phone_number AND c.disposition IN ${CLOSED_OUT_DISPOSITIONS}
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM cmx_dialer.inbound_call_log i
+          WHERE i.caller_id_number IN (l.phone_number, CONCAT('1', l.phone_number), CONCAT('+1', l.phone_number))
+            AND i.disposition IN ${CLOSED_OUT_DISPOSITIONS}
+        )`;
+
 async function getNextLead(campaignId) {
   // Phase 2, piece 1 — calling hours enforcement. Real rules stored
   // in cmx_dialer.campaign_autodial_rules (Admin -> Leads/Auto-Dial)
@@ -288,6 +326,14 @@ async function getNextLead(campaignId) {
     throw err;
   }
 
+  // REAL BUG FIX: the hopper query used to skip the
+  // called_since_last_reset check, and nothing ever removed a dialed
+  // lead's hopper row — so after a No Answer/Busy/Voicemail (none of
+  // them terminal) the SAME lead came straight back as "next", and Auto
+  // Dial redialed the number immediately. Now uses the same eligibility
+  // rules as the fallback query (LEAD_ELIGIBILITY_SQL), and startCall
+  // marks the lead called + clears its hopper row the moment it dials.
+  //
   // Same terminal-status + DNC exclusions as the fallback query below
   // — a hopper entry can go stale (still 'READY' in vicidial_hopper
   // even after its lead was later disposed with a terminal outcome,
@@ -304,9 +350,7 @@ async function getNextLead(campaignId) {
              l.alt_phone, l.email, l.comments
       FROM vicidial_hopper h
       JOIN vicidial_list l ON l.lead_id = h.lead_id
-      WHERE h.campaign_id = ? AND h.status = 'READY'
-        AND l.status NOT IN ('DNC', 'NI', 'DC', 'PU', 'CALLBK', 'SCRN')
-        AND NOT EXISTS (SELECT 1 FROM vicidial_dnc d WHERE d.phone_number = l.phone_number)
+      WHERE h.campaign_id = ? AND h.status = 'READY'${LEAD_ELIGIBILITY_SQL}
       ORDER BY h.priority ASC, h.hopper_id ASC
       LIMIT 1
     `,
@@ -351,10 +395,7 @@ async function getNextLead(campaignId) {
              l.alt_phone, l.email, l.comments
       FROM vicidial_list l
       JOIN vicidial_lists vl ON vl.list_id = l.list_id
-      WHERE vl.campaign_id = ?
-        AND l.called_since_last_reset = 'N'
-        AND l.status NOT IN ('DNC', 'NI', 'DC', 'PU', 'CALLBK', 'SCRN')
-        AND NOT EXISTS (SELECT 1 FROM vicidial_dnc d WHERE d.phone_number = l.phone_number)
+      WHERE vl.campaign_id = ?${LEAD_ELIGIBILITY_SQL}
       ORDER BY l.lead_id ASC
       LIMIT 1
     `,
@@ -408,6 +449,14 @@ function normalizePhoneNumber(phoneNumber) {
 // is dialed, with a message the agent can actually act on.
 function isDialablePhoneNumber(phoneNumber) {
   return /^\d{10}$/.test(normalizePhoneNumber(String(phoneNumber || "")));
+}
+
+// Called once a lead's number is actually being dialed — see startCall.
+// The disposition/outcome later overwrites status; this only guarantees
+// the lead can't be pulled again in the meantime.
+async function markLeadDialed(leadId) {
+  await db.execute(`UPDATE vicidial_list SET called_since_last_reset = 'Y' WHERE lead_id = ?`, [leadId]);
+  await db.execute(`DELETE FROM vicidial_hopper WHERE lead_id = ?`, [leadId]);
 }
 
 function startCall({
@@ -619,6 +668,17 @@ function startCall({
         // this same timestamp either way).
         callState.ringingCustomerAt = new Date();
         broadcastCallStatus(callState);
+
+        // The customer is now actually being dialed — take the lead out of
+        // the pool right away instead of waiting for its outcome/disposition
+        // (see getNextLead). Otherwise anything that ends the call without
+        // a saved disposition (refresh, closed tab, failed save) leaves it
+        // looking never-dialed. Manual dials (lead_id 0) have no lead.
+        if (Number(leadId) > 0) {
+          markLeadDialed(leadId).catch((err) => {
+            console.error(`[dialerService] Failed to mark lead ${leadId} as dialed:`, err.message);
+          });
+        }
 
         // REAL BUG FIXED HERE: previously, callState.customerChannel was
         // ONLY ever set inside ConfbridgeJoin's handler — which only
