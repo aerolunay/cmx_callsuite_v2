@@ -268,7 +268,7 @@ function isWithinCallingHours({ calling_days, calling_start_time, calling_end_ti
 
 // Vicidial statuses that mean "never dial this lead again" — every
 // terminal disposition in DISPOSITION_TO_VICIDIAL_STATUS below.
-const TERMINAL_LEAD_STATUSES = "('DNC', 'NI', 'DC', 'PU', 'CALLBK', 'SCRN', 'NOTELIG')";
+const TERMINAL_LEAD_STATUSES = "('DNC', 'NI', 'DC', 'PU', 'CALLBK', 'SCRN', 'NOTELG')";
 
 // Per explicit request — a number ever disposed as one of these is never
 // dialed again, however it got that disposition. Checked against the call
@@ -1573,7 +1573,10 @@ const DISPOSITION_TO_VICIDIAL_STATUS = {
   // corresponding row for this either, but that table is never
   // queried for validation here, so it's not required for this app's
   // own logic to work.
-  NOT_ELIGIBLE: "NOTELIG",
+  // REAL BUG FIX: was "NOTELIG"/"XFERCONF" (below) — vicidial_list.status
+  // is VARCHAR(6), so saving either disposition failed outright with
+  // "Data too long for column 'status'". Both codes now fit.
+  NOT_ELIGIBLE: "NOTELG",
   // REAL BUG FOUND AND FIXED, per final review: XFER_CONF has always
   // been part of the base outbound DISPOSITIONS list on the frontend
   // (dispositions.js) — offered to agents on every single campaign —
@@ -1586,7 +1589,7 @@ const DISPOSITION_TO_VICIDIAL_STATUS = {
   // this map's own keys directly. Same reasoning as the other two
   // custom codes above: no real ViciDial-native equivalent, so a
   // dedicated new status code rather than reusing an unrelated one.
-  XFER_CONF: "XFERCONF",
+  XFER_CONF: "XFER",
 };
 
 async function saveDisposition({
