@@ -232,6 +232,10 @@ export default function DialerPage() {
   // driven by the "callAutoResolved" WS message.
   const [autoResolvedNotice, setAutoResolvedNotice] = useState("");
   const [busy, setBusy] = useState(false);
+  // True for a few seconds after next-lead answers INBOUND_WAITING — an
+  // inbound caller this agent can take is waiting, so Auto Dial holds off
+  // (instead of retrying in a tight loop) while the inbound call rings them.
+  const [inboundWaitingHold, setInboundWaitingHold] = useState(false);
   const [hasLeads, setHasLeads] = useState(true); // optimistic default — avoids a flash of "no leads" before the check resolves
   // How many campaigns THIS agent is actually assigned to. Used purely
   // to decide whether "Change campaign" should even be shown — an
@@ -249,6 +253,12 @@ export default function DialerPage() {
   const [workingCampaigns, setWorkingCampaigns] = useState([]);
 
   const elapsedTimerRef = useRef(null);
+
+  useEffect(() => {
+    if (!inboundWaitingHold) return;
+    const timeout = setTimeout(() => setInboundWaitingHold(false), 3000);
+    return () => clearTimeout(timeout);
+  }, [inboundWaitingHold]);
 
   useEffect(() => {
     if (!autoResolvedNotice) return;
@@ -293,17 +303,17 @@ export default function DialerPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Whichever campaign OUTBOUND dialing/lead-pulling/manual-status
-  // context should use — derived, never stored. Outbound is always
-  // exclusive (server-enforced — see dialerRoutes.js's
-  // POST /dialer/working-campaigns), so whenever there's genuinely
-  // only one working campaign, that's the correct single context for
-  // all of this; when the agent is working 2 BLENDED campaigns at
-  // once, there's no sensible single outbound context at all (nor
-  // should there be — see campaignRoutes.js's own comment: blended
-  // campaigns never have leads by design, so this only ever matters
-  // for the true single-campaign case anyway).
-  const outboundCampaign = workingCampaigns.length === 1 ? workingCampaigns[0] : null;
+  // Whichever campaign OUTBOUND dialing/lead-pulling should use —
+  // derived, never stored. At most one working campaign can be OUTBOUND
+  // (server-enforced — see dialerRoutes.js's POST
+  // /dialer/working-campaigns). Per explicit request it can now be
+  // worked together with BLENDED campaigns, whose inbound callers are
+  // offered first; that one OUTBOUND campaign is still where leads come
+  // from. Otherwise a single working campaign is the context, and 2
+  // BLENDED campaigns have none (blended campaigns never have leads by
+  // design — see campaignRoutes.js).
+  const outboundCampaign =
+    workingCampaigns.find((c) => c.campaign_type === "OUTBOUND") || (workingCampaigns.length === 1 ? workingCampaigns[0] : null);
 
   // Hide "Dial Next Number" entirely for campaigns with no leads at
   // all (e.g. CMXBSMSC, which is inbound-only and relies on the
@@ -695,7 +705,12 @@ export default function DialerPage() {
       // (`if (!hasLeads) return;`) then correctly respects — stopping
       // the loop and showing a calm, expected message instead of a
       // scary red error banner.
-      if (err.status === 404) {
+      if (err.code === "INBOUND_WAITING") {
+        // Not an error — an inbound caller goes first, and no lead was
+        // used up. Auto Dial resumes once the hold below lapses.
+        setAutoResolvedNotice(err.message);
+        setInboundWaitingHold(true);
+      } else if (err.status === 404) {
         setHasLeads(false);
       } else if (err.status === 403) {
         // Outside this campaign's configured calling hours — same
@@ -743,6 +758,7 @@ export default function DialerPage() {
     if (call) return;
     if (!hasLeads) return;
     if (busy) return;
+    if (inboundWaitingHold) return;
     if (autoDialInFlightRef.current) return;
 
     autoDialInFlightRef.current = true;
@@ -750,7 +766,7 @@ export default function DialerPage() {
       autoDialInFlightRef.current = false;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [outboundCampaign, agentStatus, call, hasLeads, busy]);
+  }, [outboundCampaign, agentStatus, call, hasLeads, busy, inboundWaitingHold]);
 
   // Callback: reuses the same startCall path as "Dial Next Number" but
   // skips getNextLead entirely — the row from Call Logs already has
@@ -944,8 +960,10 @@ export default function DialerPage() {
       console.error("checkCallbackPending failed:", err.message);
     }
 
-    if (outboundCampaign) {
-      placeManualDial(outboundCampaign.campaign_id, phoneNumber, dialExtension);
+    // Only a single working campaign is unambiguous — with an outbound +
+    // blended mix, the agent picks which campaign the call belongs to.
+    if (workingCampaigns.length === 1) {
+      placeManualDial(workingCampaigns[0].campaign_id, phoneNumber, dialExtension);
       return;
     }
 
@@ -1376,7 +1394,7 @@ export default function DialerPage() {
             <MiniPhone
               agentStatus={agentStatus?.status}
               hasActiveCall={Boolean(call || inboundCall)}
-              campaignId={outboundCampaign?.campaign_id}
+              campaignId={call?.campaignId || inboundCall?.campaignId || outboundCampaign?.campaign_id}
               canHold={Boolean(
                 (call && call.status === "customer_connected") ||
                   (inboundCall && inboundCall.status === "agent_connected")

@@ -545,11 +545,13 @@ behavior being followed correctly:
   2. If au.multi_campaign_enabled is 0 for this agent, at most ONE
      campaignId is allowed, regardless of type — an admin/WFM hasn't
      opted this agent into the feature at all.
-  3. If ANY selected campaign is OUTBOUND (not BLENDED), at most ONE
-     campaignId is allowed, full stop — OUTBOUND lead-pulling
+  3. At most ONE OUTBOUND campaign — OUTBOUND lead-pulling
      (dialerService.js's getNextLead) is fundamentally single-campaign,
      there's no sensible way to "pull the next lead from two outbound
-     campaigns at once."
+     campaigns at once." Per explicit request it CAN be combined with
+     BLENDED campaigns now: the agent dials that one outbound campaign's
+     leads, and the blended campaigns' inbound callers are offered to
+     them first whenever they go READY (see POST /dialer/next-lead).
 
 GET returns the agent's current selection, for the campaign-select
 page to pre-check the right boxes on load (e.g. after a page refresh)
@@ -608,11 +610,11 @@ router.post("/dialer/working-campaigns", requireAuth, async (req, res) => {
       });
     }
 
-    const hasOutbound = campaignIds.some((id) => assignedById.get(id) === "OUTBOUND");
-    if (hasOutbound && campaignIds.length > 1) {
+    const outboundCount = campaignIds.filter((id) => assignedById.get(id) === "OUTBOUND").length;
+    if (outboundCount > 1) {
       return res.status(400).json({
         success: false,
-        message: "An outbound campaign can't be combined with other campaigns — select just the one.",
+        message: "You can only work one outbound campaign at a time — select just one.",
       });
     }
 
@@ -846,6 +848,20 @@ router.post("/dialer/next-lead", requireAuth, async (req, res) => {
 
     if (!campaignId) {
       return res.status(400).json({ success: false, message: "campaignId is required." });
+    }
+
+    // Per explicit request (blended outbound + priority inbound) — an
+    // inbound caller waiting in any campaign this agent works always goes
+    // first. No lead is pulled, so the one they'd have dialed stays next;
+    // the frontend pauses Dial Next/Auto Dial and re-checks shortly, and
+    // the inbound matcher rings this agent in the meantime.
+    const waitingInbound = await inboundCallService.getWaitingInboundForAgent(req.session.agent.appUserId);
+    if (waitingInbound) {
+      return res.status(409).json({
+        success: false,
+        code: "INBOUND_WAITING",
+        message: `A ${waitingInbound.campaignId} caller is waiting — connecting you to the inbound call first.`,
+      });
     }
 
     const lead = await dialerService.getNextLead(campaignId);

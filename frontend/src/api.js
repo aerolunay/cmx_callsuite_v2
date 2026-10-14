@@ -28,6 +28,7 @@ async function request(path, options = {}) {
     const error = new Error(data.message || `Request failed (${res.status})`);
     error.status = res.status;
     error.reason = data.reason;
+    error.code = data.code;
     throw error;
   }
 

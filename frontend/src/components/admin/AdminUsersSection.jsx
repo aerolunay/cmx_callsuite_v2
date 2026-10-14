@@ -331,13 +331,13 @@ export default function AdminUsersSection() {
                       checked={multiCampaignEnabled}
                       onChange={(e) => setMultiCampaignEnabled(e.target.checked)}
                     />
-                    Allow Multiple Blended Campaigns
+                    Allow Multiple Campaigns
                   </label>
                   <p style={{ fontSize: 13, color: "#888", marginTop: 4 }}>
-                    Lets this agent select more than one blended campaign to work on
-                    simultaneously (receiving inbound calls from any of them while Ready).
-                    Selecting an outbound campaign always stays exclusive, regardless of this
-                    setting.
+                    Lets this agent work up to 2 campaigns at once: two blended campaigns, or one
+                    outbound campaign plus one blended. With outbound + blended, the agent dials
+                    the outbound leads, and the blended campaign's inbound callers are offered to
+                    them first whenever they go Ready.
                   </p>
                 </>
               )}

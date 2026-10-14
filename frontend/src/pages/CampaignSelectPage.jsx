@@ -18,18 +18,17 @@ choice.
 MULTI-SELECT RULES (only apply when agent.multiCampaignEnabled is
 true — an admin/WFM-controlled per-agent toggle, see
 AdminUsersSection.jsx):
-  - Clicking an OUTBOUND campaign always clears every other selection
-    and selects ONLY that one — outbound lead-pulling
-    (dialerService.js's getNextLead) is fundamentally single-campaign,
-    there's no sensible "pull from two outbound campaigns at once."
-  - Clicking a BLENDED campaign while an OUTBOUND one is selected
-    clears the outbound selection and starts a fresh blended-only
-    selection with just this one — can't mix the two.
-  - Clicking a BLENDED campaign otherwise just toggles it in/out of
-    the growing multi-select set — capped at 2 at once, per explicit
-    request. A third click is rejected outright (selection stays at
-    2) with an explanatory message, rather than silently dropping the
-    oldest selection or failing to do anything without explanation.
+  - At most ONE OUTBOUND campaign — outbound lead-pulling
+    (dialerService.js's getNextLead) is fundamentally single-campaign.
+    Clicking an OUTBOUND campaign replaces any other OUTBOUND one but
+    keeps the BLENDED selections. Per explicit request, outbound can be
+    worked together with blended campaigns: their inbound callers are
+    offered first whenever the agent goes READY.
+  - Every click toggles a campaign in/out of the selection — capped at
+    2 at once, per explicit request. A click that would make it 3 is
+    rejected outright (selection unchanged) with an explanatory
+    message, rather than silently dropping the oldest selection or
+    failing to do anything without explanation.
 Agents with multiCampaignEnabled OFF (the default) see the exact same
 single-radio-button behavior as before — nothing changes for them.
 
@@ -93,38 +92,21 @@ export default function CampaignSelectPage() {
 
     const isOutboundClicked = campaignType(campaignId) === "OUTBOUND";
 
-    if (isOutboundClicked) {
-      // Always exclusive, regardless of current state.
-      setError("");
-      setSelectedIds((prev) => (prev.length === 1 && prev[0] === campaignId ? [] : [campaignId]));
-      return;
-    }
-
     setSelectedIds((prev) => {
-      const alreadySelected = prev.includes(campaignId);
-      if (alreadySelected) {
+      if (prev.includes(campaignId)) {
         setError("");
         return prev.filter((id) => id !== campaignId);
       }
-      // If an outbound campaign is currently the sole selection,
-      // clicking a blended one replaces it entirely rather than
-      // combining — can't mix outbound with anything else.
-      const hasOutboundSelected = prev.some((id) => campaignType(id) === "OUTBOUND");
-      if (hasOutboundSelected) {
-        setError("");
-        return [campaignId];
-      }
-      // Per explicit request — capped at 2 blended campaigns at once,
-      // even for an agent with multiCampaignEnabled on and 3+ actual
-      // assignments. A third click is simply rejected (selection
-      // unchanged) with an explanatory message, rather than silently
-      // dropping the oldest one or doing nothing unexplained.
-      if (prev.length >= 2) {
+      // Only one outbound campaign at a time — a new one replaces the old.
+      const kept = isOutboundClicked ? prev.filter((id) => campaignType(id) !== "OUTBOUND") : prev;
+      // Per explicit request — capped at 2 campaigns at once, even for an
+      // agent with multiCampaignEnabled on and 3+ actual assignments.
+      if (kept.length >= 2) {
         setError("You can work a maximum of 2 campaigns at once — deselect one first.");
         return prev;
       }
       setError("");
-      return [...prev, campaignId];
+      return [...kept, campaignId];
     });
   }
 
@@ -185,8 +167,8 @@ export default function CampaignSelectPage() {
           <div className="card">
             {multiCampaignEnabled && (
               <p style={{ fontSize: 13, color: "#888", marginBottom: 10 }}>
-                You can select up to 2 blended campaigns to work at once. Selecting an outbound
-                campaign always works alone.
+                You can select up to 2 campaigns to work at once, including at most one outbound
+                campaign. Working an outbound campaign with a blended one, inbound callers come first.
               </p>
             )}
             {campaigns.map((c) => (

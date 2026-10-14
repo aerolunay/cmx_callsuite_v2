@@ -778,6 +778,60 @@ async function tryConnectReadyAgentsInner() {
 
 /*
 ==================================================
+getWaitingInboundForAgent(appUserId)
+==================================================
+Per explicit request — blended outbound + priority inbound: an agent
+working an OUTBOUND campaign together with BLENDED ones must never start
+a new outbound lead call while an inbound caller they could take is
+waiting. Returns that inbound call (or the one already ringing them),
+else null. Used by POST /dialer/next-lead.
+
+"Could take" mirrors agentStatusService.getAnyReadyAgentWithExtension:
+assigned to the call's campaign, working it, and not priority 4 (opted out of inbound entirely —
+blocking their outbound would only idle them).
+==================================================
+*/
+async function getWaitingInboundForAgent(appUserId) {
+  // Only agents deliberately working 2+ campaigns (outbound + blended) are
+  // held back — a single-campaign agent dials exactly as before, even if
+  // that campaign also receives inbound calls on a DID.
+  const [workingRows] = await db.execute(
+    `SELECT COUNT(*) AS n FROM cmx_dialer.agent_working_campaigns WHERE app_user_id = ?`,
+    [appUserId]
+  );
+  if (Number(workingRows[0]?.n) < 2) return null;
+
+  const calls = Array.from(inboundCalls.values());
+  const ringingThisAgent = calls.find((c) => c.status === "ringing_agent" && c.pendingAppUserId === appUserId);
+  if (ringingThisAgent) return ringingThisAgent;
+
+  const waiting = calls.filter((c) => c.status === "waiting_for_agent");
+  if (!waiting.length) return null;
+
+  const [userRows] = await db.execute(`SELECT priority FROM cmx_dialer.app_users WHERE app_user_id = ?`, [appUserId]);
+  if (Number(userRows[0]?.priority) === 4) return null;
+
+  const [campaignRows] = await db.execute(
+    `
+      SELECT aca.campaign_id
+      FROM cmx_dialer.agent_campaign_assignments aca
+      JOIN cmx_dialer.agent_working_campaigns awc
+        ON awc.app_user_id = aca.app_user_id AND awc.campaign_id = aca.campaign_id
+      WHERE aca.app_user_id = ? AND aca.active = 1
+    `,
+    [appUserId]
+  );
+  const eligibleCampaignIds = new Set(campaignRows.map((r) => r.campaign_id));
+  const call = waiting.find((c) => eligibleCampaignIds.has(c.campaignId)) || null;
+
+  // This agent is READY and asking for work — make sure a matching pass
+  // runs now rather than waiting on the next status change.
+  if (call) tryConnectReadyAgents();
+  return call;
+}
+
+/*
+==================================================
 recordAbandonedCall
 ==================================================
 Writes one row to cmx_dialer.abandoned_call_log — see
@@ -1399,4 +1453,5 @@ module.exports = {
   customerEnteredWaitLoop,
   markLeavingVoicemail,
   recordVoicemail,
+  getWaitingInboundForAgent,
 };
