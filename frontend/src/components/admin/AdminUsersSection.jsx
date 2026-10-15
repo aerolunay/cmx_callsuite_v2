@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../../api";
+import Modal from "../../modals/Modal";
 
 /*
 ==================================================
@@ -266,106 +267,109 @@ export default function AdminUsersSection() {
           this app (e.g. VoicemailPlaybackModal.jsx) — no new CSS
           needed. */}
       {showModal && (
-        <div className="modal-overlay" onClick={handleCloseModal}>
-          <div className="modal-card" style={{ width: "min(90vw, 600px)", maxHeight: "85vh", overflowY: "auto" }} onClick={(e) => e.stopPropagation()}>
-            <h3 style={{ marginTop: 0 }}>{editingUserId ? "Edit User" : "Create User"}</h3>
+        <Modal
+          title={editingUserId ? "Edit User" : "Create User"}
+          onClose={handleCloseModal}
+          closeDisabled={busy}
+          width="min(90vw, 600px)"
+          cardStyle={{ maxHeight: "85vh", overflowY: "auto" }}
+        >
 
-            <form onSubmit={handleSubmit}>
-              <label className="comments-label">Email</label>
-              <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
+          <form onSubmit={handleSubmit}>
+            <label className="comments-label">Email</label>
+            <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
 
-              <label className="comments-label">Full Name</label>
-              <input type="text" value={fullName} onChange={(e) => setFullName(e.target.value)} required />
+            <label className="comments-label">Full Name</label>
+            <input type="text" value={fullName} onChange={(e) => setFullName(e.target.value)} required />
 
-              <label className="comments-label">Access Level</label>
-              <select value={accessLevel} onChange={(e) => setAccessLevel(e.target.value)}>
-                <option value="agent">Agent</option>
-                <option value="supervisor">Supervisor</option>
-                <option value="training_quality">Training &amp; Quality</option>
-                <option value="account_manager">Account Manager</option>
-                <option value="wfm">WFM</option>
-                <option value="admin">Admin</option>
-              </select>
+            <label className="comments-label">Access Level</label>
+            <select value={accessLevel} onChange={(e) => setAccessLevel(e.target.value)}>
+              <option value="agent">Agent</option>
+              <option value="supervisor">Supervisor</option>
+              <option value="training_quality">Training &amp; Quality</option>
+              <option value="account_manager">Account Manager</option>
+              <option value="wfm">WFM</option>
+              <option value="admin">Admin</option>
+            </select>
 
-              <label className="comments-label">Phone Login (phone binding)</label>
-              <select value={vicidialUser} onChange={(e) => setVicidialUser(e.target.value)}>
-                <option value="">— None / Release —</option>
-                {vicidialOptions.map((vu) => (
-                  <option key={vu.vicidial_user} value={vu.vicidial_user}>
-                    {vu.vicidial_user} — {vu.full_name} (phone {vu.phone_login})
-                  </option>
-                ))}
-              </select>
-              {vicidialOptions.length === 0 && (
-                <p style={{ fontSize: 13, color: "#888" }}>
-                  No unclaimed Phone Logins available — create one under "Phone Login"
-                  first, or every active one already has an app account.
-                </p>
-              )}
+            <label className="comments-label">Phone Login (phone binding)</label>
+            <select value={vicidialUser} onChange={(e) => setVicidialUser(e.target.value)}>
+              <option value="">— None / Release —</option>
+              {vicidialOptions.map((vu) => (
+                <option key={vu.vicidial_user} value={vu.vicidial_user}>
+                  {vu.vicidial_user} — {vu.full_name} (phone {vu.phone_login})
+                </option>
+              ))}
+            </select>
+            {vicidialOptions.length === 0 && (
+              <p style={{ fontSize: 13, color: "#888" }}>
+                No unclaimed Phone Logins available — create one under "Phone Login"
+                first, or every active one already has an app account.
+              </p>
+            )}
 
-              {/* WFM and Admin get implicit access to ALL campaigns
-                  (see accessControlService.js's
-                  UNRESTRICTED_CAMPAIGN_ROLES) — per explicit request,
-                  no need to check individual campaigns to bind when
-                  either of those is selected, so this section hides
-                  itself entirely rather than showing a checkbox list
-                  that wouldn't do anything meaningful for these two
-                  roles. */}
-              {!["wfm", "admin"].includes(accessLevel) && (
-                <>
-                  <label className="comments-label">Campaign Access</label>
-                  {campaigns.map((c) => (
-                    <label key={c.campaign_id} className="disposition-row">
-                      <input
-                        type="checkbox"
-                        checked={selectedCampaigns.includes(c.campaign_id)}
-                        onChange={() => toggleCampaign(c.campaign_id)}
-                      />
-                      {c.campaign_name} ({c.campaign_id})
-                    </label>
-                  ))}
-
-                  <label className="disposition-row" style={{ marginTop: 10 }}>
+            {/* WFM and Admin get implicit access to ALL campaigns
+                (see accessControlService.js's
+                UNRESTRICTED_CAMPAIGN_ROLES) — per explicit request,
+                no need to check individual campaigns to bind when
+                either of those is selected, so this section hides
+                itself entirely rather than showing a checkbox list
+                that wouldn't do anything meaningful for these two
+                roles. */}
+            {!["wfm", "admin"].includes(accessLevel) && (
+              <>
+                <label className="comments-label">Campaign Access</label>
+                {campaigns.map((c) => (
+                  <label key={c.campaign_id} className="disposition-row">
                     <input
                       type="checkbox"
-                      checked={multiCampaignEnabled}
-                      onChange={(e) => setMultiCampaignEnabled(e.target.checked)}
+                      checked={selectedCampaigns.includes(c.campaign_id)}
+                      onChange={() => toggleCampaign(c.campaign_id)}
                     />
-                    Allow Multiple Campaigns
+                    {c.campaign_name} ({c.campaign_id})
                   </label>
-                  <p style={{ fontSize: 13, color: "#888", marginTop: 4 }}>
-                    Lets this agent work up to 2 campaigns at once: two blended campaigns, or one
-                    outbound campaign plus one blended. With outbound + blended, the agent dials
-                    the outbound leads, and the blended campaign's inbound callers are offered to
-                    them first whenever they go Ready.
-                  </p>
-                </>
-              )}
+                ))}
 
-              <label className="comments-label">Priority</label>
-              <select value={priority} onChange={(e) => setPriority(e.target.value)}>
-                <option value="1">1</option>
-                <option value="2">2</option>
-                <option value="3">3</option>
-                <option value="4">4</option>
-              </select>
+                <label className="disposition-row" style={{ marginTop: 10 }}>
+                  <input
+                    type="checkbox"
+                    checked={multiCampaignEnabled}
+                    onChange={(e) => setMultiCampaignEnabled(e.target.checked)}
+                  />
+                  Allow Multiple Campaigns
+                </label>
+                <p style={{ fontSize: 13, color: "#888", marginTop: 4 }}>
+                  Lets this agent work up to 2 campaigns at once: two blended campaigns, or one
+                  outbound campaign plus one blended. With outbound + blended, the agent dials
+                  the outbound leads, and the blended campaign's inbound callers are offered to
+                  them first whenever they go Ready.
+                </p>
+              </>
+            )}
 
-              <label className="disposition-row" style={{ marginTop: 10 }}>
-                <input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} />
-                Active (unchecked = blocked from logging into the app entirely)
-              </label>
+            <label className="comments-label">Priority</label>
+            <select value={priority} onChange={(e) => setPriority(e.target.value)}>
+              <option value="1">1</option>
+              <option value="2">2</option>
+              <option value="3">3</option>
+              <option value="4">4</option>
+            </select>
 
-              <div style={{ marginTop: 14, display: "flex", gap: 8 }}>
-                <button className="button-secondary" type="submit" disabled={busy}>
-                  {busy ? "Saving…" : editingUserId ? "Save Changes" : "Create User"}
-                </button>
-                <button type="button" className="link" onClick={handleCloseModal} disabled={busy}>
-                  Cancel
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
+            <label className="disposition-row" style={{ marginTop: 10 }}>
+              <input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} />
+              Active (unchecked = blocked from logging into the app entirely)
+            </label>
+
+            <div style={{ marginTop: 14, display: "flex", gap: 8 }}>
+              <button className="button-secondary" type="submit" disabled={busy}>
+                {busy ? "Saving…" : editingUserId ? "Save Changes" : "Create User"}
+              </button>
+              <button type="button" className="link" onClick={handleCloseModal} disabled={busy}>
+                Cancel
+              </button>
+            </div>
+          </form>
+        </Modal>
       )}
     </>
   );

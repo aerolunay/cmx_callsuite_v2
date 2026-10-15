@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import Modal from "./Modal";
 import WaveSurfer from "wavesurfer.js";
 
 /*
@@ -88,49 +89,41 @@ export default function VoicemailPlaybackModal({ voicemail, url, onClose }) {
   }
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-card" style={{ width: "min(90vw, 640px)" }} onClick={(e) => e.stopPropagation()}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-          <h3 style={{ margin: 0 }}>Voicemail</h3>
-          <button type="button" className="link" onClick={onClose}>
-            Close
-          </button>
+    <Modal title="Voicemail" onClose={onClose} width="min(90vw, 640px)">
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 16px", fontSize: 14, marginBottom: 16 }}>
+        <div>
+          <strong>Campaign:</strong> {voicemail.campaign_name || voicemail.campaign_id || "—"}
         </div>
-
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 16px", fontSize: 14, marginBottom: 16 }}>
-          <div>
-            <strong>Campaign:</strong> {voicemail.campaign_name || voicemail.campaign_id || "—"}
-          </div>
-          <div>
-            <strong>Caller:</strong> {voicemail.caller_id_number || "Unknown"}
-          </div>
-          <div>
-            <strong>Left At:</strong> {formatDateTime(voicemail.left_at)}
-          </div>
-          <div>
-            <strong>When:</strong> {voicemail.is_after_hours === "Y" ? "After Hours" : "Business Hours"}
-          </div>
+        <div>
+          <strong>Caller:</strong> {voicemail.caller_id_number || "Unknown"}
         </div>
-
-        {loadError && <div className="error">{loadError}</div>}
-
-        <div ref={waveformContainerRef} style={{ marginBottom: 12 }} />
-
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <button type="button" className="button-secondary" onClick={() => skip(-10)} disabled={!isReady}>
-            « 10s
-          </button>
-          <button type="button" className="button-secondary" onClick={togglePlay} disabled={!isReady}>
-            {isPlaying ? "Pause" : "Play"}
-          </button>
-          <button type="button" className="button-secondary" onClick={() => skip(10)} disabled={!isReady}>
-            10s »
-          </button>
-          <span style={{ fontFamily: "monospace", fontSize: 13, marginLeft: "auto" }}>
-            {formatTime(currentTime)} / {formatTime(duration)}
-          </span>
+        <div>
+          <strong>Left At:</strong> {formatDateTime(voicemail.left_at)}
+        </div>
+        <div>
+          <strong>When:</strong> {voicemail.is_after_hours === "Y" ? "After Hours" : "Business Hours"}
         </div>
       </div>
-    </div>
+
+      {loadError && <div className="error">{loadError}</div>}
+
+      <div ref={waveformContainerRef} style={{ marginBottom: 12 }} />
+
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <button type="button" className="button-secondary" onClick={() => skip(-10)} disabled={!isReady}>
+          « 10s
+        </button>
+        <button type="button" className="button-secondary" onClick={togglePlay} disabled={!isReady}>
+          {isPlaying ? "Pause" : "Play"}
+        </button>
+        <button type="button" className="button-secondary" onClick={() => skip(10)} disabled={!isReady}>
+          10s »
+        </button>
+        <span style={{ fontFamily: "monospace", fontSize: 13, marginLeft: "auto" }}>
+          {formatTime(currentTime)} / {formatTime(duration)}
+        </span>
+      </div>
+    </Modal>
   );
 }

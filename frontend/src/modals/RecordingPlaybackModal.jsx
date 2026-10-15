@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import Modal from "./Modal";
 import WaveSurfer from "wavesurfer.js";
 
 /*
@@ -91,57 +92,49 @@ export default function RecordingPlaybackModal({ recording, url, onClose }) {
   const customerName = [recording.first_name, recording.last_name].filter(Boolean).join(" ") || "—";
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-card" style={{ width: "min(90vw, 640px)" }} onClick={(e) => e.stopPropagation()}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-          <h3 style={{ margin: 0 }}>Call Recording</h3>
-          <button type="button" className="link" onClick={onClose}>
-            Close
-          </button>
-        </div>
+    <Modal title="Call Recording" onClose={onClose} width="min(90vw, 640px)">
 
-        {/* Everything tracked about this call — per explicit request */}
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 16px", fontSize: 14, marginBottom: 16 }}>
-          <div><strong>Agent:</strong> {recording.agent_name || recording.agent_user || "—"}</div>
-          <div><strong>Campaign:</strong> {recording.campaign_id || "—"}</div>
-          <div><strong>Direction:</strong> {recording.direction === "inbound" ? "Inbound" : "Outbound"}</div>
-          <div><strong>Phone Number:</strong> {recording.phone_number || "—"}</div>
-          <div><strong>Customer Name:</strong> {customerName}</div>
-          <div><strong>Disposition:</strong> {recording.disposition || "—"}</div>
-          <div><strong>Call Started:</strong> {formatDateTime(recording.call_started_at)}</div>
-          <div><strong>Call Ended:</strong> {formatDateTime(recording.call_ended_at)}</div>
-          {recording.wait_seconds !== null && recording.wait_seconds !== undefined && (
-            <div><strong>Customer Wait Time:</strong> {recording.wait_seconds}s</div>
-          )}
-          {recording.callback_at && (
-            <div><strong>Callback At:</strong> {formatDateTime(recording.callback_at)}</div>
-          )}
-          {recording.comments && (
-            <div style={{ gridColumn: "1 / -1" }}>
-              <strong>Comments:</strong> {recording.comments}
-            </div>
-          )}
-        </div>
-
-        {loadError && <div className="error">{loadError}</div>}
-
-        <div ref={waveformContainerRef} style={{ marginBottom: 12 }} />
-
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <button type="button" className="button-secondary" onClick={() => skip(-10)} disabled={!isReady}>
-            « 10s
-          </button>
-          <button type="button" className="button-secondary" onClick={togglePlay} disabled={!isReady}>
-            {isPlaying ? "Pause" : "Play"}
-          </button>
-          <button type="button" className="button-secondary" onClick={() => skip(10)} disabled={!isReady}>
-            10s »
-          </button>
-          <span style={{ fontFamily: "monospace", fontSize: 13, marginLeft: "auto" }}>
-            {formatTime(currentTime)} / {formatTime(duration)}
-          </span>
-        </div>
+      {/* Everything tracked about this call — per explicit request */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 16px", fontSize: 14, marginBottom: 16 }}>
+        <div><strong>Agent:</strong> {recording.agent_name || recording.agent_user || "—"}</div>
+        <div><strong>Campaign:</strong> {recording.campaign_id || "—"}</div>
+        <div><strong>Direction:</strong> {recording.direction === "inbound" ? "Inbound" : "Outbound"}</div>
+        <div><strong>Phone Number:</strong> {recording.phone_number || "—"}</div>
+        <div><strong>Customer Name:</strong> {customerName}</div>
+        <div><strong>Disposition:</strong> {recording.disposition || "—"}</div>
+        <div><strong>Call Started:</strong> {formatDateTime(recording.call_started_at)}</div>
+        <div><strong>Call Ended:</strong> {formatDateTime(recording.call_ended_at)}</div>
+        {recording.wait_seconds !== null && recording.wait_seconds !== undefined && (
+          <div><strong>Customer Wait Time:</strong> {recording.wait_seconds}s</div>
+        )}
+        {recording.callback_at && (
+          <div><strong>Callback At:</strong> {formatDateTime(recording.callback_at)}</div>
+        )}
+        {recording.comments && (
+          <div style={{ gridColumn: "1 / -1" }}>
+            <strong>Comments:</strong> {recording.comments}
+          </div>
+        )}
       </div>
-    </div>
+
+      {loadError && <div className="error">{loadError}</div>}
+
+      <div ref={waveformContainerRef} style={{ marginBottom: 12 }} />
+
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <button type="button" className="button-secondary" onClick={() => skip(-10)} disabled={!isReady}>
+          « 10s
+        </button>
+        <button type="button" className="button-secondary" onClick={togglePlay} disabled={!isReady}>
+          {isPlaying ? "Pause" : "Play"}
+        </button>
+        <button type="button" className="button-secondary" onClick={() => skip(10)} disabled={!isReady}>
+          10s »
+        </button>
+        <span style={{ fontFamily: "monospace", fontSize: 13, marginLeft: "auto" }}>
+          {formatTime(currentTime)} / {formatTime(duration)}
+        </span>
+      </div>
+    </Modal>
   );
 }

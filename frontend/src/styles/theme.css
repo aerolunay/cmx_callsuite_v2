@@ -599,6 +599,42 @@ away from the screen at that exact moment.
   font-size: 16px;
 }
 
+.modal-card:focus {
+  outline: none;
+}
+
+.modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.modal-header h3 {
+  margin: 0;
+}
+
+.modal-close {
+  margin-left: auto;
+  background: none;
+  border: none;
+  padding: 0 4px;
+  font-size: 24px;
+  line-height: 1;
+  color: #667085;
+  cursor: pointer;
+}
+
+.modal-close:hover:not(:disabled) {
+  color: var(--cmx-navy);
+}
+
+.modal-close:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 .modal-card p {
   font-size: 13px;
   color: #444;

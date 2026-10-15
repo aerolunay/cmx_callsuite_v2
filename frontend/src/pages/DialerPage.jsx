@@ -19,6 +19,7 @@ import { playConnectedBeep } from "../utils/audio";
 import { useFlashingTitle } from "../hooks/useFlashingTitle";
 import { usePhone } from "../context/PhoneContext";
 import { useMediaQuery, COMPACT_DIALER_QUERY } from "../hooks/useMediaQuery";
+import Modal from "../modals/Modal";
 
 
 // Agent-selectable statuses. IN_CALL and AFTER_CALL_WORK are set only
@@ -1843,29 +1844,26 @@ export default function DialerPage() {
           never shows this — see handleCallBack). Skipped entirely
           while working a single campaign; see handleManualDial. */}
       {pendingManualDialNumber && (
-        <div className="modal-overlay" onClick={handleCancelManualDialCampaign}>
-          <div className="modal-card" style={{ width: "min(90vw, 420px)" }} onClick={(e) => e.stopPropagation()}>
-            <h3 style={{ marginTop: 0 }}>Call from which campaign?</h3>
-            <p style={{ fontSize: 14, color: "#667085" }}>
-              Calling {pendingManualDialNumber}
-              {pendingManualDialExtension && ` ext. ${pendingManualDialExtension}`}
-            </p>
-            {workingCampaigns.map((c) => (
-              <button
-                key={c.campaign_id}
-                type="button"
-                className="button-secondary"
-                style={{ display: "block", width: "100%", marginBottom: 8 }}
-                onClick={() => handleConfirmManualDialCampaign(c.campaign_id)}
-              >
-                {c.campaign_name} ({c.campaign_id})
-              </button>
-            ))}
-            <button type="button" className="link" onClick={handleCancelManualDialCampaign}>
-              Cancel
+        <Modal title="Call from which campaign?" onClose={handleCancelManualDialCampaign} width="min(90vw, 420px)">
+          <p style={{ fontSize: 14, color: "#667085" }}>
+            Calling {pendingManualDialNumber}
+            {pendingManualDialExtension && ` ext. ${pendingManualDialExtension}`}
+          </p>
+          {workingCampaigns.map((c) => (
+            <button
+              key={c.campaign_id}
+              type="button"
+              className="button-secondary"
+              style={{ display: "block", width: "100%", marginBottom: 8 }}
+              onClick={() => handleConfirmManualDialCampaign(c.campaign_id)}
+            >
+              {c.campaign_name} ({c.campaign_id})
             </button>
-          </div>
-        </div>
+          ))}
+          <button type="button" className="link" onClick={handleCancelManualDialCampaign}>
+            Cancel
+          </button>
+        </Modal>
       )}
 
       {/* NEW — per explicit request: blocks a manual dial outright
@@ -1875,18 +1873,15 @@ export default function DialerPage() {
           highlighted there via callbackBlockKey, passed down as
           AbandonedVoicemailTable's highlightKey prop above. */}
       {showCallbackBlockModal && (
-        <div className="modal-overlay" onClick={handleDismissCallbackBlock}>
-          <div className="modal-card" style={{ width: "min(90vw, 420px)" }} onClick={(e) => e.stopPropagation()}>
-            <h3 style={{ marginTop: 0 }}>Pending callback found</h3>
-            <p style={{ fontSize: 14, color: "#667085" }}>
-              This number already has a pending callback logged in Abandoned & Voicemail. Please initiate the
-              callback from there instead of placing a new call.
-            </p>
-            <button type="button" className="button-secondary" onClick={handleDismissCallbackBlock}>
-              Go to Abandoned &amp; Voicemail
-            </button>
-          </div>
-        </div>
+        <Modal title="Pending callback found" onClose={handleDismissCallbackBlock} width="min(90vw, 420px)">
+          <p style={{ fontSize: 14, color: "#667085" }}>
+            This number already has a pending callback logged in Abandoned & Voicemail. Please initiate the
+            callback from there instead of placing a new call.
+          </p>
+          <button type="button" className="button-secondary" onClick={handleDismissCallbackBlock}>
+            Go to Abandoned &amp; Voicemail
+          </button>
+        </Modal>
       )}
     </>
   );

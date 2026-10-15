@@ -1,4 +1,5 @@
 import { useState } from "react";
+import Modal from "./Modal";
 import { api } from "../api";
 
 // Reusable TOTP enrollment modal — used both right after a fresh OTP
@@ -42,70 +43,67 @@ export default function Setup2FAModal({ onClose, onComplete }) {
   }
 
   return (
-    <div className="modal-overlay">
-      <div className="modal-card">
-        <h3>Set up an authenticator app</h3>
+    <Modal title="Set up an authenticator app" onClose={onClose}>
 
-        {!qrDataUrl && !done && (
-          <>
-            <p>
-              Scan a QR code with Google Authenticator, Authy, or a similar app, then confirm
-              with the code it generates.
-            </p>
-            {error && <div className="error">{error}</div>}
+      {!qrDataUrl && !done && (
+        <>
+          <p>
+            Scan a QR code with Google Authenticator, Authy, or a similar app, then confirm
+            with the code it generates.
+          </p>
+          {error && <div className="error">{error}</div>}
+          <div className="modal-actions">
+            <button className="button-secondary" onClick={startSetup} disabled={busy}>
+              {busy ? "Starting…" : "Start setup"}
+            </button>
+            <button className="link" onClick={onClose}>
+              Cancel
+            </button>
+          </div>
+        </>
+      )}
+
+      {qrDataUrl && !done && (
+        <>
+          <img
+            src={qrDataUrl}
+            alt="Scan this QR code"
+            style={{ display: "block", margin: "0 auto 16px" }}
+          />
+          {error && <div className="error">{error}</div>}
+          <form onSubmit={confirmSetup}>
+            <input
+              type="text"
+              inputMode="numeric"
+              placeholder="6-digit code from your app"
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
+              maxLength={6}
+              required
+              autoFocus
+            />
             <div className="modal-actions">
-              <button className="button-secondary" onClick={startSetup} disabled={busy}>
-                {busy ? "Starting…" : "Start setup"}
+              <button className="button-secondary" type="submit" disabled={busy}>
+                {busy ? "Confirming…" : "Confirm"}
               </button>
-              <button className="link" onClick={onClose}>
+              <button type="button" className="link" onClick={onClose}>
                 Cancel
               </button>
             </div>
-          </>
-        )}
+          </form>
+        </>
+      )}
 
-        {qrDataUrl && !done && (
-          <>
-            <img
-              src={qrDataUrl}
-              alt="Scan this QR code"
-              style={{ display: "block", margin: "0 auto 16px" }}
-            />
-            {error && <div className="error">{error}</div>}
-            <form onSubmit={confirmSetup}>
-              <input
-                type="text"
-                inputMode="numeric"
-                placeholder="6-digit code from your app"
-                value={code}
-                onChange={(e) => setCode(e.target.value)}
-                maxLength={6}
-                required
-                autoFocus
-              />
-              <div className="modal-actions">
-                <button className="button-secondary" type="submit" disabled={busy}>
-                  {busy ? "Confirming…" : "Confirm"}
-                </button>
-                <button type="button" className="link" onClick={onClose}>
-                  Cancel
-                </button>
-              </div>
-            </form>
-          </>
-        )}
-
-        {done && (
-          <>
-            <p className="success">Authenticator enabled. You can sign in with it next time.</p>
-            <div className="modal-actions">
-              <button className="button-secondary" onClick={onClose}>
-                Done
-              </button>
-            </div>
-          </>
-        )}
-      </div>
-    </div>
+      {done && (
+        <>
+          <p className="success">Authenticator enabled. You can sign in with it next time.</p>
+          <div className="modal-actions">
+            <button className="button-secondary" onClick={onClose}>
+              Done
+            </button>
+          </div>
+        </>
+      )}
+    </Modal>
   );
 }

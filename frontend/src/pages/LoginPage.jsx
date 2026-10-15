@@ -4,6 +4,7 @@ import { api } from "../api";
 import { useAuth } from "../context/AuthContext";
 import { useAppVersion } from "../hooks/useAppVersion";
 import Setup2FAModal from "../modals/Setup2FAModal";
+import Modal from "../modals/Modal";
 import logo from "../assets/cmxlogo.png";
 
 // Steps:
@@ -281,31 +282,28 @@ export default function LoginPage() {
       </div>
 
       {showTotpPrompt && (
-        <div className="modal-overlay">
-          <div className="modal-card">
-            <h3>Set up your authenticator app?</h3>
-            <p>
-              You can sign in faster next time using an authenticator app instead of an email
-              code.
-            </p>
-            <label className="checkbox-row">
-              <input
-                type="checkbox"
-                checked={dontAskAgain}
-                onChange={(e) => setDontAskAgain(e.target.checked)}
-              />
-              Do not ask again
-            </label>
-            <div className="modal-actions">
-              <button className="button-secondary" onClick={() => handleTotpPromptChoice(true)}>
-                Yes, set it up
-              </button>
-              <button className="link" onClick={() => handleTotpPromptChoice(false)}>
-                No, maybe later
-              </button>
-            </div>
+        <Modal title="Set up your authenticator app?" onClose={() => handleTotpPromptChoice(false)}>
+          <p>
+            You can sign in faster next time using an authenticator app instead of an email
+            code.
+          </p>
+          <label className="checkbox-row">
+            <input
+              type="checkbox"
+              checked={dontAskAgain}
+              onChange={(e) => setDontAskAgain(e.target.checked)}
+            />
+            Do not ask again
+          </label>
+          <div className="modal-actions">
+            <button className="button-secondary" onClick={() => handleTotpPromptChoice(true)}>
+              Yes, set it up
+            </button>
+            <button className="link" onClick={() => handleTotpPromptChoice(false)}>
+              No, maybe later
+            </button>
           </div>
-        </div>
+        </Modal>
       )}
       {showSetupModal && (
         <Setup2FAModal
