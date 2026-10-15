@@ -4,6 +4,7 @@ import Header from "../components/Header";
 import HorizontalBarChart from "../components/HorizontalBarChart";
 import { api } from "../api";
 import { useAuth } from "../context/AuthContext";
+import LoadingSpinner from "../components/LoadingSpinner";
 
 // Same role matrix as the Reports page — see adminRoutes.js's own
 // LEADS_DASHBOARD_ROLES comment for why this dashboard follows
@@ -194,12 +195,7 @@ export default function LeadsCallingDashboardPage() {
         </div>
 
         {error && <div className="error">{error}</div>}
-        {loading && (
-          <div className="loading-spinner-wrap" role="status" aria-live="polite">
-            <div className="loading-spinner" aria-hidden="true" />
-            <span>Loading leads dashboard…</span>
-          </div>
-        )}
+        {loading && <LoadingSpinner label="Loading leads dashboard…" />}
 
         {!loading && dashboard && (
           <>

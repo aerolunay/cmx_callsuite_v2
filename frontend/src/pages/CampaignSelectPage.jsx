@@ -3,6 +3,7 @@ import { useNavigate, Navigate } from "react-router-dom";
 import Header from "../components/Header";
 import { useAuth } from "../context/AuthContext";
 import { api } from "../api";
+import LoadingSpinner from "../components/LoadingSpinner";
 
 /*
 ==================================================
@@ -158,7 +159,7 @@ export default function CampaignSelectPage() {
       <div className="page-content">
         <h2>Select {multiCampaignEnabled ? "campaign(s)" : "a campaign"}</h2>
 
-        {loading && <p>Loading campaigns…</p>}
+        {loading && <LoadingSpinner label="Loading campaigns…" />}
         {error && <div className="error">{error}</div>}
 
         {!loading && !error && campaigns.length === 0 && <p>No active campaigns found.</p>}

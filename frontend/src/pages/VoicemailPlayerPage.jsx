@@ -3,6 +3,7 @@ import { useParams, Navigate } from "react-router-dom";
 import Header from "../components/Header";
 import { useAuth } from "../context/AuthContext";
 import { api } from "../api";
+import LoadingSpinner from "../components/LoadingSpinner";
 
 /*
 ==================================================
@@ -74,7 +75,7 @@ export default function VoicemailPlayerPage() {
         {error && <div className="error">{error}</div>}
 
         {loading ? (
-          <p>Loading…</p>
+          <LoadingSpinner />
         ) : voicemail ? (
           <div className="card">
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 16px", fontSize: 14, marginBottom: 20 }}>

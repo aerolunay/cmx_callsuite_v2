@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { formatDate, formatDurationHMS } from "../utils/format";
 import VoicemailPlaybackModal from "../modals/VoicemailPlaybackModal";
+import LoadingSpinner from "./LoadingSpinner";
 
 /*
 ==================================================
@@ -158,7 +159,7 @@ export default function AbandonedVoicemailTable({ campaignId, highlightKey, onCa
 
       {error && <div className="error">{error}</div>}
 
-      {loading && <p>Loading…</p>}
+      {loading && <LoadingSpinner compact />}
 
       {!loading && !error && rows.length === 0 && <p>No abandoned calls or voicemails for these filters.</p>}
 

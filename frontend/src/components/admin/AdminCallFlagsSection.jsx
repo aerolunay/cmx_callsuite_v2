@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../../api";
 import { formatDate, formatDurationHMS } from "../../utils/format";
+import LoadingSpinner from "../LoadingSpinner";
 
 /*
 ==================================================
@@ -91,7 +92,7 @@ export default function AdminCallFlagsSection() {
       {error && <div className="error">{error}</div>}
 
       {loading ? (
-        <p>Loading…</p>
+        <LoadingSpinner />
       ) : flags.length === 0 ? (
         <p>No flagged calls for these filters.</p>
       ) : (

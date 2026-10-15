@@ -1,5 +1,6 @@
 import { useState } from "react";
 import Modal from "./Modal";
+import LoadingSpinner from "../components/LoadingSpinner";
 
 /*
 ==================================================
@@ -55,7 +56,7 @@ export default function InternalTransferModal({ agents, error, onClose, onTransf
       {error && <div className="error">{error}</div>}
 
       {agents === null ? (
-        <p>Loading…</p>
+        <LoadingSpinner label="Loading agents…" compact />
       ) : agents.length === 0 ? (
         <p>No agents on this campaign are Ready right now.</p>
       ) : (

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { dispositionLabel, inboundDispositionLabel } from "../constants/dispositions";
 import { formatDate } from "../utils/format";
+import LoadingSpinner from "./LoadingSpinner";
 
 // refreshKey is bumped by the parent (DialerPage) after a disposition
 // is saved, so this table picks up the new row without polling on an
@@ -114,7 +115,7 @@ export default function CallLogTable({ refreshKey, campaignId, onCallBack, canCa
     <div className="card call-log-card">
       <h3>Call Logs</h3>
 
-      {loading && <p>Loading…</p>}
+      {loading && <LoadingSpinner compact />}
       {error && <div className="error">{error}</div>}
 
       {!loading && !error && rows.length === 0 && <p>No calls logged today.</p>}

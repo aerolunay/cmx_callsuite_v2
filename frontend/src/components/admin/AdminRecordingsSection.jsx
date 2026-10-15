@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../../api";
+import LoadingSpinner from "../LoadingSpinner";
 
 /*
 ==================================================
@@ -146,7 +147,7 @@ export default function AdminRecordingsSection() {
 
       <div className="card call-log-card" style={{ marginTop: 16 }}>
         {loading ? (
-          <p>Loading…</p>
+          <LoadingSpinner />
         ) : recordings.length === 0 ? (
           <p>No recordings found for these filters.</p>
         ) : (

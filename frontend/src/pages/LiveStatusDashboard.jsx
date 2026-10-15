@@ -4,6 +4,7 @@ import Header from "../components/Header";
 import { api } from "../api";
 import { useAuth } from "../context/AuthContext";
 import { formatDurationHMS, formatDate, durationColorFor, occupancyColorFor, serviceLevelColorFor } from "../utils/format";
+import LoadingSpinner from "../components/LoadingSpinner";
 
 /*
 ==================================================
@@ -501,7 +502,7 @@ export default function LiveStatusDashboard() {
 
               <div className="live-status-consolidated-scroll" style={{ flex: "1 1 auto", minHeight: 0 }}>
                 {loading ? (
-                  <p>Loading…</p>
+                  <LoadingSpinner compact />
                 ) : (
                   <table className="call-log-table">
                     <thead>

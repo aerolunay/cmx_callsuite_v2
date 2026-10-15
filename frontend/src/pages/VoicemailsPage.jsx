@@ -5,6 +5,7 @@ import { useAuth } from "../context/AuthContext";
 import { api } from "../api";
 import VoicemailPlaybackModal from "../modals/VoicemailPlaybackModal";
 import { formatDurationHMS } from "../utils/format";
+import LoadingSpinner from "../components/LoadingSpinner";
 
 /*
 ==================================================
@@ -198,7 +199,7 @@ export default function VoicemailsPage() {
 
         <div className="card call-log-card" style={{ marginTop: 16 }}>
           {loading ? (
-            <p>Loading…</p>
+            <LoadingSpinner />
           ) : voicemails.length === 0 ? (
             <p>No voicemails found for these filters.</p>
           ) : (

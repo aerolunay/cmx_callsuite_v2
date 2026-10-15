@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../../api";
 import Modal from "../../modals/Modal";
+import LoadingSpinner from "../LoadingSpinner";
 
 /*
 ==================================================
@@ -196,7 +197,7 @@ export default function AdminUsersSection() {
       {success && <div className="success">{success}</div>}
 
       {loading ? (
-        <p>Loading…</p>
+        <LoadingSpinner />
       ) : (
         <>
           <div style={{ marginBottom: 12 }}>

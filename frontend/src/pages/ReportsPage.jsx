@@ -5,6 +5,7 @@ import { api } from "../api";
 import { useAuth } from "../context/AuthContext";
 import { formatDurationHMS } from "../utils/format";
 import { downloadCsv } from "../utils/csv";
+import LoadingSpinner from "../components/LoadingSpinner";
 
 // Default range: today only, in America/New_York — matches every
 // other "today" boundary already used elsewhere in this app, so the
@@ -273,7 +274,7 @@ export default function ReportsPage() {
 
         {error && <div className="error">{error}</div>}
 
-        {loading && <p>Loading…</p>}
+        {loading && <LoadingSpinner />}
 
         {!loading && reportType === "aggregated" && report && (
           <>

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../../api";
+import LoadingSpinner from "../LoadingSpinner";
 
 /*
 ==================================================
@@ -156,7 +157,7 @@ export default function AdminVicidialUsersSection() {
       {success && <div className="success">{success}</div>}
 
       {loading ? (
-        <p>Loading…</p>
+        <LoadingSpinner />
       ) : (
         <div className="dialer-layout">
           <div className="dialer-main">

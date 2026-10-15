@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../../api";
+import LoadingSpinner from "../LoadingSpinner";
 
 /*
 ==================================================
@@ -158,7 +159,7 @@ export default function AdminTrunksSection() {
       {success && <div className={successIsWarning ? "warning" : "success"}>{success}</div>}
 
       {loading ? (
-        <p>Loading…</p>
+        <LoadingSpinner />
       ) : (
         <div className="live-status-grid">
           <div>

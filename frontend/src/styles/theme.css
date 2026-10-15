@@ -1631,7 +1631,7 @@ away from the screen at that exact moment.
   font-weight: 600;
 }
 
-/* ===== Loading spinner (Leads Calling Dashboard) ===== */
+/* ===== Loading spinner (components/LoadingSpinner.jsx) — used app-wide ===== */
 .loading-spinner-wrap {
   display: flex;
   flex-direction: column;
@@ -1650,6 +1650,18 @@ away from the screen at that exact moment.
   border-top-color: var(--cmx-cyan);
   border-radius: 50%;
   animation: cmx-spin 0.8s linear infinite;
+}
+
+.loading-spinner-wrap-compact {
+  padding: 20px 12px;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.loading-spinner-wrap-compact .loading-spinner {
+  width: 28px;
+  height: 28px;
+  border-width: 3px;
 }
 
 @keyframes cmx-spin {

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../../api";
+import LoadingSpinner from "../LoadingSpinner";
 
 /*
 ==================================================
@@ -328,7 +329,7 @@ export default function AdminLeadsSection() {
         </p>
         {leadDialingError && <div className="error">{leadDialingError}</div>}
         {campaignsLoading ? (
-          <p>Loading campaigns…</p>
+          <LoadingSpinner label="Loading campaigns…" compact />
         ) : outboundCampaigns.length === 0 ? (
           <p>No outbound campaigns.</p>
         ) : (
@@ -572,7 +573,7 @@ export default function AdminLeadsSection() {
         {rulesCampaignId && (
           <form onSubmit={handleRulesSubmit} style={{ marginTop: 14 }}>
             {rulesLoading ? (
-              <p>Loading current rules…</p>
+              <LoadingSpinner label="Loading current rules…" compact />
             ) : (
               <>
                 <label className="comments-label">Max Calls per Number per Day</label>

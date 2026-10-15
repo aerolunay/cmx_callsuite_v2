@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../../api";
 import { getInboundDispositionsForCampaign, getOutboundDispositionsForCampaign } from "../../constants/dispositions";
+import LoadingSpinner from "../LoadingSpinner";
 
 /*
 ==================================================
@@ -335,7 +336,7 @@ function CampaignDispositionsEditor({ campaignId }) {
       </p>
 
       {loading ? (
-        <p>Loading…</p>
+        <LoadingSpinner />
       ) : (
         <>
           {error && <div className="error">{error}</div>}
@@ -619,7 +620,7 @@ export default function AdminCampaignsSection() {
       {success && <div className="success">{success}</div>}
 
       {loading ? (
-        <p>Loading…</p>
+        <LoadingSpinner />
       ) : (
         <div className="dialer-layout">
           <div className="dialer-main">

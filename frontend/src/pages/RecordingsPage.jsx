@@ -5,6 +5,7 @@ import { useAuth } from "../context/AuthContext";
 import { api } from "../api";
 import RecordingPlaybackModal from "../modals/RecordingPlaybackModal";
 import { formatDurationHMS } from "../utils/format";
+import LoadingSpinner from "../components/LoadingSpinner";
 
 /*
 ==================================================
@@ -228,7 +229,7 @@ export default function RecordingsPage() {
 
         <div className="card call-log-card" style={{ marginTop: 16 }}>
           {loading ? (
-            <p>Loading…</p>
+            <LoadingSpinner />
           ) : recordings.length === 0 ? (
             <p>No recordings found for these filters.</p>
           ) : (

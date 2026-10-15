@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../../api";
+import LoadingSpinner from "../LoadingSpinner";
 
 /*
 ==================================================
@@ -117,7 +118,7 @@ export default function AdminPhonesSection() {
       </p>
 
       {loading ? (
-        <p>Loading…</p>
+        <LoadingSpinner />
       ) : (
         <div className="dialer-layout">
           {editingExtension && (
