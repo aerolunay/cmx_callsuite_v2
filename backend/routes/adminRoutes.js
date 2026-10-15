@@ -891,9 +891,15 @@ router.get("/vicidial-users", requireAdmin, async (req, res) => {
   try {
     const [rows] = await db.execute(
       `
-        SELECT user, full_name, user_level, user_group, phone_login, email, active
-        FROM asterisk.vicidial_users
-        ORDER BY user ASC
+        SELECT
+          vu.user, vu.full_name, vu.user_level, vu.user_group, vu.phone_login, vu.email, vu.active,
+          (
+            SELECT GROUP_CONCAT(COALESCE(au.full_name, au.email) ORDER BY au.app_user_id SEPARATOR ', ')
+            FROM cmx_dialer.app_users au
+            WHERE au.vicidial_user = vu.user
+          ) AS assigned_to
+        FROM asterisk.vicidial_users vu
+        ORDER BY vu.user ASC
       `
     );
     return res.json({ success: true, vicidialUsers: rows });

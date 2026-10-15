@@ -245,6 +245,7 @@ export default function AdminVicidialUsersSection() {
                       <th>Full Name</th>
                       <th>Phone</th>
                       <th>Active</th>
+                      <th>Status</th>
                       <th>Actions</th>
                     </tr>
                   </thead>
@@ -255,6 +256,9 @@ export default function AdminVicidialUsersSection() {
                         <td className="admin-name-cell">{vu.full_name || "—"}</td>
                         <td>{vu.phone_login || "—"}</td>
                         <td>{vu.active === "Y" ? "Yes" : "No"}</td>
+                        <td className="admin-name-cell">
+                          {vu.assigned_to ? `Assigned — ${vu.assigned_to}` : "Available"}
+                        </td>
                         <td style={{ whiteSpace: "nowrap" }}>
                           <button type="button" className="link" onClick={() => handleStartEdit(vu)} disabled={busy}>
                             Edit
