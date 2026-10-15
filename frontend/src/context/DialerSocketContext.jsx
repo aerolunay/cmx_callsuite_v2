@@ -47,10 +47,21 @@ export function DialerSocketProvider({ children }) {
   useEffect(() => {
     let reconnectTimer = null;
     let closedByEffect = false;
+    let hasConnectedBefore = false;
 
     function connect() {
       const protocol = window.location.protocol === "https:" ? "wss" : "ws";
       const ws = new WebSocket(`${protocol}://${window.location.host}/ws/dialer`);
+
+      // Messages sent while the connection was down are never replayed,
+      // so on a RE-connect, tell listeners to re-sync their state (see
+      // DialerPage's "socketReconnected" handling).
+      ws.onopen = () => {
+        if (hasConnectedBefore) {
+          listenersRef.current.forEach((listener) => listener({ type: "socketReconnected" }));
+        }
+        hasConnectedBefore = true;
+      };
 
       ws.onmessage = (event) => {
         try {

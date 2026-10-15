@@ -66,7 +66,7 @@ const CALL_STATUS_LABELS = {
 
 export default function DialerPage() {
   const phone = usePhone();
-  const { agent } = useAuth();
+  const { agent, refreshAgent } = useAuth();
   const navigate = useNavigate();
 
   // REMOVED, per explicit request — the old single "Main Campaign"
@@ -275,12 +275,16 @@ export default function DialerPage() {
   // CampaignSelectPage.jsx yet, or their selection was somehow
   // cleared), send them there; otherwise proceed with whatever's
   // actually on file.
-  useEffect(() => {
+  // Also re-run after every call (see refreshAfterCall) so admin changes —
+  // campaign assignments, Auto/Manual dial, campaign type — reach the
+  // agent without a browser refresh. State is only replaced when it
+  // actually changed, so nothing keyed on these lists re-runs needlessly.
+  function loadCampaigns() {
     api
       .getMyCampaigns()
       .then((data) => {
         const list = data.campaigns || [];
-        setMyCampaigns(list);
+        setMyCampaigns((prev) => (JSON.stringify(prev) === JSON.stringify(list) ? prev : list));
         setMyCampaignCount(list.length);
         // Cross-reference with the agent's actual CURRENT working
         // selection (agent_working_campaigns, server-side source of
@@ -296,13 +300,26 @@ export default function DialerPage() {
               navigate("/select-campaign");
               return;
             }
-            setWorkingCampaigns(working);
+            setWorkingCampaigns((prev) => (JSON.stringify(prev) === JSON.stringify(working) ? prev : working));
           })
           .catch(() => navigate("/select-campaign")); // can't confirm a real selection exists — safest is to send them through the picker rather than guess
       })
       .catch(() => {}); // fail open — keeps the default of 2, so "Change campaign" stays visible rather than silently vanishing on an error
+  }
+
+  useEffect(() => {
+    loadCampaigns();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Per explicit request — admin changes (campaign assignments, campaign
+  // settings, phone login, ...) take effect for the agent after their
+  // current call instead of needing a browser refresh. Called once the
+  // call is fully over: disposition saved, or auto-resolved.
+  function refreshAfterCall() {
+    refreshAgent();
+    loadCampaigns();
+  }
 
   // Whichever campaign OUTBOUND dialing/lead-pulling should use —
   // derived, never stored. At most one working campaign can be OUTBOUND
@@ -361,25 +378,45 @@ export default function DialerPage() {
   // activeCalls Map / inboundCallService.js's singleton) kept tracking
   // the real call the whole time — only the React state here was ever
   // wiped. Runs once on mount, alongside the existing status fetch.
-  useEffect(() => {
-    api
+  //
+  // Also re-run whenever the live connection reconnects, and whenever the
+  // agent is in After Call Work with no call on screen (see the stuck-ACW
+  // effect below) — messages sent while the connection was down are never
+  // replayed, so this is how the page catches up. Resolves to whether the
+  // backend still has any call for this agent.
+  function restoreCurrentCalls() {
+    const outbound = api
       .getCurrentCall()
       .then((data) => {
-        if (data.call) {
-          setCall(data.call);
-          setLead(data.call.lead || null);
-        }
+        if (!data.call) return false;
+        // Same call already on screen (a reconnect catch-up) — merge, so
+        // page-only details like a callback's source row aren't lost.
+        const sameCall = call && call.callId === data.call.callId;
+        setCall((prev) => (prev && prev.callId === data.call.callId ? { ...prev, ...data.call } : data.call));
+        // Every call carries its lead, but the disposition form can't
+        // show without one — fall back to the call's own number.
+        setLead((prev) =>
+          sameCall && prev ? prev : data.call.lead || { lead_id: data.call.leadId || 0, phone_number: data.call.phoneNumber }
+        );
+        return true;
       })
-      .catch(() => {});
+      .catch(() => null);
 
-    api
+    const inbound = api
       .getCurrentInboundCall()
       .then((data) => {
-        if (data.call) {
-          setInboundCall(data.call);
-        }
+        if (!data.call) return false;
+        setInboundCall((prev) => (prev && prev.callId === data.call.callId ? { ...prev, ...data.call } : data.call));
+        return true;
       })
-      .catch(() => {});
+      .catch(() => null);
+
+    return Promise.all([outbound, inbound]).then(([o, i]) => (o === null || i === null ? null : o || i));
+  }
+
+  useEffect(() => {
+    restoreCurrentCalls();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Tracks whether the initial GET /dialer/status fetch has actually
@@ -393,8 +430,8 @@ export default function DialerPage() {
   // here, go create it."
   const [statusCheckDone, setStatusCheckDone] = useState(false);
 
-  useEffect(() => {
-    api
+  function loadStatus() {
+    return api
       .getStatus()
       .then((data) => {
         if (data.status) {
@@ -406,7 +443,54 @@ export default function DialerPage() {
       })
       .catch((err) => setError(err.message))
       .finally(() => setStatusCheckDone(true));
+  }
+
+  useEffect(() => {
+    loadStatus();
   }, []);
+
+  // REAL BUG FIX — agents stuck in After Call Work with no disposition
+  // form. The form needs the call on screen, and two things lost it: a
+  // dropped live connection (status/call messages sent meanwhile are
+  // never replayed) and a backend restart (every in-memory call is gone).
+  // When in ACW with no call on screen, ask the backend for it; if the
+  // backend has none either, there's nothing left to disposition, so
+  // offer a way back to Ready instead of trapping the agent.
+  const acwWithoutCall = agentStatus?.status === "AFTER_CALL_WORK" && !(call && lead) && !inboundCall;
+  const [acwCallLost, setAcwCallLost] = useState(false);
+
+  useEffect(() => {
+    if (!acwWithoutCall) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: clearing the fallback once a call (or a new status) is back, not a data fetch.
+      setAcwCallLost(false);
+      return;
+    }
+    // A short grace period first — normally the call's own messages
+    // land right alongside the ACW status change.
+    const timeout = setTimeout(() => {
+      restoreCurrentCalls().then((found) => {
+        if (found === false) setAcwCallLost(true);
+      });
+    }, 1500);
+    return () => clearTimeout(timeout);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [acwWithoutCall]);
+
+  async function handleReturnToReadyAfterLostCall() {
+    setError("");
+    setBusy(true);
+    try {
+      const data = await api.setStatus("READY", workingCampaigns[0]?.campaign_id);
+      setAgentStatus(data.status);
+      setStatusDraft(data.status.status);
+      baseElapsedRef.current = data.status.elapsedSeconds;
+      baseAtRef.current = Date.now();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
 
   // REAL BUG FIX — per explicit request: right after a genuinely
   // fresh login, the agent has NO open status row at all yet — one is
@@ -496,6 +580,14 @@ export default function DialerPage() {
   }, [agentStatus]);
 
   useDialerSocketMessages((message) => {
+    // The live connection dropped and came back — catch up on whatever
+    // status/call messages were missed while it was down.
+    if (message.type === "socketReconnected") {
+      loadStatus();
+      restoreCurrentCalls();
+      return;
+    }
+
     if (message.type === "forceLogout") {
       const reasonText =
         message.reason === "kicked_by_admin"
@@ -551,6 +643,7 @@ export default function DialerPage() {
       setCallbackAt("");
       setSetNotReadyAfterSave(false);
       setCallLogVersion((v) => v + 1);
+      refreshAfterCall();
 
       const label =
         message.outcome === "machine"
@@ -1169,6 +1262,7 @@ export default function DialerPage() {
       setCallbackAt("");
       setSetNotReadyAfterSave(false);
       setCallLogVersion((v) => v + 1);
+      refreshAfterCall();
     } catch (err) {
       setError(err.message);
     } finally {
@@ -1209,6 +1303,7 @@ export default function DialerPage() {
       setInboundCallbackAt("");
       setInboundSetNotReady(false);
       setCallLogVersion((v) => v + 1);
+      refreshAfterCall();
     } catch (err) {
       setError(err.message);
     } finally {
@@ -1667,6 +1762,19 @@ export default function DialerPage() {
                     />
                   </div>
                 )}
+              </div>
+            )}
+
+            {acwWithoutCall && acwCallLost && (
+              <div className="card">
+                <h3>Call details unavailable</h3>
+                <p style={{ fontSize: 14 }}>
+                  The details of your last call were lost (the server was restarted), so there's no disposition to
+                  save. Return to Ready to keep working.
+                </p>
+                <button className="button-secondary" type="button" onClick={handleReturnToReadyAfterLostCall} disabled={busy}>
+                  {busy ? "Updating…" : "Return to Ready"}
+                </button>
               </div>
             )}
 

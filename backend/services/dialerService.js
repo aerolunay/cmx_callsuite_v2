@@ -894,12 +894,28 @@ no active call right now.
 ==================================================
 */
 function getActiveCallForAgent(appUserId) {
+  // REAL BUG FIX — an ended call stays in activeCalls until its
+  // disposition is saved, and that's exactly when a refresh needs it
+  // back: skipping "ended" calls here meant refreshing during After Call
+  // Work restored nothing, leaving the agent stuck in ACW with no
+  // disposition form. A live call still wins over one awaiting its
+  // disposition.
+  let awaitingDisposition = null;
   for (const call of activeCalls.values()) {
-    if (call.appUserId === appUserId && call.status !== "ended") {
-      return getCallStatus(call.callId);
-    }
+    if (call.appUserId !== appUserId) continue;
+    if (call.status !== "ended") return getCallStatus(call.callId);
+    awaitingDisposition = awaitingDisposition || call;
   }
-  return null;
+  return awaitingDisposition ? getCallStatus(awaitingDisposition.callId) : null;
+}
+
+// True while the backend still tracks ANY outbound call for this agent,
+// including one that ended and is only waiting for its disposition.
+function agentHasTrackedCall(appUserId) {
+  for (const call of activeCalls.values()) {
+    if (call.appUserId === appUserId) return true;
+  }
+  return false;
 }
 
 // Internal-only — returns the RAW in-memory call object (including
@@ -1853,6 +1869,7 @@ module.exports = {
   getCallStatus,
   getActiveCallForAgent,
   getRawActiveCallForAgent,
+  agentHasTrackedCall,
   getActiveCallPhoneNumbers,
   endCall,
   holdCall,

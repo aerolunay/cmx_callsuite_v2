@@ -81,6 +81,10 @@ const DIALER_TAB_CHANNEL = "cmx-dialer-tab";
 export function PhoneProvider({ children }) {
   const { agent } = useAuth();
   const isLoggedIn = Boolean(agent);
+  // Per explicit request — an admin changing this agent's phone login
+  // reaches them between calls (AuthContext.refreshAgent), and the phone
+  // re-registers on the new extension below without a browser refresh.
+  const agentExtension = agent?.extension || null;
   const location = useLocation();
   const isDialerTab = isDialerTabPath(location.pathname);
   const [dialerOpenElsewhere, setDialerOpenElsewhere] = useState(false);
@@ -369,7 +373,7 @@ export function PhoneProvider({ children }) {
         uaRef.current = null;
       }
     };
-  }, [phoneEnabled]);
+  }, [phoneEnabled, agentExtension]);
 
   const answer = useCallback(() => {
     if (sessionRef.current && sessionIsIncomingRef.current) {

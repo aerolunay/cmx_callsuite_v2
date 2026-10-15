@@ -741,8 +741,16 @@ router.post("/dialer/status", requireAuth, async (req, res) => {
     is open can never interfere with that real exit path.
     ==================================================
     */
-    const currentStatus = await agentStatusService.getCurrentStatus(req.session.agent.appUserId);
-    if (currentStatus && currentStatus.status === "AFTER_CALL_WORK") {
+    //
+    // Exception: ACW with NO call left to disposition — the backend lost
+    // it (a restart clears every in-memory call). Saving a disposition is
+    // impossible then, so blocking here would trap the agent in ACW until
+    // they logged out; the Dialer offers "Return to Ready" for this case.
+    const { appUserId } = req.session.agent;
+    const currentStatus = await agentStatusService.getCurrentStatus(appUserId);
+    const hasCallToDisposition =
+      dialerService.agentHasTrackedCall(appUserId) || Boolean(inboundCallService.getInboundCallForAgent(appUserId));
+    if (currentStatus && currentStatus.status === "AFTER_CALL_WORK" && hasCallToDisposition) {
       return res.status(409).json({
         success: false,
         message: "You must save a disposition for your last call before changing your status.",

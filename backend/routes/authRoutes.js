@@ -597,8 +597,34 @@ router.post("/login-totp", otpLoginByIpLimiter, otpLoginByEmailLimiter, async (r
   }
 });
 
-router.get("/me", requireAuth, (req, res) => {
-  return res.json({ success: true, agent: req.session.agent });
+// Per explicit request — re-reads the agent's settings on every call
+// instead of returning what was cached at login, so admin changes (phone
+// login/extension, ViciDial user, access level, Allow Multiple Campaigns)
+// reach a logged-in agent without a re-login. The Dialer calls this after
+// every call. A deactivated account is logged out here. Falls back to the
+// cached session on a DB error rather than logging anyone out.
+router.get("/me", requireAuth, async (req, res) => {
+  try {
+    const { appUserId } = req.session.agent;
+    const [rows] = await db.execute(`SELECT * FROM cmx_dialer.app_users WHERE app_user_id = ? AND active = 1`, [
+      appUserId,
+    ]);
+
+    if (!rows.length) {
+      await agentStatusService.closeCurrentStatus(appUserId).catch(() => {});
+      return req.session.destroy(() => {
+        res.clearCookie(process.env.SESSION_NAME || "cmx_dialer_session");
+        res.status(401).json({ success: false, message: "Your account is no longer active." });
+      });
+    }
+
+    const appUser = rows[0];
+    req.session.agent = buildSessionAgent(appUser, await resolveAgentContext(appUser));
+    return res.json({ success: true, agent: req.session.agent });
+  } catch (error) {
+    console.error("GET /api/auth/me refresh failed:", error);
+    return res.json({ success: true, agent: req.session.agent });
+  }
 });
 
 router.post("/logout", async (req, res) => {

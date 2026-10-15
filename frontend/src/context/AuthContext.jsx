@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import { api } from "../api";
 
 const AuthContext = createContext(null);
@@ -31,8 +31,21 @@ export function AuthProvider({ children }) {
     setAgent((prev) => (prev ? { ...prev, totpEnabled: enabled } : prev));
   };
 
+  // Per explicit request — picks up admin changes (phone login, access
+  // level, ...) between calls without a browser refresh; the Dialer calls
+  // this after every call. Keeps the same object when nothing changed, so
+  // nothing keyed on `agent` (e.g. the phone registration) re-runs.
+  const refreshAgent = useCallback(() => {
+    return api
+      .me()
+      .then((data) => setAgent((prev) => (JSON.stringify(prev) === JSON.stringify(data.agent) ? prev : data.agent)))
+      .catch((err) => {
+        if (err.status === 401) setAgent(null); // deactivated / session gone — back to login
+      });
+  }, []);
+
   return (
-    <AuthContext.Provider value={{ agent, loading, login, logout, setTotpEnabled }}>
+    <AuthContext.Provider value={{ agent, loading, login, logout, setTotpEnabled, refreshAgent }}>
       {children}
     </AuthContext.Provider>
   );
