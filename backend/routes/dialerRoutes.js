@@ -840,6 +840,10 @@ router.get("/dialer/has-leads", requireAuth, async (req, res) => {
       // same as genuinely having zero leads — not a 500.
       return res.json({ success: true, hasLead: false, code: "OUTSIDE_CALLING_HOURS" });
     }
+    if (error.code === "LEAD_DIALING_PAUSED") {
+      // Same idea — paused by an admin means "nothing to dial right now".
+      return res.json({ success: true, hasLead: false, code: "LEAD_DIALING_PAUSED" });
+    }
     console.error("GET /api/dialer/has-leads failed:", error);
     return res.status(500).json({ success: false, message: "Failed to check for leads." });
   }
@@ -885,6 +889,9 @@ router.post("/dialer/next-lead", requireAuth, async (req, res) => {
   } catch (error) {
     if (error.code === "OUTSIDE_CALLING_HOURS") {
       return res.status(403).json({ success: false, message: error.message, code: "OUTSIDE_CALLING_HOURS" });
+    }
+    if (error.code === "LEAD_DIALING_PAUSED") {
+      return res.status(409).json({ success: false, message: error.message, code: "LEAD_DIALING_PAUSED" });
     }
     console.error("POST /api/dialer/next-lead failed:", error);
     return res.status(500).json({ success: false, message: "Failed to fetch next lead." });

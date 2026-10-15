@@ -506,9 +506,10 @@ leadRoutes.js for how leads get uploaded in the first place — this is
 a read-only companion to that feature, not a new upload path).
 
 Metrics, exactly as specified:
-  - Contact Rate  = Leads Dialed / Total Leads, where Leads Dialed is the
-    number of DIFFERENT leads (still on the campaign's lists) dialed in
-    range — per explicit request, so redials never push it past 100%
+  - Contact Rate  = unique numbers dialed and rang (any outcome but Busy)
+    in range / unique numbers in the day's workload (the Total Leads set)
+    — per explicit request, so redials and duplicate lead rows never skew
+    it. Someone answering is Connect Rate.
   - Total Leads   = Remaining New Leads + Remaining for Redial + leads
     already dialed in range (each lead once) — for today, the day's
     workload as of the start of the day (see the lead query below)
@@ -622,7 +623,7 @@ async function getLeadsCallingDashboard({ startDate, endDate, campaignIds }) {
       startDate,
       endDate,
       campaigns: [],
-      grandTotals: { totalLeads: 0, remainingNewLeads: 0, remainingRedialLeads: 0, remainingLeads: 0, totalDialed: 0, humanAnswered: 0, leadsDialed: 0, resolvedViaInbound: 0, contactRatePct: null, connectRatePct: null, dispositionBreakdown: [] },
+      grandTotals: { totalLeads: 0, remainingNewLeads: 0, remainingRedialLeads: 0, remainingLeads: 0, totalDialed: 0, humanAnswered: 0, leadsDialed: 0, resolvedViaInbound: 0, totalRedials: 0, numbersRedialed: 0, avgRedialsPerNumber: null, totalNumbers: 0, contactedNumbers: 0, contactRatePct: null, connectRatePct: null, dispositionBreakdown: [] },
       agents: [],
     };
   }
@@ -652,7 +653,13 @@ async function getLeadsCallingDashboard({ startDate, endDate, campaignIds }) {
         SUM(isRedial) AS remainingRedialLeads,
         SUM(dialedInRange = 1 AND closedViaInbound = 0) AS leadsDialed,
         SUM(isNew = 1 OR isRedial = 1 OR (dialedInRange = 1 AND closedViaInbound = 0)) AS totalLeads,
-        COUNT(DISTINCT CASE WHEN resolvedViaInbound = 1 THEN phoneNumber END) AS resolvedViaInbound
+        COUNT(DISTINCT CASE WHEN resolvedViaInbound = 1 THEN phoneNumber END) AS resolvedViaInbound,
+        -- Contact Rate, per explicit request: unique numbers in the day's
+        -- workload (same set as Total Leads) that were dialed and rang in
+        -- range, over unique numbers in that workload. (Someone answering
+        -- is Connect Rate, not this.)
+        COUNT(DISTINCT CASE WHEN isNew = 1 OR isRedial = 1 OR (dialedInRange = 1 AND closedViaInbound = 0) THEN phoneNumber END) AS totalNumbers,
+        COUNT(DISTINCT CASE WHEN dialedInRange = 1 AND closedViaInbound = 0 AND contactedInRange = 1 THEN phoneNumber END) AS contactedNumbers
       FROM (
         SELECT
           vlt.campaign_id AS campaignId,
@@ -681,6 +688,17 @@ async function getLeadsCallingDashboard({ startDate, endDate, campaignIds }) {
             WHERE ic2.caller_id_number IN (l.phone_number, CONCAT('1', l.phone_number), CONCAT('+1', l.phone_number))
               AND ic2.disposition IN ${INBOUND_CLOSED_OUT_DISPOSITIONS}
           ) AS closedViaInbound,
+          -- Contacted, per explicit request = dialed AND rang: any call to
+          -- this number in range on this campaign except Busy (a busy line
+          -- never rings). Judged by outcome, not ring_seconds — that's 0
+          -- for answered calls and most No Answers. Matched by number, so
+          -- a callback or manual dial to it counts too.
+          EXISTS (
+            SELECT 1 FROM cmx_dialer.dialer_call_log hc
+            WHERE hc.phone_number IN (l.phone_number, CONCAT('1', l.phone_number)) AND hc.campaign_id = vlt.campaign_id
+              AND hc.call_started_at BETWEEN ? AND ?
+              AND hc.disposition <> 'BUSY'
+          ) AS contactedInRange,
           l.phone_number AS phoneNumber
         FROM vicidial_lists vlt
         JOIN vicidial_list l ON l.list_id = vlt.list_id
@@ -689,7 +707,7 @@ async function getLeadsCallingDashboard({ startDate, endDate, campaignIds }) {
       ) perLead
       GROUP BY campaignId
     `,
-    [todayStart, start, end, start, end, ...campaignIds]
+    [todayStart, start, end, start, end, start, end, ...campaignIds]
   );
 
   // Dial attempts + human-answered, grouped by campaign+agent, in range.
@@ -706,6 +724,27 @@ async function getLeadsCallingDashboard({ startDate, endDate, campaignIds }) {
       GROUP BY campaign_id, agent_user
     `,
     [...NON_HUMAN_DISPOSITIONS, start, end, ...campaignIds]
+  );
+
+  // Redials, per explicit request — a call in range to a number that had
+  // already been called before (any earlier call, any campaign, including
+  // earlier the same day). Average Redial Attempts per Number divides by
+  // how many different numbers got at least one of those redials.
+  const [redialRows] = await db.execute(
+    `
+      SELECT c.campaign_id AS campaignId, COUNT(*) AS totalRedials, COUNT(DISTINCT c.phone_number) AS numbersRedialed
+      FROM cmx_dialer.dialer_call_log c
+      WHERE c.call_started_at BETWEEN ? AND ? AND c.campaign_id IN (${campaignInClause})
+        AND EXISTS (
+          SELECT 1 FROM cmx_dialer.dialer_call_log p
+          WHERE p.phone_number = c.phone_number AND p.call_started_at < c.call_started_at
+        )
+      GROUP BY c.campaign_id
+    `,
+    [start, end, ...campaignIds]
+  );
+  const redialsByCampaign = new Map(
+    redialRows.map((r) => [r.campaignId, { totalRedials: Number(r.totalRedials) || 0, numbersRedialed: Number(r.numbersRedialed) || 0 }])
   );
 
   // Disposition breakdown — NEW, per explicit request ("% per
@@ -761,7 +800,15 @@ async function getLeadsCallingDashboard({ startDate, endDate, campaignIds }) {
 
   // --- Per-campaign rows ---
   // mysql2 returns SUM() as strings — Number() each, same fix as computeDirectionStats.
-  const EMPTY_LEADS = { totalLeads: 0, remainingNewLeads: 0, remainingRedialLeads: 0, leadsDialed: 0, resolvedViaInbound: 0 };
+  const EMPTY_LEADS = {
+    totalLeads: 0,
+    remainingNewLeads: 0,
+    remainingRedialLeads: 0,
+    leadsDialed: 0,
+    resolvedViaInbound: 0,
+    totalNumbers: 0,
+    contactedNumbers: 0,
+  };
   const leadsByCampaign = new Map(
     leadRows.map((r) => [
       r.campaignId,
@@ -771,6 +818,8 @@ async function getLeadsCallingDashboard({ startDate, endDate, campaignIds }) {
         remainingRedialLeads: Number(r.remainingRedialLeads) || 0,
         leadsDialed: Number(r.leadsDialed) || 0,
         resolvedViaInbound: Number(r.resolvedViaInbound) || 0,
+        totalNumbers: Number(r.totalNumbers) || 0,
+        contactedNumbers: Number(r.contactedNumbers) || 0,
       },
     ])
   );
@@ -786,6 +835,7 @@ async function getLeadsCallingDashboard({ startDate, endDate, campaignIds }) {
   const campaigns = campaignIds
     .map((campaignId) => {
       const leads = leadsByCampaign.get(campaignId) || EMPTY_LEADS;
+      const redials = redialsByCampaign.get(campaignId) || { totalRedials: 0, numbersRedialed: 0 };
       const dial = dialTotalsByCampaign.get(campaignId) || { totalDialed: 0, humanAnswered: 0 };
       return {
         campaignId,
@@ -798,7 +848,12 @@ async function getLeadsCallingDashboard({ startDate, endDate, campaignIds }) {
         humanAnswered: dial.humanAnswered,
         leadsDialed: leads.leadsDialed,
         resolvedViaInbound: leads.resolvedViaInbound,
-        contactRatePct: pct(leads.leadsDialed, leads.totalLeads),
+        totalRedials: redials.totalRedials,
+        numbersRedialed: redials.numbersRedialed,
+        avgRedialsPerNumber: redials.numbersRedialed > 0 ? redials.totalRedials / redials.numbersRedialed : null,
+        totalNumbers: leads.totalNumbers,
+        contactedNumbers: leads.contactedNumbers,
+        contactRatePct: pct(leads.contactedNumbers, leads.totalNumbers),
         connectRatePct: pct(dial.humanAnswered, dial.totalDialed),
         // % per disposition, per explicit request — each disposition's
         // share of THIS campaign's own totalDialed in range.
@@ -822,12 +877,18 @@ async function getLeadsCallingDashboard({ startDate, endDate, campaignIds }) {
       acc.totalDialed += c.totalDialed;
       acc.humanAnswered += c.humanAnswered;
       acc.leadsDialed += c.leadsDialed;
+      acc.totalNumbers += c.totalNumbers;
+      acc.contactedNumbers += c.contactedNumbers;
       acc.resolvedViaInbound += c.resolvedViaInbound;
+      acc.totalRedials += c.totalRedials;
+      acc.numbersRedialed += c.numbersRedialed;
       return acc;
     },
-    { totalLeads: 0, remainingNewLeads: 0, remainingRedialLeads: 0, remainingLeads: 0, totalDialed: 0, humanAnswered: 0, leadsDialed: 0, resolvedViaInbound: 0 }
+    { totalLeads: 0, remainingNewLeads: 0, remainingRedialLeads: 0, remainingLeads: 0, totalDialed: 0, humanAnswered: 0, leadsDialed: 0, resolvedViaInbound: 0, totalRedials: 0, numbersRedialed: 0, totalNumbers: 0, contactedNumbers: 0 }
   );
-  grandTotals.contactRatePct = pct(grandTotals.leadsDialed, grandTotals.totalLeads);
+  grandTotals.avgRedialsPerNumber =
+    grandTotals.numbersRedialed > 0 ? grandTotals.totalRedials / grandTotals.numbersRedialed : null;
+  grandTotals.contactRatePct = pct(grandTotals.contactedNumbers, grandTotals.totalNumbers);
   grandTotals.connectRatePct = pct(grandTotals.humanAnswered, grandTotals.totalDialed);
   // % per disposition, per explicit request — each disposition's
   // share of Total Dialed across EVERY selected campaign combined.

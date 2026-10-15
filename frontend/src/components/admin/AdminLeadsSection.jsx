@@ -64,6 +64,12 @@ export default function AdminLeadsSection() {
   const [outboundCampaigns, setOutboundCampaigns] = useState([]);
   const [campaignsLoading, setCampaignsLoading] = useState(true);
 
+  // Lead Dialing — per explicit request: pause / start handing out leads
+  // per campaign. Manual dials and callbacks keep working while paused.
+  const [pausedCampaignIds, setPausedCampaignIds] = useState(new Set());
+  const [leadDialingBusyId, setLeadDialingBusyId] = useState(null);
+  const [leadDialingError, setLeadDialingError] = useState("");
+
   // Upload Leads
   const [uploadCampaignId, setUploadCampaignId] = useState("");
   const [uploadFile, setUploadFile] = useState(null);
@@ -112,7 +118,39 @@ export default function AdminLeadsSection() {
       .getDncList()
       .then((data) => setDncCount(data.count))
       .catch(() => {});
+
+    api
+      .getLeadDialing()
+      .then((data) => setPausedCampaignIds(new Set(data.pausedCampaignIds || [])))
+      .catch((err) => setLeadDialingError(err.message));
   }, []);
+
+  async function handleToggleLeadDialing(campaignId) {
+    const pause = !pausedCampaignIds.has(campaignId);
+    if (
+      pause &&
+      !window.confirm(
+        `Pause lead dialing for ${campaignId}? Dial Next Number and Auto Dial stop handing out leads until you start it again. Calls already in progress continue, and agents can still make manual dials and callbacks.`
+      )
+    ) {
+      return;
+    }
+    setLeadDialingError("");
+    setLeadDialingBusyId(campaignId);
+    try {
+      await api.setLeadDialingPaused(campaignId, pause);
+      setPausedCampaignIds((prev) => {
+        const next = new Set(prev);
+        if (pause) next.add(campaignId);
+        else next.delete(campaignId);
+        return next;
+      });
+    } catch (err) {
+      setLeadDialingError(err.message);
+    } finally {
+      setLeadDialingBusyId(null);
+    }
+  }
 
   useEffect(() => {
     if (!rulesCampaignId) return;
@@ -280,6 +318,58 @@ export default function AdminLeadsSection() {
         dialing engine that actually enforces these rules is a separate, future phase; nothing
         here places a call on its own.
       </p>
+
+      {/* ================= LEAD DIALING ================= */}
+      <div className="card" style={{ marginBottom: 20 }}>
+        <h4>Lead Dialing</h4>
+        <p style={{ fontSize: 13, color: "#888", marginTop: 0 }}>
+          Pause to stop Dial Next Number and Auto Dial from handing out leads, even if leads are left. Calls in
+          progress continue, and agents can still make manual dials and callbacks.
+        </p>
+        {leadDialingError && <div className="error">{leadDialingError}</div>}
+        {campaignsLoading ? (
+          <p>Loading campaigns…</p>
+        ) : outboundCampaigns.length === 0 ? (
+          <p>No outbound campaigns.</p>
+        ) : (
+          <table className="call-log-table">
+            <thead>
+              <tr>
+                <th>Campaign</th>
+                <th>Lead Dialing</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {outboundCampaigns.map((c) => {
+                const paused = pausedCampaignIds.has(c.campaign_id);
+                return (
+                  <tr key={c.campaign_id}>
+                    <td>
+                      {c.campaign_name} ({c.campaign_id})
+                    </td>
+                    <td>
+                      <span className="badge" style={paused ? { background: "#fef3c7", color: "#92400e" } : undefined}>
+                        {paused ? "Paused" : "Running"}
+                      </span>
+                    </td>
+                    <td style={{ whiteSpace: "nowrap" }}>
+                      <button
+                        type="button"
+                        className="button-secondary"
+                        onClick={() => handleToggleLeadDialing(c.campaign_id)}
+                        disabled={leadDialingBusyId === c.campaign_id}
+                      >
+                        {leadDialingBusyId === c.campaign_id ? "Saving…" : paused ? "Start" : "Pause"}
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
 
       {/* ================= UPLOAD LEADS ================= */}
       <div className="card" style={{ marginBottom: 20 }}>

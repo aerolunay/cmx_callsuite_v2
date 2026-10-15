@@ -352,6 +352,13 @@ export const api = {
   getDncList: () => request("/admin/dnc"),
   uploadDnc: (formData) => request("/admin/dnc/upload", { method: "POST", body: formData }),
   getAutodialRules: (campaignId) => request(`/admin/campaigns/${encodeURIComponent(campaignId)}/autodial-rules`),
+  // Per explicit request — pause / start lead dialing per campaign.
+  getLeadDialing: () => request("/admin/leads/lead-dialing"),
+  setLeadDialingPaused: (campaignId, paused) =>
+    request(`/admin/campaigns/${encodeURIComponent(campaignId)}/lead-dialing`, {
+      method: "PUT",
+      body: JSON.stringify({ paused }),
+    }),
   updateAutodialRules: (campaignId, rules) =>
     request(`/admin/campaigns/${encodeURIComponent(campaignId)}/autodial-rules`, {
       method: "PUT",

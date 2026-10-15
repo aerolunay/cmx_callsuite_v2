@@ -25,6 +25,10 @@ function fmtCount(value) {
   return value === null || value === undefined ? "—" : value.toLocaleString();
 }
 
+function fmtAverage(value) {
+  return value === null || value === undefined ? "—" : value.toFixed(1);
+}
+
 // Human-readable labels for the raw disposition codes stored on
 // dialer_call_log (see dialerService.js's own DISPOSITION_TO_VICIDIAL_STATUS
 // map for the full authoritative list of codes this app ever writes).
@@ -202,7 +206,10 @@ export default function LeadsCallingDashboardPage() {
             {/* ===== KPI cards ===== */}
             <div className="card stats-panel" style={{ marginBottom: 20 }}>
               <div className="stats-grid stats-grid-4">
-                <div className="stats-cell">
+                <div
+                  className="stats-cell"
+                  title={`Unique numbers dialed that rang (${fmtCount(g?.contactedNumbers)}) ÷ unique numbers in the day's leads (${fmtCount(g?.totalNumbers)}). Someone answering is Connect Rate.`}
+                >
                   <div className="stats-cell-label">Contact Rate</div>
                   <div className="stats-cell-value">{fmtPct(g?.contactRatePct)}</div>
                 </div>
@@ -233,6 +240,14 @@ export default function LeadsCallingDashboardPage() {
                 <div className="stats-cell">
                   <div className="stats-cell-label">Human Answered</div>
                   <div className="stats-cell-value">{fmtCount(g?.humanAnswered)}</div>
+                </div>
+                <div className="stats-cell" title="Calls in this date range to a number that had already been called before.">
+                  <div className="stats-cell-label">Total Redials</div>
+                  <div className="stats-cell-value">{fmtCount(g?.totalRedials)}</div>
+                </div>
+                <div className="stats-cell" title="Total Redials divided by the number of different numbers that were redialed.">
+                  <div className="stats-cell-label">Avg Redial Attempts per Number</div>
+                  <div className="stats-cell-value">{fmtAverage(g?.avgRedialsPerNumber)}</div>
                 </div>
               </div>
             </div>
@@ -294,6 +309,8 @@ export default function LeadsCallingDashboardPage() {
                       <th>Remaining Redial</th>
                       <th>Resolved via Inbound</th>
                       <th>Total Dialed</th>
+                      <th>Total Redials</th>
+                      <th>Avg Redials / Number</th>
                       <th>Human Answered</th>
                       <th>Contact Rate</th>
                       <th>Connect Rate</th>
@@ -308,6 +325,8 @@ export default function LeadsCallingDashboardPage() {
                         <td>{fmtCount(c.remainingRedialLeads)}</td>
                         <td>{fmtCount(c.resolvedViaInbound)}</td>
                         <td>{fmtCount(c.totalDialed)}</td>
+                        <td>{fmtCount(c.totalRedials)}</td>
+                        <td>{fmtAverage(c.avgRedialsPerNumber)}</td>
                         <td>{fmtCount(c.humanAnswered)}</td>
                         <td>{fmtPct(c.contactRatePct)}</td>
                         <td>{fmtPct(c.connectRatePct)}</td>

@@ -269,6 +269,19 @@ function broadcastToUser(appUserId, message) {
   }
 }
 
+// Same as broadcastToUser, for every connected user — e.g. an admin
+// pausing / starting lead dialing (leadDialingService.js).
+function broadcastToAll(message) {
+  const payload = JSON.stringify(message);
+  for (const set of connections.values()) {
+    for (const ws of set) {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(payload);
+      }
+    }
+  }
+}
+
 /*
 Returns true only if this appUserId has at least one OPEN socket right
 now. Used by agentStatusService's ready-agent lookup — a DB status row
@@ -349,6 +362,7 @@ async function forceLogout(appUserId, reason) {
 module.exports = {
   attach,
   broadcastToUser,
+  broadcastToAll,
   isConnected,
   forceLogout,
 };

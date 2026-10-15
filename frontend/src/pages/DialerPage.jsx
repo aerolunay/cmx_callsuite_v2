@@ -238,6 +238,15 @@ export default function DialerPage() {
   // (instead of retrying in a tight loop) while the inbound call rings them.
   const [inboundWaitingHold, setInboundWaitingHold] = useState(false);
   const [hasLeads, setHasLeads] = useState(true); // optimistic default — avoids a flash of "no leads" before the check resolves
+  // Per explicit request — an admin paused lead dialing for this campaign
+  // (Admin -> Leads/Auto-Dial). hasLeads is false too; this only changes
+  // the message. Manual dial and callbacks still work.
+  const [leadDialingPaused, setLeadDialingPaused] = useState(false);
+
+  function applyHasLeadsCheck(data) {
+    setHasLeads(data.hasLead);
+    setLeadDialingPaused(data.code === "LEAD_DIALING_PAUSED");
+  }
   // How many campaigns THIS agent is actually assigned to. Used purely
   // to decide whether "Change campaign" should even be shown — an
   // agent with only one assignment has nothing to change TO, so the
@@ -348,7 +357,7 @@ export default function DialerPage() {
     if (agentStatus?.status !== "READY") return;
     api
       .hasLeads(outboundCampaign.campaign_id)
-      .then((data) => setHasLeads(data.hasLead))
+      .then(applyHasLeadsCheck)
       .catch(() => setHasLeads(true)); // fail open — don't hide the button just because this check errored
   }, [outboundCampaign, agentStatus?.status]);
 
@@ -366,7 +375,7 @@ export default function DialerPage() {
     const interval = setInterval(() => {
       api
         .hasLeads(outboundCampaign.campaign_id)
-        .then((data) => setHasLeads(data.hasLead))
+        .then(applyHasLeadsCheck)
         .catch(() => {}); // transient poll failure — just try again next tick
     }, 20000);
 
@@ -585,6 +594,15 @@ export default function DialerPage() {
     if (message.type === "socketReconnected") {
       loadStatus();
       restoreCurrentCalls();
+      return;
+    }
+
+    // An admin paused / started lead dialing — re-check this campaign now
+    // instead of waiting for the periodic no-leads check.
+    if (message.type === "leadDialingChanged") {
+      if (outboundCampaign && outboundCampaign.campaign_id === message.campaignId) {
+        api.hasLeads(outboundCampaign.campaign_id).then(applyHasLeadsCheck).catch(() => {});
+      }
       return;
     }
 
@@ -813,6 +831,11 @@ export default function DialerPage() {
             }
           })
           .catch(() => {});
+      } else if (err.code === "LEAD_DIALING_PAUSED") {
+        // Paused by an admin — stop cleanly (no retry loop); the no-leads
+        // re-check and the leadDialingChanged message pick it back up.
+        setHasLeads(false);
+        setLeadDialingPaused(true);
       } else if (err.code === "INBOUND_WAITING") {
         // Not an error — an inbound caller goes first, and no lead was
         // used up. Auto Dial resumes once the hold below lapses.
@@ -1686,7 +1709,11 @@ export default function DialerPage() {
                       hasLeads flips to false. */}
                   {agentStatus?.status === "READY" && !call && !hasLeads && !isBlendedCampaign && (
                     <div className="card">
-                      <span className="badge">No leads to dial — the lead list for this campaign is complete.</span>
+                      <span className="badge">
+                        {leadDialingPaused
+                          ? "Lead dialing is paused by an admin — manual dials and callbacks still work."
+                          : "No leads to dial — the lead list for this campaign is complete."}
+                      </span>
                     </div>
                   )}
                 </>

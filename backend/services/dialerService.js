@@ -7,6 +7,7 @@ const db = require("../config/db");
 const ami = require("../config/ami");
 const ws = require("../config/ws");
 const agentStatusService = require("./agentStatusService");
+const leadDialingService = require("./leadDialingService");
 const {
   LEAD_ELIGIBILITY_SQL,
   RETRYABLE_LEAD_STATUSES,
@@ -275,6 +276,15 @@ function isWithinCallingHours({ calling_days, calling_start_time, calling_end_ti
 }
 
 async function getNextLead(campaignId) {
+  // Per explicit request — an admin can pause lead dialing for a campaign
+  // (Admin -> Leads/Auto-Dial). Stops Dial Next Number and Auto Dial even
+  // with leads left; manual dials and callbacks don't come through here.
+  if (await leadDialingService.isLeadDialingPaused(campaignId)) {
+    const err = new Error("Lead dialing for this campaign is paused by an admin. Manual dials and callbacks still work.");
+    err.code = "LEAD_DIALING_PAUSED";
+    throw err;
+  }
+
   // Phase 2, piece 1 — calling hours enforcement. Real rules stored
   // in cmx_dialer.campaign_autodial_rules (Admin -> Leads/Auto-Dial)
   // now actually checked, not just saved. If no rules row exists yet

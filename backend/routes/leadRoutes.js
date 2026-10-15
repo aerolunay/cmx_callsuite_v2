@@ -10,6 +10,7 @@ const { stringify: stringifyCsvSync } = require("csv-stringify/sync");
 const db = require("../config/db");
 const leadCleanupService = require("../services/leadCleanupService");
 const { findClosedOutPhoneNumbers, findRedialPendingPhoneNumbers } = require("../services/leadEligibility");
+const leadDialingService = require("../services/leadDialingService");
 
 const router = express.Router();
 
@@ -574,6 +575,40 @@ max_attempts_* columns so no schema change was needed — the dialer reads
 max_attempts_no_answer. attempt_interval_minutes is no longer used.
 ==================================================
 */
+/*
+==================================================
+LEAD DIALING — pause / start per campaign
+==================================================
+Per explicit request. While a campaign is paused, no leads are handed out
+(Dial Next Number / Auto Dial stop) even with leads left; manual dials and
+callbacks still work. See leadDialingService.js.
+==================================================
+*/
+router.get("/leads/lead-dialing", requireAdmin, async (req, res) => {
+  try {
+    const paused = await leadDialingService.getPausedCampaignIds();
+    return res.json({ success: true, pausedCampaignIds: [...paused] });
+  } catch (error) {
+    console.error("GET /api/admin/leads/lead-dialing failed:", error);
+    return res.status(500).json({ success: false, message: "Failed to load lead dialing status." });
+  }
+});
+
+router.put("/campaigns/:campaignId/lead-dialing", requireAdmin, async (req, res) => {
+  try {
+    const { campaignId } = req.params;
+    const paused = Boolean(req.body && req.body.paused);
+    await leadDialingService.setLeadDialingPaused(campaignId, paused, req.session.agent.appUserId);
+    return res.json({ success: true, campaignId, paused });
+  } catch (error) {
+    if (error.code === "MIGRATION_MISSING") {
+      return res.status(503).json({ success: false, message: error.message });
+    }
+    console.error(`PUT /api/admin/campaigns/${req.params.campaignId}/lead-dialing failed:`, error);
+    return res.status(500).json({ success: false, message: "Failed to update lead dialing." });
+  }
+});
+
 const AUTODIAL_RULE_DEFAULTS = {
   maxCallsPerNumberPerDay: 3,
   callingDays: "mon-fri",
