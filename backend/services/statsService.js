@@ -2,6 +2,7 @@
 
 const { DateTime } = require("luxon");
 const db = require("../config/db");
+const { LEAD_ELIGIBILITY_SQL } = require("./leadEligibility");
 
 /*
 ==================================================
@@ -505,9 +506,12 @@ leadRoutes.js for how leads get uploaded in the first place — this is
 a read-only companion to that feature, not a new upload path).
 
 Metrics, exactly as specified:
-  - Contact Rate  = Total Dialed / Total Leads
+  - Contact Rate  = Leads Dialed / Total Leads, where Leads Dialed is the
+    number of DIFFERENT leads (still on the campaign's lists) dialed in
+    range — per explicit request, so redials never push it past 100%
   - Connect Rate  = Total Calls Answered By A Human / Total Dialed
-  - Remaining Leads = leads never yet attempted
+  - Remaining Leads = leads never yet attempted that the dialer will
+    still call (see REMAINING_LEADS_SQL)
   - Per-agent aggregated table
 
 DEFINITIONS — flagged explicitly since these are business-rule
@@ -539,6 +543,12 @@ non-contact):
 */
 const NON_HUMAN_DISPOSITIONS = ["MACHINE", "BUSY", "NO_ANSWER", "VOICEMAIL"];
 
+// Remaining Leads = never-attempted leads the dialer will actually still
+// call — same rules as getNextLead (leadEligibility.js), so a lead the
+// dialer skips (duplicate of a reached number, re-upload superseded by a
+// newer copy, DNC, closed out) doesn't sit in this count forever.
+const REMAINING_LEADS_SQL = `SUM(CASE WHEN l.status = 'NEW'${LEAD_ELIGIBILITY_SQL} THEN 1 ELSE 0 END)`;
+
 function pct(numerator, denominator) {
   return denominator > 0 ? (numerator / denominator) * 100 : null;
 }
@@ -567,15 +577,15 @@ async function getLeadsCampaignsWithLeads(scopeCampaignIds) {
       SELECT
         c.campaign_id AS campaignId,
         c.campaign_name AS campaignName,
-        COUNT(vl.lead_id) AS totalLeads,
-        SUM(CASE WHEN vl.status = 'NEW' THEN 1 ELSE 0 END) AS remainingLeads
+        COUNT(l.lead_id) AS totalLeads,
+        ${REMAINING_LEADS_SQL} AS remainingLeads
       FROM vicidial_campaigns c
       JOIN cmx_dialer.campaign_settings s ON s.campaign_id = c.campaign_id AND s.campaign_type = 'OUTBOUND'
       JOIN vicidial_lists vlt ON vlt.campaign_id = c.campaign_id
-      JOIN vicidial_list vl ON vl.list_id = vlt.list_id
+      JOIN vicidial_list l ON l.list_id = vlt.list_id
       WHERE c.active = 'Y' ${scopeFilter}
       GROUP BY c.campaign_id, c.campaign_name
-      HAVING COUNT(vl.lead_id) > 0
+      HAVING COUNT(l.lead_id) > 0
       ORDER BY c.campaign_name ASC
     `,
     params
@@ -608,7 +618,7 @@ async function getLeadsCallingDashboard({ startDate, endDate, campaignIds }) {
       startDate,
       endDate,
       campaigns: [],
-      grandTotals: { totalLeads: 0, remainingLeads: 0, totalDialed: 0, humanAnswered: 0, contactRatePct: null, connectRatePct: null, dispositionBreakdown: [] },
+      grandTotals: { totalLeads: 0, remainingLeads: 0, totalDialed: 0, humanAnswered: 0, leadsDialed: 0, contactRatePct: null, connectRatePct: null, dispositionBreakdown: [] },
       agents: [],
     };
   }
@@ -621,10 +631,10 @@ async function getLeadsCallingDashboard({ startDate, endDate, campaignIds }) {
     `
       SELECT
         vlt.campaign_id AS campaignId,
-        COUNT(vl.lead_id) AS totalLeads,
-        SUM(CASE WHEN vl.status = 'NEW' THEN 1 ELSE 0 END) AS remainingLeads
+        COUNT(l.lead_id) AS totalLeads,
+        ${REMAINING_LEADS_SQL} AS remainingLeads
       FROM vicidial_lists vlt
-      JOIN vicidial_list vl ON vl.list_id = vlt.list_id
+      JOIN vicidial_list l ON l.list_id = vlt.list_id
       WHERE vlt.campaign_id IN (${campaignInClause})
       GROUP BY vlt.campaign_id
     `,
@@ -646,6 +656,23 @@ async function getLeadsCallingDashboard({ startDate, endDate, campaignIds }) {
     `,
     [...NON_HUMAN_DISPOSITIONS, start, end, ...campaignIds]
   );
+
+  // Different leads dialed in range, per campaign — Contact Rate's
+  // numerator. Joined to the campaign's own lists so a lead removed since
+  // (lead cleanup) or a manual dial (lead_id 0) never counts, keeping the
+  // rate at or under 100% of Total Leads.
+  const [leadsDialedRows] = await db.execute(
+    `
+      SELECT vlt.campaign_id AS campaignId, COUNT(DISTINCT c.lead_id) AS leadsDialed
+      FROM cmx_dialer.dialer_call_log c
+      JOIN vicidial_list l ON l.lead_id = c.lead_id
+      JOIN vicidial_lists vlt ON vlt.list_id = l.list_id AND vlt.campaign_id = c.campaign_id
+      WHERE c.call_started_at BETWEEN ? AND ? AND c.campaign_id IN (${campaignInClause})
+      GROUP BY vlt.campaign_id
+    `,
+    [start, end, ...campaignIds]
+  );
+  const leadsDialedByCampaign = new Map(leadsDialedRows.map((r) => [r.campaignId, Number(r.leadsDialed) || 0]));
 
   // Disposition breakdown — NEW, per explicit request ("% per
   // disposition"). Grouped by campaign+disposition in one pass so both
@@ -718,6 +745,7 @@ async function getLeadsCallingDashboard({ startDate, endDate, campaignIds }) {
     .map((campaignId) => {
       const leads = leadsByCampaign.get(campaignId) || { totalLeads: 0, remainingLeads: 0 };
       const dial = dialTotalsByCampaign.get(campaignId) || { totalDialed: 0, humanAnswered: 0 };
+      const leadsDialed = leadsDialedByCampaign.get(campaignId) || 0;
       return {
         campaignId,
         campaignName: campaignNameById.get(campaignId) || campaignId,
@@ -725,7 +753,8 @@ async function getLeadsCallingDashboard({ startDate, endDate, campaignIds }) {
         remainingLeads: leads.remainingLeads,
         totalDialed: dial.totalDialed,
         humanAnswered: dial.humanAnswered,
-        contactRatePct: pct(dial.totalDialed, leads.totalLeads),
+        leadsDialed,
+        contactRatePct: pct(leadsDialed, leads.totalLeads),
         connectRatePct: pct(dial.humanAnswered, dial.totalDialed),
         // % per disposition, per explicit request — each disposition's
         // share of THIS campaign's own totalDialed in range.
@@ -746,11 +775,12 @@ async function getLeadsCallingDashboard({ startDate, endDate, campaignIds }) {
       acc.remainingLeads += c.remainingLeads;
       acc.totalDialed += c.totalDialed;
       acc.humanAnswered += c.humanAnswered;
+      acc.leadsDialed += c.leadsDialed;
       return acc;
     },
-    { totalLeads: 0, remainingLeads: 0, totalDialed: 0, humanAnswered: 0 }
+    { totalLeads: 0, remainingLeads: 0, totalDialed: 0, humanAnswered: 0, leadsDialed: 0 }
   );
-  grandTotals.contactRatePct = pct(grandTotals.totalDialed, grandTotals.totalLeads);
+  grandTotals.contactRatePct = pct(grandTotals.leadsDialed, grandTotals.totalLeads);
   grandTotals.connectRatePct = pct(grandTotals.humanAnswered, grandTotals.totalDialed);
   // % per disposition, per explicit request — each disposition's
   // share of Total Dialed across EVERY selected campaign combined.

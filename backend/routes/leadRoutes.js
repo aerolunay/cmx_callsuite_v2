@@ -9,6 +9,7 @@ const { parse: parseCsvSync } = require("csv-parse/sync");
 const { stringify: stringifyCsvSync } = require("csv-stringify/sync");
 const db = require("../config/db");
 const leadCleanupService = require("../services/leadCleanupService");
+const { findClosedOutPhoneNumbers } = require("../services/leadEligibility");
 
 const router = express.Router();
 
@@ -304,6 +305,14 @@ router.post("/leads/upload", requireAdmin, upload.single("file"), async (req, re
     }
     const duplicatesAgainstExisting = dedupedWithinFile.filter((r) => existingPhoneSet.has(r.phone_number)).length;
 
+    // Per explicit request — numbers already closed out (DNC list, or ever
+    // disposed Not Interested / Do Not Call / Call Ended / Screening
+    // Completed) are removed automatically, in both modes: re-uploading
+    // them must never make them callable again. Counted once per number.
+    const closedOutPhoneSet = await findClosedOutPhoneNumbers(dedupedWithinFile.map((r) => r.phone_number));
+    const skippedClosedOut = closedOutPhoneSet.size;
+    const notClosedOut = (r) => !closedOutPhoneSet.has(r.phone_number);
+
     if (mode === "preview") {
       return res.json({
         success: true,
@@ -314,17 +323,23 @@ router.post("/leads/upload", requireAdmin, upload.single("file"), async (req, re
         invalidPhoneExamples,
         duplicatesWithinFile,
         duplicatesAgainstExisting,
-        wouldImportIfInclude: validRows.length,
-        wouldImportIfExclude: dedupedWithinFile.length - duplicatesAgainstExisting,
+        skippedClosedOut,
+        wouldImportIfInclude: validRows.filter(notClosedOut).length,
+        wouldImportIfExclude: dedupedWithinFile.filter((r) => notClosedOut(r) && !existingPhoneSet.has(r.phone_number)).length,
       });
     }
 
-    const rowsToInsert = mode === "exclude" ? dedupedWithinFile.filter((r) => !existingPhoneSet.has(r.phone_number)) : validRows;
+    const rowsToInsert = (
+      mode === "exclude" ? dedupedWithinFile.filter((r) => !existingPhoneSet.has(r.phone_number)) : validRows
+    ).filter(notClosedOut);
 
     if (rowsToInsert.length === 0) {
       return res.status(400).json({
         success: false,
-        message: "No rows left to import — every valid row is a duplicate of one already on file.",
+        message:
+          skippedClosedOut > 0
+            ? "No rows left to import — every valid row is a duplicate already on file or a number that was already closed out (DNC, Not Interested, Call Ended, Screening Completed)."
+            : "No rows left to import — every valid row is a duplicate of one already on file.",
       });
     }
 
@@ -378,6 +393,7 @@ router.post("/leads/upload", requireAdmin, upload.single("file"), async (req, re
       imported: rowsToInsert.length,
       skippedMissingPhone,
       skippedInvalidPhone,
+      skippedClosedOut,
       skippedDuplicateWithinFile: mode === "exclude" ? duplicatesWithinFile : 0,
       skippedDuplicateExisting: mode === "exclude" ? duplicatesAgainstExisting : 0,
     });

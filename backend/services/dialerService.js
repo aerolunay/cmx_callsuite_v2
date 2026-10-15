@@ -7,6 +7,7 @@ const db = require("../config/db");
 const ami = require("../config/ami");
 const ws = require("../config/ws");
 const agentStatusService = require("./agentStatusService");
+const { LEAD_ELIGIBILITY_SQL } = require("./leadEligibility");
 const { getEasternDayBoundsForServerClock } = require("./statsService");
 
 /*
@@ -267,51 +268,6 @@ function isWithinCallingHours({ calling_days, calling_start_time, calling_end_ti
 
   return currentMinutes >= startMinutes && currentMinutes < endMinutes;
 }
-
-// Vicidial statuses that mean "never dial this lead again" — every
-// terminal disposition in DISPOSITION_TO_VICIDIAL_STATUS below.
-const TERMINAL_LEAD_STATUSES = "('DNC', 'NI', 'DC', 'PU', 'CALLBK', 'SCRN', 'NOTELG')";
-
-// Per explicit request — a number ever disposed as one of these is never
-// dialed again, however it got that disposition. Checked against the call
-// logs too, not just vicidial_list.status, because a callback or manual
-// dial (lead_id 0) and an inbound call never update any lead row — so a
-// number screened that way still looked fresh on its own lead.
-// Indexed by sql/009_add_call_log_phone_indexes.sql.
-const CLOSED_OUT_DISPOSITIONS = "('SCREENING_COMPLETED', 'CALL_ENDED', 'NOT_INTERESTED', 'DO_NOT_CALL')";
-// Per explicit request — an inbound call from the number with any of these
-// outcomes also means the person was reached, so their outbound lead isn't
-// redialed (a scheduled callback is handled by its own mechanism). Caller
-// Hung Up / Ghost Call / Misrouted Call still allow a redial.
-const INBOUND_CLOSED_OUT_DISPOSITIONS =
-  "('SCREENING_COMPLETED', 'CALL_ENDED', 'NOT_INTERESTED', 'DO_NOT_CALL', " +
-  "'INFO_PROVIDED', 'CALLBACK_REQUESTED', 'XFER_CONF', 'TRANSFERRED', 'UNABLE_TO_COMPLETE_SCREENING')";
-
-// Shared by both getNextLead queries. Per explicit request — a lead that
-// was already dialed (or closed out) must never be dialed again, and that
-// has to hold for the PHONE NUMBER, not just the lead row: the same number
-// can sit on several lead rows (an "Include duplicates" upload, or another
-// list/campaign). So besides this row's own status/reset flag, skip it when
-// ANY other row with the same number is terminal (Screening Completed, Not
-// Interested, ...) or was already called in this pass.
-const LEAD_ELIGIBILITY_SQL = `
-        AND l.called_since_last_reset = 'N'
-        AND l.status NOT IN ${TERMINAL_LEAD_STATUSES}
-        AND NOT EXISTS (SELECT 1 FROM vicidial_dnc d WHERE d.phone_number = l.phone_number)
-        AND NOT EXISTS (
-          SELECT 1 FROM vicidial_list o
-          WHERE o.phone_number = l.phone_number AND o.lead_id <> l.lead_id
-            AND (o.status IN ${TERMINAL_LEAD_STATUSES} OR o.called_since_last_reset = 'Y')
-        )
-        AND NOT EXISTS (
-          SELECT 1 FROM cmx_dialer.dialer_call_log c
-          WHERE c.phone_number = l.phone_number AND c.disposition IN ${CLOSED_OUT_DISPOSITIONS}
-        )
-        AND NOT EXISTS (
-          SELECT 1 FROM cmx_dialer.inbound_call_log i
-          WHERE i.caller_id_number IN (l.phone_number, CONCAT('1', l.phone_number), CONCAT('+1', l.phone_number))
-            AND i.disposition IN ${INBOUND_CLOSED_OUT_DISPOSITIONS}
-        )`;
 
 async function getNextLead(campaignId) {
   // Phase 2, piece 1 — calling hours enforcement. Real rules stored
