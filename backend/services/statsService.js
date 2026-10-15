@@ -515,7 +515,7 @@ Metrics, exactly as specified:
   - Connect Rate  = Total Calls Answered By A Human / Total Dialed
   - Remaining New Leads = never dialed and still callable
   - Remaining for Redial = not reached yet (No Answer / Machine / Busy)
-    and still due another attempt today
+    and its number still under today's per-number call limit
   - Per-agent aggregated table
 
 DEFINITIONS — flagged explicitly since these are business-rule
@@ -545,7 +545,7 @@ non-contact):
     was reached at some point during the call.
 ==================================================
 */
-const NON_HUMAN_DISPOSITIONS = ["MACHINE", "BUSY", "NO_ANSWER", "VOICEMAIL"];
+const NON_HUMAN_DISPOSITIONS = ["MACHINE", "BUSY", "NO_ANSWER", "VOICEMAIL", "VOICEMAIL_STANDARD", "VOICEMAIL_CARRIER_FILTER"];
 
 // Remaining Leads = never-attempted leads the dialer will actually still
 // call — same rules as getNextLead (leadEligibility.js), so a lead the
@@ -643,7 +643,7 @@ async function getLeadsCallingDashboard({ startDate, endDate, campaignIds }) {
   // morning from whatever is left — nothing is deleted. Leads the dialer
   // will never call again (reached, closed out, DNC) drop out entirely.
   // Remaining counts are live snapshots, not bounded by the date range.
-  const today = new Date().toISOString().slice(0, 10); // same date lead_autodial_state's counters use (recordAutodialAttempt)
+  const { start: todayStart } = await getEasternDayBoundsForServerClock(); // for the daily per-number call limit in REDIAL_PENDING_SQL
   const [leadRows] = await db.execute(
     `
       SELECT
@@ -685,12 +685,11 @@ async function getLeadsCallingDashboard({ startDate, endDate, campaignIds }) {
         FROM vicidial_lists vlt
         JOIN vicidial_list l ON l.list_id = vlt.list_id
         LEFT JOIN cmx_dialer.campaign_autodial_rules r ON r.campaign_id = vlt.campaign_id
-        LEFT JOIN cmx_dialer.lead_autodial_state s ON s.lead_id = l.lead_id
         WHERE vlt.campaign_id IN (${campaignInClause})
       ) perLead
       GROUP BY campaignId
     `,
-    [today, start, end, start, end, ...campaignIds]
+    [todayStart, start, end, start, end, ...campaignIds]
   );
 
   // Dial attempts + human-answered, grouped by campaign+agent, in range.

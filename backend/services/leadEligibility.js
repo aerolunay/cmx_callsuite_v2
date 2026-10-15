@@ -31,7 +31,20 @@ const NOT_REACHED_LEAD_STATUSES = "('NEW', 'NA', 'N', 'B', 'AM', 'A')";
 // number screened that way still looked fresh on its own lead.
 // Indexed by sql/009_add_call_log_phone_indexes.sql. Re-uploads of these
 // numbers are dropped at upload time — see findClosedOutPhoneNumbers.
-const CLOSED_OUT_DISPOSITIONS_LIST = ["SCREENING_COMPLETED", "CALL_ENDED", "NOT_INTERESTED", "DO_NOT_CALL"];
+// Per explicit request the campaign-specific CMXBSMOB codes below close a
+// number the same way: Voicemail (Carrier Filter) is treated as closed, and
+// For Follow Up Call / Eligibility Assessment Completed / Contracted
+// Service Completed as resolved.
+const CLOSED_OUT_DISPOSITIONS_LIST = [
+  "SCREENING_COMPLETED",
+  "CALL_ENDED",
+  "NOT_INTERESTED",
+  "DO_NOT_CALL",
+  "VOICEMAIL_CARRIER_FILTER",
+  "FOR_FOLLOW_UP_CALL",
+  "ELIGIBILITY_ASSESSMENT_COMPLETED",
+  "CONTRACTED_SERVICE_COMPLETED",
+];
 const CLOSED_OUT_DISPOSITIONS = `(${CLOSED_OUT_DISPOSITIONS_LIST.map((d) => `'${d}'`).join(", ")})`;
 // Per explicit request — an inbound call from the number with any of these
 // outcomes also means the person was reached, so their outbound lead isn't
@@ -39,7 +52,8 @@ const CLOSED_OUT_DISPOSITIONS = `(${CLOSED_OUT_DISPOSITIONS_LIST.map((d) => `'${
 // Hung Up / Ghost Call / Misrouted Call still allow a redial.
 const INBOUND_CLOSED_OUT_DISPOSITIONS =
   "('SCREENING_COMPLETED', 'CALL_ENDED', 'NOT_INTERESTED', 'DO_NOT_CALL', " +
-  "'INFO_PROVIDED', 'CALLBACK_REQUESTED', 'XFER_CONF', 'TRANSFERRED', 'UNABLE_TO_COMPLETE_SCREENING')";
+  "'INFO_PROVIDED', 'CALLBACK_REQUESTED', 'XFER_CONF', 'TRANSFERRED', 'UNABLE_TO_COMPLETE_SCREENING', " +
+  "'VOICEMAIL_CARRIER_FILTER', 'FOR_FOLLOW_UP_CALL', 'ELIGIBILITY_ASSESSMENT_COMPLETED', 'CONTRACTED_SERVICE_COMPLETED')";
 
 // Appended to a WHERE clause whose lead row is aliased `l`. The rules have
 // to hold for the PHONE NUMBER, not just the lead row: the same number can
@@ -81,25 +95,39 @@ const LEAD_ELIGIBILITY_SQL = `
 // (dialerService.js's startRetryCycle) — No Answer (NA automatic / N
 // agent-picked), Answering Machine / Voicemail (AM automatic / A
 // agent-picked) and Busy. Per explicit request a lead only leaves the
-// redial pool once it reaches the campaign's max attempts; agent-picked
-// No Answer / Voicemail count toward the No Answer / Machine maximums
-// (dialerService.js's saveDisposition records them).
+// redial pool once its number reaches the campaign's daily call limit.
 const RETRYABLE_LEAD_STATUSES = "('NA', 'N', 'AM', 'A', 'B')";
 
+// Per explicit request — ONE daily limit per phone number: every outbound
+// call to the number today counts (any campaign, any outcome, callbacks
+// and manual dials included), compared on the bare 10 digits or "1" + 10.
+// Expects the lead row aliased `l` and one `?` for the start of today
+// (Eastern — statsService.getEasternDayBoundsForServerClock). The limit
+// itself is campaign_autodial_rules.max_attempts_no_answer: the rules
+// screen saves the single "Max calls per number per day" setting into all
+// three of the old per-outcome columns, so no schema change was needed.
+const CALLS_TO_NUMBER_TODAY_SQL = `(
+          SELECT COUNT(*) FROM cmx_dialer.dialer_call_log dc
+          WHERE dc.phone_number IN (l.phone_number, CONCAT('1', l.phone_number)) AND dc.call_started_at >= ?
+        )`;
+const DEFAULT_MAX_CALLS_PER_NUMBER_PER_DAY = 3;
+
 // A lead still due a redial: a retryable outcome, the number not blocked,
-// and today's attempts for that outcome still under the campaign's max
-// (Admin -> Leads/Auto-Dial; same defaults as getNextLead). Expects the
-// lead row aliased `l`, cmx_dialer.campaign_autodial_rules aliased `r` and
-// cmx_dialer.lead_autodial_state aliased `s` (both LEFT JOINed), plus one
-// `?` for today's date as recordAutodialAttempt writes it.
+// and calls to the number today still under the campaign's daily limit
+// (Admin -> Leads/Auto-Dial). Expects the lead row aliased `l`,
+// cmx_dialer.campaign_autodial_rules LEFT JOINed as `r`, and one `?` for
+// the start of today (see CALLS_TO_NUMBER_TODAY_SQL).
 const REDIAL_PENDING_SQL = `
         l.status IN ${RETRYABLE_LEAD_STATUSES}${NUMBER_BLOCKS_SQL}
-        AND (
-          s.lead_id IS NULL OR s.attempts_date <> ?
-          OR (l.status IN ('NA', 'N') AND s.attempts_no_answer_today < COALESCE(r.max_attempts_no_answer, 3))
-          OR (l.status IN ('AM', 'A') AND s.attempts_machine_today < COALESCE(r.max_attempts_machine, 3))
-          OR (l.status = 'B' AND s.attempts_busy_today < COALESCE(r.max_attempts_busy, 3))
-        )`;
+        AND ${CALLS_TO_NUMBER_TODAY_SQL} < COALESCE(r.max_attempts_no_answer, ${DEFAULT_MAX_CALLS_PER_NUMBER_PER_DAY})`;
+
+// Start of today (Eastern), for the `?` in REDIAL_PENDING_SQL /
+// CALLS_TO_NUMBER_TODAY_SQL. Required lazily: statsService itself
+// requires this module.
+async function startOfTodayForServerClock() {
+  const { start } = await require("./statsService").getEasternDayBoundsForServerClock();
+  return start;
+}
 
 // Per explicit request — which of these bare 10-digit numbers must never
 // be uploaded again: on the DNC list, or ever disposed Not Interested,
@@ -140,7 +168,7 @@ async function findClosedOutPhoneNumbers(phoneNumbers) {
 // upload leaves them out.
 async function findRedialPendingPhoneNumbers(phoneNumbers) {
   if (phoneNumbers.length === 0) return new Set();
-  const today = new Date().toISOString().slice(0, 10); // same date lead_autodial_state's counters use
+  const todayStart = await startOfTodayForServerClock();
   const placeholders = phoneNumbers.map(() => "?").join(",");
   const [rows] = await db.execute(
     `
@@ -148,10 +176,9 @@ async function findRedialPendingPhoneNumbers(phoneNumbers) {
       FROM asterisk.vicidial_list l
       JOIN asterisk.vicidial_lists vlt ON vlt.list_id = l.list_id
       LEFT JOIN cmx_dialer.campaign_autodial_rules r ON r.campaign_id = vlt.campaign_id
-      LEFT JOIN cmx_dialer.lead_autodial_state s ON s.lead_id = l.lead_id
       WHERE l.phone_number IN (${placeholders}) AND ${REDIAL_PENDING_SQL}
     `,
-    [...phoneNumbers, today]
+    [...phoneNumbers, todayStart]
   );
   return new Set(rows.map((r) => r.phone_number));
 }
@@ -162,6 +189,8 @@ module.exports = {
   CLOSED_OUT_DISPOSITIONS,
   INBOUND_CLOSED_OUT_DISPOSITIONS,
   RETRYABLE_LEAD_STATUSES,
+  CALLS_TO_NUMBER_TODAY_SQL,
+  DEFAULT_MAX_CALLS_PER_NUMBER_PER_DAY,
   LEAD_ELIGIBILITY_SQL,
   REDIAL_PENDING_SQL,
   findClosedOutPhoneNumbers,

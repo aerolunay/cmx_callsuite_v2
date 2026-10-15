@@ -81,10 +81,9 @@ export default function AdminLeadsSection() {
 
   // Autodial Rules
   const [rulesCampaignId, setRulesCampaignId] = useState("");
-  const [maxAttemptsBusy, setMaxAttemptsBusy] = useState(3);
-  const [maxAttemptsNoAnswer, setMaxAttemptsNoAnswer] = useState(3);
-  const [maxAttemptsMachine, setMaxAttemptsMachine] = useState(3);
-  const [attemptIntervalMinutes, setAttemptIntervalMinutes] = useState(60);
+  // Per explicit request — one daily call limit per phone number replaces
+  // the old per-outcome limits and the gap between attempts.
+  const [maxCallsPerNumberPerDay, setMaxCallsPerNumberPerDay] = useState(3);
   const [selectedDays, setSelectedDays] = useState(["mon", "tue", "wed", "thu", "fri"]);
   const [callingStartTime, setCallingStartTime] = useState("09:00");
   const [callingEndTime, setCallingEndTime] = useState("18:00");
@@ -124,10 +123,7 @@ export default function AdminLeadsSection() {
       .getAutodialRules(rulesCampaignId)
       .then((data) => {
         const r = data.rules;
-        setMaxAttemptsBusy(r.maxAttemptsBusy);
-        setMaxAttemptsNoAnswer(r.maxAttemptsNoAnswer);
-        setMaxAttemptsMachine(r.maxAttemptsMachine);
-        setAttemptIntervalMinutes(r.attemptIntervalMinutes);
+        setMaxCallsPerNumberPerDay(r.maxCallsPerNumberPerDay);
         setSelectedDays(daysStringToArray(r.callingDays));
         setCallingStartTime(r.callingStartTime);
         setCallingEndTime(r.callingEndTime);
@@ -242,10 +238,7 @@ export default function AdminLeadsSection() {
     setRulesSuccess("");
     try {
       await api.updateAutodialRules(rulesCampaignId, {
-        maxAttemptsBusy: Number(maxAttemptsBusy),
-        maxAttemptsNoAnswer: Number(maxAttemptsNoAnswer),
-        maxAttemptsMachine: Number(maxAttemptsMachine),
-        attemptIntervalMinutes: Number(attemptIntervalMinutes),
+        maxCallsPerNumberPerDay: Number(maxCallsPerNumberPerDay),
         callingDays: daysArrayToString(selectedDays),
         callingStartTime,
         callingEndTime,
@@ -492,52 +485,21 @@ export default function AdminLeadsSection() {
               <p>Loading current rules…</p>
             ) : (
               <>
-                <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
-                  <div>
-                    <label className="comments-label">Max Attempts — Busy</label>
-                    <input
-                      type="number"
-                      min="0"
-                      max="255"
-                      value={maxAttemptsBusy}
-                      onChange={(e) => setMaxAttemptsBusy(e.target.value)}
-                      style={{ width: 80 }}
-                    />
-                  </div>
-                  <div>
-                    <label className="comments-label">Max Attempts — No Answer</label>
-                    <input
-                      type="number"
-                      min="0"
-                      max="255"
-                      value={maxAttemptsNoAnswer}
-                      onChange={(e) => setMaxAttemptsNoAnswer(e.target.value)}
-                      style={{ width: 80 }}
-                    />
-                  </div>
-                  <div>
-                    <label className="comments-label">Max Attempts — Left VM</label>
-                    <input
-                      type="number"
-                      min="0"
-                      max="255"
-                      value={maxAttemptsMachine}
-                      onChange={(e) => setMaxAttemptsMachine(e.target.value)}
-                      style={{ width: 80 }}
-                    />
-                  </div>
-                </div>
-
-                <label className="comments-label" style={{ marginTop: 10 }}>
-                  Interval Between Attempts (minutes, resets daily)
-                </label>
+                <label className="comments-label">Max Calls per Number per Day</label>
                 <input
                   type="number"
                   min="1"
-                  value={attemptIntervalMinutes}
-                  onChange={(e) => setAttemptIntervalMinutes(e.target.value)}
-                  style={{ width: 100 }}
+                  max="20"
+                  value={maxCallsPerNumberPerDay}
+                  onChange={(e) => setMaxCallsPerNumberPerDay(e.target.value)}
+                  style={{ width: 80 }}
+                  required
                 />
+                <p style={{ fontSize: 13, color: "#888", margin: "4px 0 0" }}>
+                  Counts every outbound call to the number today, whatever the outcome, and resets daily. Numbers not
+                  reached (No Answer, Busy, Answering Machine, Voicemail) are redialed once all new leads have been
+                  called, longest-waiting first, until they hit this limit.
+                </p>
 
                 <label className="comments-label" style={{ marginTop: 10 }}>
                   Calling Hours (America/New_York)

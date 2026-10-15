@@ -7,7 +7,12 @@ const db = require("../config/db");
 const ami = require("../config/ami");
 const ws = require("../config/ws");
 const agentStatusService = require("./agentStatusService");
-const { LEAD_ELIGIBILITY_SQL, RETRYABLE_LEAD_STATUSES } = require("./leadEligibility"); // RETRYABLE = AUTODIAL_OUTCOME_INFO's statuses
+const {
+  LEAD_ELIGIBILITY_SQL,
+  RETRYABLE_LEAD_STATUSES,
+  CALLS_TO_NUMBER_TODAY_SQL,
+  DEFAULT_MAX_CALLS_PER_NUMBER_PER_DAY,
+} = require("./leadEligibility");
 const { getEasternDayBoundsForServerClock } = require("./statsService");
 
 /*
@@ -279,8 +284,7 @@ async function getNextLead(campaignId) {
   // Auto Dial — a campaign outside its own configured hours should
   // never dial, regardless of which path triggered it.
   const [ruleRows] = await db.execute(
-    `SELECT calling_days, calling_start_time, calling_end_time,
-            max_attempts_busy, max_attempts_no_answer, max_attempts_machine, attempt_interval_minutes
+    `SELECT calling_days, calling_start_time, calling_end_time, max_attempts_no_answer
      FROM cmx_dialer.campaign_autodial_rules WHERE campaign_id = ?`,
     [campaignId]
   );
@@ -289,10 +293,7 @@ async function getNextLead(campaignId) {
     calling_days: "mon-fri",
     calling_start_time: "09:00",
     calling_end_time: "18:00",
-    max_attempts_busy: 3,
-    max_attempts_no_answer: 3,
-    max_attempts_machine: 3,
-    attempt_interval_minutes: 60,
+    max_attempts_no_answer: DEFAULT_MAX_CALLS_PER_NUMBER_PER_DAY, // the single per-number daily call limit — see startRetryCycle
   };
 
   if (!isWithinCallingHours(rules)) {
@@ -305,30 +306,33 @@ async function getNextLead(campaignId) {
   if (lead) return lead;
 
   // Every lead in the list has now been dialed once this cycle — start the
-  // next cycle with the automatic No Answer / Machine / Busy outcomes.
+  // next cycle with the not-reached outcomes (No Answer / Machine / Busy).
   const reopened = await startRetryCycle(campaignId, rules);
   return reopened > 0 ? pickFreshLead(campaignId) : null;
 }
 
 /*
-Per explicit request — automatic No Answer / Machine / Busy outcomes are
-never redialed straight away. The whole list is dialed once first (every
-lead with called_since_last_reset = 'N'); only once none are left does
-this reopen the retryable ones, each for exactly one more dial, as the
-next cycle. Dialing marks a lead called again (markLeadDialed), so a
-reopened lead can't come back until the cycle after that.
+Per explicit request — not-reached outcomes (No Answer, Machine /
+Voicemail, Busy) are never redialed straight away. The whole list is
+dialed once first (every lead with called_since_last_reset = 'N'); only
+once none are left does this reopen the retryable ones, each for exactly
+one more dial, as the next cycle. Dialing marks a lead called again
+(markLeadDialed), so a reopened lead can't come back until the cycle after
+that — and pickFreshLead dials new leads first, then the longest-waiting
+redials, so a number just called always goes to the bottom of the list.
 
-Still bounded by the campaign's autodial rules (Admin -> Leads/Auto-Dial):
-a lead is only reopened once its own interval has passed since its last
-attempt, and while today's attempts for its last outcome are under that
-outcome's max. Leads not reopened yet are simply picked up by a later
-cycle — getNextLead runs again on every pull and on the frontend's
-no-leads re-check.
+Per explicit request, the only limit is ONE daily call limit per phone
+number (Admin -> Leads/Auto-Dial, "Max calls per number per day" — see
+leadEligibility.js's CALLS_TO_NUMBER_TODAY_SQL). There is no minimum gap
+between attempts any more: redials only ever happen once no new leads are
+left, which is exactly when the old 60-minute gap was asked to be dropped.
+The number-level blocks (reached elsewhere, DNC, closed out) are applied
+by pickFreshLead's LEAD_ELIGIBILITY_SQL, not here — MySQL can't read
+vicidial_list in a subquery of an UPDATE on vicidial_list.
 */
-
 async function startRetryCycle(campaignId, rules) {
-  // Same date recordAutodialAttempt writes, so "today" matches its counters.
-  const today = new Date().toISOString().slice(0, 10);
+  const { start: todayStart } = await getEasternDayBoundsForServerClock();
+  const maxCallsPerDay = Number(rules.max_attempts_no_answer) || DEFAULT_MAX_CALLS_PER_NUMBER_PER_DAY;
   // A lead whose number is ringing right now must not be reopened under it.
   const inCallLeadIds = [...activeCalls.values()].map((c) => Number(c.leadId)).filter((id) => id > 0);
   const inCallFilter = inCallLeadIds.length ? `AND l.lead_id NOT IN (${inCallLeadIds.map(() => "?").join(",")})` : "";
@@ -337,29 +341,14 @@ async function startRetryCycle(campaignId, rules) {
     `
       UPDATE vicidial_list l
       JOIN vicidial_lists vl ON vl.list_id = l.list_id
-      LEFT JOIN cmx_dialer.lead_autodial_state s ON s.lead_id = l.lead_id
       SET l.called_since_last_reset = 'N'
       WHERE vl.campaign_id = ?
         AND l.called_since_last_reset = 'Y'
         AND l.status IN ${RETRYABLE_LEAD_STATUSES}
-        AND (s.last_attempt_at IS NULL OR s.last_attempt_at <= NOW() - INTERVAL ? MINUTE)
-        AND (
-          s.lead_id IS NULL OR s.attempts_date <> ?
-          OR (l.status IN ('NA', 'N') AND s.attempts_no_answer_today < ?)
-          OR (l.status IN ('AM', 'A') AND s.attempts_machine_today < ?)
-          OR (l.status = 'B' AND s.attempts_busy_today < ?)
-        )
+        AND ${CALLS_TO_NUMBER_TODAY_SQL} < ?
         ${inCallFilter}
     `,
-    [
-      campaignId,
-      rules.attempt_interval_minutes,
-      today,
-      rules.max_attempts_no_answer,
-      rules.max_attempts_machine,
-      rules.max_attempts_busy,
-      ...inCallLeadIds,
-    ]
+    [campaignId, todayStart, maxCallsPerDay, ...inCallLeadIds]
   );
   return result.affectedRows;
 }
@@ -437,7 +426,13 @@ async function pickFreshLead(campaignId) {
       FROM vicidial_list l
       JOIN vicidial_lists vl ON vl.list_id = l.list_id
       WHERE vl.campaign_id = ?${LEAD_ELIGIBILITY_SQL}
-      ORDER BY l.lead_id ASC
+      -- Per explicit request: new leads first, then redials longest-waiting
+      -- first, so a number that was just called goes to the bottom.
+      ORDER BY
+        (l.status = 'NEW') DESC,
+        (SELECT MAX(dc.call_started_at) FROM cmx_dialer.dialer_call_log dc
+          WHERE dc.phone_number IN (l.phone_number, CONCAT('1', l.phone_number))) ASC,
+        l.lead_id ASC
       LIMIT 1
     `,
     [campaignId]
@@ -1578,7 +1573,48 @@ const DISPOSITION_TO_VICIDIAL_STATUS = {
   // custom codes above: no real ViciDial-native equivalent, so a
   // dedicated new status code rather than reusing an unrelated one.
   XFER_CONF: "XFER",
+  // Per explicit request — CMXBSMOB's custom outbound codes. None has a
+  // ViciDial equivalent; PU is the terminal "someone picked up / done"
+  // status, so none of them is ever redialed (the call log keeps the real
+  // disposition). They also close the number for re-uploads — see
+  // leadEligibility.js's CLOSED_OUT_DISPOSITIONS_LIST.
+  VOICEMAIL_CARRIER_FILTER: "PU", // treated as closed
+  FOR_FOLLOW_UP_CALL: "PU", // treated as resolved
+  ELIGIBILITY_ASSESSMENT_COMPLETED: "PU",
+  CONTRACTED_SERVICE_COMPLETED: "PU",
+  // Voicemail (Standard) — not reached, redialed like VOICEMAIL.
+  VOICEMAIL_STANDARD: "A",
 };
+
+/*
+Per explicit request — dispositions an admin adds to a campaign's custom
+outbound list (Admin -> Campaigns, cmx_dialer.campaign_dispositions) must
+save too, not just the built-in codes above. A custom row only has a code
+and a label — no outcome — so the lead status is inferred from the code,
+because it decides whether the number is redialed: not reached
+(voicemail / machine, no answer, busy) is redialed under the daily
+per-number limit; Not Interested / Do Not Call close the number; anything
+else counts as a person reached and is never redialed. A code that's in
+neither the built-in map nor this campaign's custom list is still rejected.
+*/
+function inferStatusForCustomDisposition(value) {
+  const v = String(value).toUpperCase();
+  if (/DO_NOT_CALL|(^|_)DNC(_|$)/.test(v)) return "DNC";
+  if (/NOT_INTERESTED/.test(v)) return "NI";
+  if (/VOICEMAIL|VOICE_MAIL|MACHINE|(^|_)VM(_|$)/.test(v)) return "A";
+  if (/NO_ANSWER|NOANSWER/.test(v)) return "N";
+  if (/BUSY/.test(v)) return "B";
+  return "PU";
+}
+
+async function resolveDispositionStatus(campaignId, disposition) {
+  if (DISPOSITION_TO_VICIDIAL_STATUS[disposition]) return DISPOSITION_TO_VICIDIAL_STATUS[disposition];
+  const [rows] = await db.execute(
+    `SELECT 1 FROM cmx_dialer.campaign_dispositions WHERE campaign_id = ? AND direction = 'OUTBOUND' AND value = ? LIMIT 1`,
+    [campaignId, disposition]
+  );
+  return rows.length ? inferStatusForCustomDisposition(disposition) : null;
+}
 
 async function saveDisposition({
   callId,
@@ -1594,7 +1630,7 @@ async function saveDisposition({
   callbackAt,
   comments,
 }) {
-  const vicidialStatus = DISPOSITION_TO_VICIDIAL_STATUS[disposition];
+  const vicidialStatus = await resolveDispositionStatus(campaignId, disposition);
   if (!vicidialStatus) {
     throw new Error(`Unknown disposition code: ${disposition}`);
   }
@@ -1659,7 +1695,7 @@ async function saveDisposition({
     // Stored as the bare 10 digits, the same form leads are stored in —
     // a manual dial typed as "1646..." or "+1 646-..." would otherwise
     // never match its lead's "646..." in the DNC checks.
-    if (disposition === "DO_NOT_CALL") {
+    if (vicidialStatus === "DNC") {
       const digits = String(phoneNumber).replace(/\D/g, "");
       const dncNumber = digits.length === 11 && digits.startsWith("1") ? digits.slice(1) : digits;
       await connection.execute(`INSERT IGNORE INTO vicidial_dnc (phone_number) VALUES (?)`, [dncNumber]);
@@ -1681,7 +1717,7 @@ async function saveDisposition({
   // redialed like the automatic outcomes, so it counts toward the same
   // per-outcome maximums (see leadEligibility.js's RETRYABLE_LEAD_STATUSES).
   // Fire-and-forget: a counter failure must never fail the save itself.
-  const manualRetryOutcome = { NO_ANSWER: "no_answer", VOICEMAIL: "machine" }[disposition];
+  const manualRetryOutcome = { N: "no_answer", A: "machine", B: "busy" }[vicidialStatus];
   if (manualRetryOutcome && Number(leadId) > 0) {
     recordAutodialAttempt(leadId, manualRetryOutcome).catch((err) => {
       console.error(`[dialerService] Failed to record ${manualRetryOutcome} attempt for lead ${leadId}:`, err.message);

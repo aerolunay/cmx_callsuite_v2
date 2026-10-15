@@ -1415,7 +1415,10 @@ it's just a display string, not something branched on anywhere.
 ==================================================
 */
 function buildCallbackStatus(dispositionValue, dispositionLabel) {
-  if (!dispositionValue || !dialerService.KNOWN_DISPOSITION_VALUES.includes(dispositionValue)) {
+  // Only called after saveDisposition has accepted the value — built-in
+  // or one of the campaign's own custom codes — so a format check is
+  // enough here (custom codes aren't in KNOWN_DISPOSITION_VALUES).
+  if (!dispositionValue || !/^[A-Z0-9_]{1,64}$/.test(dispositionValue)) {
     return null;
   }
   const safeLabel = String(dispositionLabel || dispositionValue).trim().slice(0, 40);

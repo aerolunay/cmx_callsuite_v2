@@ -565,13 +565,17 @@ GET returns the stored rules, or the SQL table's own defaults if this
 campaign has never had rules saved yet (rather than a 404 — every
 outbound campaign implicitly HAS default rules, they just haven't been
 customized). PUT upserts.
+
+Per explicit request the three per-outcome limits (busy / no answer /
+machine) and the minimum gap between attempts are replaced by ONE setting:
+max calls per phone number per day (see leadEligibility.js's
+CALLS_TO_NUMBER_TODAY_SQL). It's stored in all three existing
+max_attempts_* columns so no schema change was needed — the dialer reads
+max_attempts_no_answer. attempt_interval_minutes is no longer used.
 ==================================================
 */
 const AUTODIAL_RULE_DEFAULTS = {
-  maxAttemptsBusy: 3,
-  maxAttemptsNoAnswer: 3,
-  maxAttemptsMachine: 3,
-  attemptIntervalMinutes: 60,
+  maxCallsPerNumberPerDay: 3,
   callingDays: "mon-fri",
   callingStartTime: "09:00",
   callingEndTime: "18:00",
@@ -581,8 +585,7 @@ router.get("/campaigns/:campaignId/autodial-rules", requireAdmin, async (req, re
   try {
     const { campaignId } = req.params;
     const [rows] = await db.execute(
-      `SELECT max_attempts_busy, max_attempts_no_answer, max_attempts_machine,
-              attempt_interval_minutes, calling_days, calling_start_time, calling_end_time
+      `SELECT max_attempts_no_answer, calling_days, calling_start_time, calling_end_time
        FROM cmx_dialer.campaign_autodial_rules WHERE campaign_id = ?`,
       [campaignId]
     );
@@ -595,10 +598,7 @@ router.get("/campaigns/:campaignId/autodial-rules", requireAdmin, async (req, re
     return res.json({
       success: true,
       rules: {
-        maxAttemptsBusy: r.max_attempts_busy,
-        maxAttemptsNoAnswer: r.max_attempts_no_answer,
-        maxAttemptsMachine: r.max_attempts_machine,
-        attemptIntervalMinutes: r.attempt_interval_minutes,
+        maxCallsPerNumberPerDay: r.max_attempts_no_answer,
         callingDays: r.calling_days,
         callingStartTime: r.calling_start_time,
         callingEndTime: r.calling_end_time,
@@ -614,37 +614,32 @@ router.get("/campaigns/:campaignId/autodial-rules", requireAdmin, async (req, re
 router.put("/campaigns/:campaignId/autodial-rules", requireAdmin, async (req, res) => {
   try {
     const { campaignId } = req.params;
-    const {
-      maxAttemptsBusy,
-      maxAttemptsNoAnswer,
-      maxAttemptsMachine,
-      attemptIntervalMinutes,
-      callingDays,
-      callingStartTime,
-      callingEndTime,
-    } = req.body;
+    const { maxCallsPerNumberPerDay, callingDays, callingStartTime, callingEndTime } = req.body;
+
+    const maxCalls = Number(maxCallsPerNumberPerDay ?? AUTODIAL_RULE_DEFAULTS.maxCallsPerNumberPerDay);
+    if (!Number.isInteger(maxCalls) || maxCalls < 1 || maxCalls > 20) {
+      return res.status(400).json({ success: false, message: "Max calls per number per day must be a whole number from 1 to 20." });
+    }
 
     await db.execute(
       `
         INSERT INTO cmx_dialer.campaign_autodial_rules
           (campaign_id, max_attempts_busy, max_attempts_no_answer, max_attempts_machine,
-           attempt_interval_minutes, calling_days, calling_start_time, calling_end_time)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+           calling_days, calling_start_time, calling_end_time)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         ON DUPLICATE KEY UPDATE
           max_attempts_busy = VALUES(max_attempts_busy),
           max_attempts_no_answer = VALUES(max_attempts_no_answer),
           max_attempts_machine = VALUES(max_attempts_machine),
-          attempt_interval_minutes = VALUES(attempt_interval_minutes),
           calling_days = VALUES(calling_days),
           calling_start_time = VALUES(calling_start_time),
           calling_end_time = VALUES(calling_end_time)
       `,
       [
         campaignId,
-        maxAttemptsBusy ?? AUTODIAL_RULE_DEFAULTS.maxAttemptsBusy,
-        maxAttemptsNoAnswer ?? AUTODIAL_RULE_DEFAULTS.maxAttemptsNoAnswer,
-        maxAttemptsMachine ?? AUTODIAL_RULE_DEFAULTS.maxAttemptsMachine,
-        attemptIntervalMinutes ?? AUTODIAL_RULE_DEFAULTS.attemptIntervalMinutes,
+        maxCalls,
+        maxCalls,
+        maxCalls,
         callingDays || AUTODIAL_RULE_DEFAULTS.callingDays,
         callingStartTime || AUTODIAL_RULE_DEFAULTS.callingStartTime,
         callingEndTime || AUTODIAL_RULE_DEFAULTS.callingEndTime,

@@ -190,7 +190,12 @@ export default function LeadsCallingDashboardPage() {
         </div>
 
         {error && <div className="error">{error}</div>}
-        {loading && <p>Loading…</p>}
+        {loading && (
+          <div className="loading-spinner-wrap" role="status" aria-live="polite">
+            <div className="loading-spinner" aria-hidden="true" />
+            <span>Loading leads dashboard…</span>
+          </div>
+        )}
 
         {!loading && dashboard && (
           <>
