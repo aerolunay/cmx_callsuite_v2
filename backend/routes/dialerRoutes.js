@@ -1007,6 +1007,9 @@ router.post("/dialer/start-call", requireAuth, async (req, res) => {
 
     return res.json({ success: true, ...result });
   } catch (error) {
+    if (error.code === "CALL_IN_PROGRESS") {
+      return res.status(409).json({ success: false, code: error.code, message: error.message });
+    }
     console.error("POST /api/dialer/start-call failed:", error);
     return res.status(500).json({ success: false, message: error.message || "Failed to start call." });
   }

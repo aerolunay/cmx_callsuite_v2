@@ -706,7 +706,21 @@ export default function DialerPage() {
       // (`if (!hasLeads) return;`) then correctly respects — stopping
       // the loop and showing a calm, expected message instead of a
       // scary red error banner.
-      if (err.code === "INBOUND_WAITING") {
+      if (err.code === "CALL_IN_PROGRESS") {
+        // The backend already has a call for this agent (e.g. started
+        // from another Dialer tab) — show that call here instead of
+        // the lead this attempt just pulled.
+        setLead(null);
+        api
+          .getCurrentCall()
+          .then((data) => {
+            if (data.call) {
+              setCall(data.call);
+              setLead(data.call.lead || null);
+            }
+          })
+          .catch(() => {});
+      } else if (err.code === "INBOUND_WAITING") {
         // Not an error — an inbound caller goes first, and no lead was
         // used up. Auto Dial resumes once the hold below lapses.
         setAutoResolvedNotice(err.message);

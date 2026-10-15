@@ -202,6 +202,8 @@ async function discardNeverConnectedCall(call) {
 
   activeCalls.delete(call.callId);
 
+  if (getRawActiveCallForAgent(call.appUserId)) return; // never flip an agent who's on another live call back to READY
+
   try {
     await agentStatusService.setStatus(call.appUserId, "READY", {
       relatedCallDirection: "outbound",
@@ -557,6 +559,20 @@ function startCall({
   outboundTrunk,
   autoDtmf = null, // extension to auto-dial once answered — see runAutoDtmf
 }) {
+  // REAL BUG FIX — one outbound call per agent at a time. The route's
+  // READY check is an async DB read, so two start-call requests landing
+  // in the same instant (confirmed live: a second Dialer tab, both
+  // auto-dialing) both passed it and rang the agent's phone twice. The
+  // second agent leg then failed against the busy phone, and its
+  // cleanup flipped the agent back to READY mid-call. activeCalls gets
+  // its entry synchronously below, so this synchronous check closes
+  // that window completely.
+  if (getRawActiveCallForAgent(appUserId)) {
+    const err = new Error("You're already on a call.");
+    err.code = "CALL_IN_PROGRESS";
+    return Promise.reject(err);
+  }
+
   // REAL BUG FIX, per explicit request — see agentStatusService.js's
   // own claimAgentForOutboundDial/releaseAgentForOutboundDial comment
   // for the full race-condition writeup. This MUST be the absolute
@@ -1309,9 +1325,10 @@ async function handleAutomaticDialOutcome(room, outcomeType) {
   // Deliberately READY, not AFTER_CALL_WORK — this is what keeps the
   // frontend's disposition form (gated on agentStatus ===
   // "AFTER_CALL_WORK") from ever appearing for a call the agent never
-  // actually took part in.
+  // actually took part in. Skipped if the agent is somehow on another
+  // live call — same reasoning as discardNeverConnectedCall.
   try {
-    await agentStatusService.setStatus(call.appUserId, "READY", {
+    if (!getRawActiveCallForAgent(call.appUserId)) await agentStatusService.setStatus(call.appUserId, "READY", {
       relatedCallDirection: "outbound",
       relatedCampaignId: call.campaignId,
       relatedCallId: call.callId,
