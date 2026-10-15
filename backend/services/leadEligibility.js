@@ -53,9 +53,9 @@ const INBOUND_CLOSED_OUT_DISPOSITIONS =
 //     "call these again", so the newest copy is the one that gets dialed
 //     (with its own fresh attempt counters) and the older copies retire.
 //     One copy per number, so a number is never dialed twice per cycle.
-const LEAD_ELIGIBILITY_SQL = `
-        AND l.called_since_last_reset = 'N'
-        AND l.status NOT IN ${TERMINAL_LEAD_STATUSES}
+// NUMBER_BLOCKS_SQL is the phone-number part alone (shared with the Leads
+// dashboard's "Remaining for Redial", which looks at already-dialed rows).
+const NUMBER_BLOCKS_SQL = `
         AND NOT EXISTS (SELECT 1 FROM vicidial_dnc d WHERE d.phone_number = l.phone_number)
         AND NOT EXISTS (
           SELECT 1 FROM vicidial_list o
@@ -71,6 +71,34 @@ const LEAD_ELIGIBILITY_SQL = `
           SELECT 1 FROM cmx_dialer.inbound_call_log i
           WHERE i.caller_id_number IN (l.phone_number, CONCAT('1', l.phone_number), CONCAT('+1', l.phone_number))
             AND i.disposition IN ${INBOUND_CLOSED_OUT_DISPOSITIONS}
+        )`;
+
+const LEAD_ELIGIBILITY_SQL = `
+        AND l.called_since_last_reset = 'N'
+        AND l.status NOT IN ${TERMINAL_LEAD_STATUSES}${NUMBER_BLOCKS_SQL}`;
+
+// Statuses the dialer's retry cycle reopens for another attempt
+// (dialerService.js's startRetryCycle) — No Answer (NA automatic / N
+// agent-picked), Answering Machine / Voicemail (AM automatic / A
+// agent-picked) and Busy. Per explicit request a lead only leaves the
+// redial pool once it reaches the campaign's max attempts; agent-picked
+// No Answer / Voicemail count toward the No Answer / Machine maximums
+// (dialerService.js's saveDisposition records them).
+const RETRYABLE_LEAD_STATUSES = "('NA', 'N', 'AM', 'A', 'B')";
+
+// A lead still due a redial: a retryable outcome, the number not blocked,
+// and today's attempts for that outcome still under the campaign's max
+// (Admin -> Leads/Auto-Dial; same defaults as getNextLead). Expects the
+// lead row aliased `l`, cmx_dialer.campaign_autodial_rules aliased `r` and
+// cmx_dialer.lead_autodial_state aliased `s` (both LEFT JOINed), plus one
+// `?` for today's date as recordAutodialAttempt writes it.
+const REDIAL_PENDING_SQL = `
+        l.status IN ${RETRYABLE_LEAD_STATUSES}${NUMBER_BLOCKS_SQL}
+        AND (
+          s.lead_id IS NULL OR s.attempts_date <> ?
+          OR (l.status IN ('NA', 'N') AND s.attempts_no_answer_today < COALESCE(r.max_attempts_no_answer, 3))
+          OR (l.status IN ('AM', 'A') AND s.attempts_machine_today < COALESCE(r.max_attempts_machine, 3))
+          OR (l.status = 'B' AND s.attempts_busy_today < COALESCE(r.max_attempts_busy, 3))
         )`;
 
 // Per explicit request — which of these bare 10-digit numbers must never
@@ -106,11 +134,36 @@ async function findClosedOutPhoneNumbers(phoneNumbers) {
   return closedOut;
 }
 
+// Per explicit request — which of these bare 10-digit numbers are already
+// waiting for a redial (see REDIAL_PENDING_SQL). Uploading them again
+// would only duplicate a call the dialer is going to make anyway, so the
+// upload leaves them out.
+async function findRedialPendingPhoneNumbers(phoneNumbers) {
+  if (phoneNumbers.length === 0) return new Set();
+  const today = new Date().toISOString().slice(0, 10); // same date lead_autodial_state's counters use
+  const placeholders = phoneNumbers.map(() => "?").join(",");
+  const [rows] = await db.execute(
+    `
+      SELECT DISTINCT l.phone_number
+      FROM asterisk.vicidial_list l
+      JOIN asterisk.vicidial_lists vlt ON vlt.list_id = l.list_id
+      LEFT JOIN cmx_dialer.campaign_autodial_rules r ON r.campaign_id = vlt.campaign_id
+      LEFT JOIN cmx_dialer.lead_autodial_state s ON s.lead_id = l.lead_id
+      WHERE l.phone_number IN (${placeholders}) AND ${REDIAL_PENDING_SQL}
+    `,
+    [...phoneNumbers, today]
+  );
+  return new Set(rows.map((r) => r.phone_number));
+}
+
 module.exports = {
   TERMINAL_LEAD_STATUSES,
   NOT_REACHED_LEAD_STATUSES,
   CLOSED_OUT_DISPOSITIONS,
   INBOUND_CLOSED_OUT_DISPOSITIONS,
+  RETRYABLE_LEAD_STATUSES,
   LEAD_ELIGIBILITY_SQL,
+  REDIAL_PENDING_SQL,
   findClosedOutPhoneNumbers,
+  findRedialPendingPhoneNumbers,
 };

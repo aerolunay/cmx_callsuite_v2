@@ -299,7 +299,8 @@ export default function AdminLeadsSection() {
             {uploadResult.skippedInvalidPhone > 0 ? ` (${uploadResult.skippedInvalidPhone} row(s) skipped — phone number isn't 10 digits)` : ""}
             {uploadResult.skippedDuplicateWithinFile > 0 ? ` (${uploadResult.skippedDuplicateWithinFile} duplicate row(s) within the file skipped)` : ""}
             {uploadResult.skippedDuplicateExisting > 0 ? ` (${uploadResult.skippedDuplicateExisting} number(s) already on file skipped)` : ""}
-            {uploadResult.skippedClosedOut > 0 ? ` (${uploadResult.skippedClosedOut} closed-out number(s) removed)` : ""}.
+            {uploadResult.skippedClosedOut > 0 ? ` (${uploadResult.skippedClosedOut} closed-out number(s) removed)` : ""}
+            {uploadResult.skippedPendingRedial > 0 ? ` (${uploadResult.skippedPendingRedial} number(s) already waiting for a redial left out)` : ""}.
           </div>
         )}
 
@@ -360,6 +361,11 @@ export default function AdminLeadsSection() {
                 <li>
                   {uploadPreview.skippedClosedOut} number(s) will be removed automatically — already closed out (DNC,
                   Not Interested, Call Ended or Screening Completed)
+                </li>
+              )}
+              {uploadPreview.skippedPendingRedial > 0 && (
+                <li>
+                  {uploadPreview.skippedPendingRedial} number(s) will be left out — already waiting for a redial
                 </li>
               )}
             </ul>

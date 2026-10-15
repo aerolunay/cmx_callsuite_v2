@@ -2,7 +2,7 @@
 
 const { DateTime } = require("luxon");
 const db = require("../config/db");
-const { LEAD_ELIGIBILITY_SQL } = require("./leadEligibility");
+const { LEAD_ELIGIBILITY_SQL, REDIAL_PENDING_SQL, INBOUND_CLOSED_OUT_DISPOSITIONS } = require("./leadEligibility");
 
 /*
 ==================================================
@@ -509,9 +509,13 @@ Metrics, exactly as specified:
   - Contact Rate  = Leads Dialed / Total Leads, where Leads Dialed is the
     number of DIFFERENT leads (still on the campaign's lists) dialed in
     range — per explicit request, so redials never push it past 100%
+  - Total Leads   = Remaining New Leads + Remaining for Redial + leads
+    already dialed in range (each lead once) — for today, the day's
+    workload as of the start of the day (see the lead query below)
   - Connect Rate  = Total Calls Answered By A Human / Total Dialed
-  - Remaining Leads = leads never yet attempted that the dialer will
-    still call (see REMAINING_LEADS_SQL)
+  - Remaining New Leads = never dialed and still callable
+  - Remaining for Redial = not reached yet (No Answer / Machine / Busy)
+    and still due another attempt today
   - Per-agent aggregated table
 
 DEFINITIONS — flagged explicitly since these are business-rule
@@ -519,7 +523,7 @@ ASSUMPTIONS, not something the request spelled out at the disposition
 level. Adjust NON_HUMAN_DISPOSITIONS below if the business defines
 "a human answered" differently (e.g. treating WRONG_NUMBER as a
 non-contact):
-  - "Total Leads" / "Remaining Leads" are LIVE INVENTORY snapshots
+  - The Remaining counts are LIVE snapshots
     (as of right now), not bounded by the dashboard's date filter —
     a lead uploaded last month and never called is still "remaining"
     today regardless of what date range is selected. This matches how
@@ -618,7 +622,7 @@ async function getLeadsCallingDashboard({ startDate, endDate, campaignIds }) {
       startDate,
       endDate,
       campaigns: [],
-      grandTotals: { totalLeads: 0, remainingLeads: 0, totalDialed: 0, humanAnswered: 0, leadsDialed: 0, contactRatePct: null, connectRatePct: null, dispositionBreakdown: [] },
+      grandTotals: { totalLeads: 0, remainingNewLeads: 0, remainingRedialLeads: 0, remainingLeads: 0, totalDialed: 0, humanAnswered: 0, leadsDialed: 0, resolvedViaInbound: 0, contactRatePct: null, connectRatePct: null, dispositionBreakdown: [] },
       agents: [],
     };
   }
@@ -626,19 +630,67 @@ async function getLeadsCallingDashboard({ startDate, endDate, campaignIds }) {
   const { start, end } = await getEasternRangeBoundsForServerClock(startDate, endDate);
   const campaignInClause = campaignIds.map(() => "?").join(",");
 
-  // Lead inventory — NOT date-bounded, see header comment above.
+  // Lead workload, per explicit request — one pass over every lead, each
+  // flagged as:
+  //   - a Remaining New Lead (never dialed, still callable),
+  //   - Remaining for Redial (not reached yet — No Answer / Machine /
+  //     Busy — and still due another attempt), and/or
+  //   - dialed in the selected range.
+  // Total Leads = leads that are any of those, counted once. For today
+  // that's exactly "New Leads + Leads to be Redialed" as of the start of
+  // the day: as leads get dialed they move from remaining to dialed, so
+  // the total holds steady through the day and starts over the next
+  // morning from whatever is left — nothing is deleted. Leads the dialer
+  // will never call again (reached, closed out, DNC) drop out entirely.
+  // Remaining counts are live snapshots, not bounded by the date range.
+  const today = new Date().toISOString().slice(0, 10); // same date lead_autodial_state's counters use (recordAutodialAttempt)
   const [leadRows] = await db.execute(
     `
       SELECT
-        vlt.campaign_id AS campaignId,
-        COUNT(l.lead_id) AS totalLeads,
-        ${REMAINING_LEADS_SQL} AS remainingLeads
-      FROM vicidial_lists vlt
-      JOIN vicidial_list l ON l.list_id = vlt.list_id
-      WHERE vlt.campaign_id IN (${campaignInClause})
-      GROUP BY vlt.campaign_id
+        campaignId,
+        SUM(isNew) AS remainingNewLeads,
+        SUM(isRedial) AS remainingRedialLeads,
+        SUM(dialedInRange = 1 AND closedViaInbound = 0) AS leadsDialed,
+        SUM(isNew = 1 OR isRedial = 1 OR (dialedInRange = 1 AND closedViaInbound = 0)) AS totalLeads,
+        COUNT(DISTINCT CASE WHEN resolvedViaInbound = 1 THEN phoneNumber END) AS resolvedViaInbound
+      FROM (
+        SELECT
+          vlt.campaign_id AS campaignId,
+          CASE WHEN l.status = 'NEW'${LEAD_ELIGIBILITY_SQL} THEN 1 ELSE 0 END AS isNew,
+          CASE WHEN ${REDIAL_PENDING_SQL} THEN 1 ELSE 0 END AS isRedial,
+          EXISTS (
+            SELECT 1 FROM cmx_dialer.dialer_call_log dl
+            WHERE dl.lead_id = l.lead_id AND dl.campaign_id = vlt.campaign_id AND dl.call_started_at BETWEEN ? AND ?
+          ) AS dialedInRange,
+          -- Per explicit request — the lead's number was closed out on an
+          -- INBOUND call in range (the person called in and was screened,
+          -- helped, ...). The dialer never calls these, so they're not in
+          -- Remaining/Total; shown as their own count instead, once per
+          -- number.
+          EXISTS (
+            SELECT 1 FROM cmx_dialer.inbound_call_log ic
+            WHERE ic.caller_id_number IN (l.phone_number, CONCAT('1', l.phone_number), CONCAT('+1', l.phone_number))
+              AND ic.disposition IN ${INBOUND_CLOSED_OUT_DISPOSITIONS}
+              AND ic.call_started_at BETWEEN ? AND ?
+          ) AS resolvedViaInbound,
+          -- Closed out on an inbound call at ANY time — removed from Total
+          -- and Leads Dialed even if it was dialed earlier in range (it
+          -- already can't be New or Redial: NUMBER_BLOCKS_SQL excludes it).
+          EXISTS (
+            SELECT 1 FROM cmx_dialer.inbound_call_log ic2
+            WHERE ic2.caller_id_number IN (l.phone_number, CONCAT('1', l.phone_number), CONCAT('+1', l.phone_number))
+              AND ic2.disposition IN ${INBOUND_CLOSED_OUT_DISPOSITIONS}
+          ) AS closedViaInbound,
+          l.phone_number AS phoneNumber
+        FROM vicidial_lists vlt
+        JOIN vicidial_list l ON l.list_id = vlt.list_id
+        LEFT JOIN cmx_dialer.campaign_autodial_rules r ON r.campaign_id = vlt.campaign_id
+        LEFT JOIN cmx_dialer.lead_autodial_state s ON s.lead_id = l.lead_id
+        WHERE vlt.campaign_id IN (${campaignInClause})
+      ) perLead
+      GROUP BY campaignId
     `,
-    campaignIds
+    [today, start, end, start, end, ...campaignIds]
   );
 
   // Dial attempts + human-answered, grouped by campaign+agent, in range.
@@ -656,23 +708,6 @@ async function getLeadsCallingDashboard({ startDate, endDate, campaignIds }) {
     `,
     [...NON_HUMAN_DISPOSITIONS, start, end, ...campaignIds]
   );
-
-  // Different leads dialed in range, per campaign — Contact Rate's
-  // numerator. Joined to the campaign's own lists so a lead removed since
-  // (lead cleanup) or a manual dial (lead_id 0) never counts, keeping the
-  // rate at or under 100% of Total Leads.
-  const [leadsDialedRows] = await db.execute(
-    `
-      SELECT vlt.campaign_id AS campaignId, COUNT(DISTINCT c.lead_id) AS leadsDialed
-      FROM cmx_dialer.dialer_call_log c
-      JOIN vicidial_list l ON l.lead_id = c.lead_id
-      JOIN vicidial_lists vlt ON vlt.list_id = l.list_id AND vlt.campaign_id = c.campaign_id
-      WHERE c.call_started_at BETWEEN ? AND ? AND c.campaign_id IN (${campaignInClause})
-      GROUP BY vlt.campaign_id
-    `,
-    [start, end, ...campaignIds]
-  );
-  const leadsDialedByCampaign = new Map(leadsDialedRows.map((r) => [r.campaignId, Number(r.leadsDialed) || 0]));
 
   // Disposition breakdown — NEW, per explicit request ("% per
   // disposition"). Grouped by campaign+disposition in one pass so both
@@ -726,10 +761,18 @@ async function getLeadsCallingDashboard({ startDate, endDate, campaignIds }) {
 
 
   // --- Per-campaign rows ---
+  // mysql2 returns SUM() as strings — Number() each, same fix as computeDirectionStats.
+  const EMPTY_LEADS = { totalLeads: 0, remainingNewLeads: 0, remainingRedialLeads: 0, leadsDialed: 0, resolvedViaInbound: 0 };
   const leadsByCampaign = new Map(
     leadRows.map((r) => [
       r.campaignId,
-      { totalLeads: Number(r.totalLeads) || 0, remainingLeads: Number(r.remainingLeads) || 0 },
+      {
+        totalLeads: Number(r.totalLeads) || 0,
+        remainingNewLeads: Number(r.remainingNewLeads) || 0,
+        remainingRedialLeads: Number(r.remainingRedialLeads) || 0,
+        leadsDialed: Number(r.leadsDialed) || 0,
+        resolvedViaInbound: Number(r.resolvedViaInbound) || 0,
+      },
     ])
   );
 
@@ -743,18 +786,20 @@ async function getLeadsCallingDashboard({ startDate, endDate, campaignIds }) {
 
   const campaigns = campaignIds
     .map((campaignId) => {
-      const leads = leadsByCampaign.get(campaignId) || { totalLeads: 0, remainingLeads: 0 };
+      const leads = leadsByCampaign.get(campaignId) || EMPTY_LEADS;
       const dial = dialTotalsByCampaign.get(campaignId) || { totalDialed: 0, humanAnswered: 0 };
-      const leadsDialed = leadsDialedByCampaign.get(campaignId) || 0;
       return {
         campaignId,
         campaignName: campaignNameById.get(campaignId) || campaignId,
         totalLeads: leads.totalLeads,
-        remainingLeads: leads.remainingLeads,
+        remainingNewLeads: leads.remainingNewLeads,
+        remainingRedialLeads: leads.remainingRedialLeads,
+        remainingLeads: leads.remainingNewLeads + leads.remainingRedialLeads,
         totalDialed: dial.totalDialed,
         humanAnswered: dial.humanAnswered,
-        leadsDialed,
-        contactRatePct: pct(leadsDialed, leads.totalLeads),
+        leadsDialed: leads.leadsDialed,
+        resolvedViaInbound: leads.resolvedViaInbound,
+        contactRatePct: pct(leads.leadsDialed, leads.totalLeads),
         connectRatePct: pct(dial.humanAnswered, dial.totalDialed),
         // % per disposition, per explicit request — each disposition's
         // share of THIS campaign's own totalDialed in range.
@@ -772,13 +817,16 @@ async function getLeadsCallingDashboard({ startDate, endDate, campaignIds }) {
   const grandTotals = campaigns.reduce(
     (acc, c) => {
       acc.totalLeads += c.totalLeads;
+      acc.remainingNewLeads += c.remainingNewLeads;
+      acc.remainingRedialLeads += c.remainingRedialLeads;
       acc.remainingLeads += c.remainingLeads;
       acc.totalDialed += c.totalDialed;
       acc.humanAnswered += c.humanAnswered;
       acc.leadsDialed += c.leadsDialed;
+      acc.resolvedViaInbound += c.resolvedViaInbound;
       return acc;
     },
-    { totalLeads: 0, remainingLeads: 0, totalDialed: 0, humanAnswered: 0, leadsDialed: 0 }
+    { totalLeads: 0, remainingNewLeads: 0, remainingRedialLeads: 0, remainingLeads: 0, totalDialed: 0, humanAnswered: 0, leadsDialed: 0, resolvedViaInbound: 0 }
   );
   grandTotals.contactRatePct = pct(grandTotals.leadsDialed, grandTotals.totalLeads);
   grandTotals.connectRatePct = pct(grandTotals.humanAnswered, grandTotals.totalDialed);

@@ -205,11 +205,19 @@ export default function LeadsCallingDashboardPage() {
                   <div className="stats-cell-label">Connect Rate</div>
                   <div className="stats-cell-value">{fmtPct(g?.connectRatePct)}</div>
                 </div>
-                <div className="stats-cell">
-                  <div className="stats-cell-label">Remaining Leads</div>
-                  <div className="stats-cell-value">{fmtCount(g?.remainingLeads)}</div>
+                <div className="stats-cell" title="Never dialed yet and still callable.">
+                  <div className="stats-cell-label">Remaining New Leads</div>
+                  <div className="stats-cell-value">{fmtCount(g?.remainingNewLeads)}</div>
                 </div>
-                <div className="stats-cell">
+                <div className="stats-cell" title="Not reached yet (No Answer, Answering Machine, Busy) and still due another attempt.">
+                  <div className="stats-cell-label">Remaining for Redial</div>
+                  <div className="stats-cell-value">{fmtCount(g?.remainingRedialLeads)}</div>
+                </div>
+                <div className="stats-cell" title="Leads whose number was closed out on an inbound call in this date range — removed from Remaining and Total.">
+                  <div className="stats-cell-label">Resolved via Inbound</div>
+                  <div className="stats-cell-value">{fmtCount(g?.resolvedViaInbound)}</div>
+                </div>
+                <div className="stats-cell" title="New leads + leads to be redialed at the start of the day, including those already dialed.">
                   <div className="stats-cell-label">Total Leads</div>
                   <div className="stats-cell-value">{fmtCount(g?.totalLeads)}</div>
                 </div>
@@ -277,7 +285,9 @@ export default function LeadsCallingDashboardPage() {
                     <tr>
                       <th>Campaign</th>
                       <th>Total Leads</th>
-                      <th>Remaining</th>
+                      <th>Remaining New</th>
+                      <th>Remaining Redial</th>
+                      <th>Resolved via Inbound</th>
                       <th>Total Dialed</th>
                       <th>Human Answered</th>
                       <th>Contact Rate</th>
@@ -289,7 +299,9 @@ export default function LeadsCallingDashboardPage() {
                       <tr key={c.campaignId}>
                         <td>{c.campaignName}</td>
                         <td>{fmtCount(c.totalLeads)}</td>
-                        <td>{fmtCount(c.remainingLeads)}</td>
+                        <td>{fmtCount(c.remainingNewLeads)}</td>
+                        <td>{fmtCount(c.remainingRedialLeads)}</td>
+                        <td>{fmtCount(c.resolvedViaInbound)}</td>
                         <td>{fmtCount(c.totalDialed)}</td>
                         <td>{fmtCount(c.humanAnswered)}</td>
                         <td>{fmtPct(c.contactRatePct)}</td>

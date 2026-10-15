@@ -9,7 +9,7 @@ const { parse: parseCsvSync } = require("csv-parse/sync");
 const { stringify: stringifyCsvSync } = require("csv-stringify/sync");
 const db = require("../config/db");
 const leadCleanupService = require("../services/leadCleanupService");
-const { findClosedOutPhoneNumbers } = require("../services/leadEligibility");
+const { findClosedOutPhoneNumbers, findRedialPendingPhoneNumbers } = require("../services/leadEligibility");
 
 const router = express.Router();
 
@@ -311,7 +311,14 @@ router.post("/leads/upload", requireAdmin, upload.single("file"), async (req, re
     // them must never make them callable again. Counted once per number.
     const closedOutPhoneSet = await findClosedOutPhoneNumbers(dedupedWithinFile.map((r) => r.phone_number));
     const skippedClosedOut = closedOutPhoneSet.size;
-    const notClosedOut = (r) => !closedOutPhoneSet.has(r.phone_number);
+    // Per explicit request — numbers already waiting for a redial are left
+    // out too, in both modes: the dialer is going to call them anyway.
+    // Counted separately from (never overlapping) the closed-out ones.
+    const redialPendingPhoneSet = await findRedialPendingPhoneNumbers(
+      dedupedWithinFile.map((r) => r.phone_number).filter((p) => !closedOutPhoneSet.has(p))
+    );
+    const skippedPendingRedial = redialPendingPhoneSet.size;
+    const notClosedOut = (r) => !closedOutPhoneSet.has(r.phone_number) && !redialPendingPhoneSet.has(r.phone_number);
 
     if (mode === "preview") {
       return res.json({
@@ -324,6 +331,7 @@ router.post("/leads/upload", requireAdmin, upload.single("file"), async (req, re
         duplicatesWithinFile,
         duplicatesAgainstExisting,
         skippedClosedOut,
+        skippedPendingRedial,
         wouldImportIfInclude: validRows.filter(notClosedOut).length,
         wouldImportIfExclude: dedupedWithinFile.filter((r) => notClosedOut(r) && !existingPhoneSet.has(r.phone_number)).length,
       });
@@ -337,8 +345,8 @@ router.post("/leads/upload", requireAdmin, upload.single("file"), async (req, re
       return res.status(400).json({
         success: false,
         message:
-          skippedClosedOut > 0
-            ? "No rows left to import — every valid row is a duplicate already on file or a number that was already closed out (DNC, Not Interested, Call Ended, Screening Completed)."
+          skippedClosedOut > 0 || skippedPendingRedial > 0
+            ? "No rows left to import — every valid row is a duplicate already on file, a number already waiting for a redial, or a number that was already closed out (DNC, Not Interested, Call Ended, Screening Completed)."
             : "No rows left to import — every valid row is a duplicate of one already on file.",
       });
     }
@@ -394,6 +402,7 @@ router.post("/leads/upload", requireAdmin, upload.single("file"), async (req, re
       skippedMissingPhone,
       skippedInvalidPhone,
       skippedClosedOut,
+      skippedPendingRedial,
       skippedDuplicateWithinFile: mode === "exclude" ? duplicatesWithinFile : 0,
       skippedDuplicateExisting: mode === "exclude" ? duplicatesAgainstExisting : 0,
     });

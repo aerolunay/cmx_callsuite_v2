@@ -7,7 +7,7 @@ const db = require("../config/db");
 const ami = require("../config/ami");
 const ws = require("../config/ws");
 const agentStatusService = require("./agentStatusService");
-const { LEAD_ELIGIBILITY_SQL } = require("./leadEligibility");
+const { LEAD_ELIGIBILITY_SQL, RETRYABLE_LEAD_STATUSES } = require("./leadEligibility"); // RETRYABLE = AUTODIAL_OUTCOME_INFO's statuses
 const { getEasternDayBoundsForServerClock } = require("./statsService");
 
 /*
@@ -325,7 +325,6 @@ outcome's max. Leads not reopened yet are simply picked up by a later
 cycle — getNextLead runs again on every pull and on the frontend's
 no-leads re-check.
 */
-const RETRYABLE_LEAD_STATUSES = "('NA', 'AM', 'B')"; // AUTODIAL_OUTCOME_INFO's statuses
 
 async function startRetryCycle(campaignId, rules) {
   // Same date recordAutodialAttempt writes, so "today" matches its counters.
@@ -346,8 +345,8 @@ async function startRetryCycle(campaignId, rules) {
         AND (s.last_attempt_at IS NULL OR s.last_attempt_at <= NOW() - INTERVAL ? MINUTE)
         AND (
           s.lead_id IS NULL OR s.attempts_date <> ?
-          OR (l.status = 'NA' AND s.attempts_no_answer_today < ?)
-          OR (l.status = 'AM' AND s.attempts_machine_today < ?)
+          OR (l.status IN ('NA', 'N') AND s.attempts_no_answer_today < ?)
+          OR (l.status IN ('AM', 'A') AND s.attempts_machine_today < ?)
           OR (l.status = 'B' AND s.attempts_busy_today < ?)
         )
         ${inCallFilter}
@@ -1676,6 +1675,17 @@ async function saveDisposition({
 
   if (call) {
     activeCalls.delete(callId);
+  }
+
+  // Per explicit request — an agent-picked No Answer / Voicemail is
+  // redialed like the automatic outcomes, so it counts toward the same
+  // per-outcome maximums (see leadEligibility.js's RETRYABLE_LEAD_STATUSES).
+  // Fire-and-forget: a counter failure must never fail the save itself.
+  const manualRetryOutcome = { NO_ANSWER: "no_answer", VOICEMAIL: "machine" }[disposition];
+  if (manualRetryOutcome && Number(leadId) > 0) {
+    recordAutodialAttempt(leadId, manualRetryOutcome).catch((err) => {
+      console.error(`[dialerService] Failed to record ${manualRetryOutcome} attempt for lead ${leadId}:`, err.message);
+    });
   }
 
   // TODO (next step, not yet built): if campaignId === "CMXBSMSC" and a
