@@ -213,7 +213,7 @@ async function discardNeverConnectedCall(call) {
   if (getRawActiveCallForAgent(call.appUserId)) return; // never flip an agent who's on another live call back to READY
 
   try {
-    await agentStatusService.setStatus(call.appUserId, "READY", {
+    await agentStatusService.setStatus(call.appUserId, call.returnStatus || "READY", {
       relatedCallDirection: "outbound",
       relatedCampaignId: call.campaignId,
     });
@@ -521,6 +521,7 @@ function startCall({
   shouldRunAmd = true,
   outboundTrunk,
   autoDtmf = null, // extension to auto-dial once answered — see runAutoDtmf
+  returnStatus = "READY", // status the agent goes back to if the call never connects / auto-resolves
 }) {
   // REAL BUG FIX — one outbound call per agent at a time. The route's
   // READY check is an async DB read, so two start-call requests landing
@@ -621,6 +622,10 @@ function startCall({
       activeLine: 1, // which room the agent's OWN channel currently sits in — 1 or 2
       xferConfTarget: null, // set by attendedTransferService.js's completeLineTwo — the number/extension a Line 2 Xfer/Conf went to, read by saveDisposition below
       autoDtmf,
+      // Per explicit request — an agent placing calls from Callback mode
+      // (MANUAL_CALLBACK) must land back in it, not in READY (which would
+      // start Auto Dial), when a call never connects or auto-resolves.
+      returnStatus: returnStatus === "MANUAL_CALLBACK" ? "MANUAL_CALLBACK" : "READY",
     };
 
     activeCalls.set(callId, callState);
@@ -1307,7 +1312,7 @@ async function handleAutomaticDialOutcome(room, outcomeType) {
   // actually took part in. Skipped if the agent is somehow on another
   // live call — same reasoning as discardNeverConnectedCall.
   try {
-    if (!getRawActiveCallForAgent(call.appUserId)) await agentStatusService.setStatus(call.appUserId, "READY", {
+    if (!getRawActiveCallForAgent(call.appUserId)) await agentStatusService.setStatus(call.appUserId, call.returnStatus || "READY", {
       relatedCallDirection: "outbound",
       relatedCampaignId: call.campaignId,
       relatedCallId: call.callId,

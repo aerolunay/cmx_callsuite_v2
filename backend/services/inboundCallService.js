@@ -1199,7 +1199,7 @@ function getInboundCallForAgent(appUserId) {
 // NOT_READY, if the agent checked the "set me Not Ready after this"
 // checkbox). Until this runs, the call record (and caller ID) stays
 // available for the frontend to read.
-async function finalizeInboundCall(callId, appUserId, setNotReady = false) {
+async function finalizeInboundCall(callId, appUserId, setNotReady = false, setManualCallback = false) {
   const call = findByCallId(callId);
   if (call) {
     inboundCalls.delete(call.room);
@@ -1212,7 +1212,9 @@ async function finalizeInboundCall(callId, appUserId, setNotReady = false) {
   // contributor to the "no inbound call ever reaches a Ready agent"
   // bug. call may be null if it was already gone by the time this
   // ran, hence the optional chaining.
-  return agentStatusService.setStatus(appUserId, setNotReady ? "NOT_READY" : "READY", {
+  // Per explicit request — "Switch to Callback after saving" (never both
+  // with Not Ready; the route rejects that).
+  return agentStatusService.setStatus(appUserId, setNotReady ? "NOT_READY" : setManualCallback ? "MANUAL_CALLBACK" : "READY", {
     relatedCampaignId: call?.campaignId,
   });
 }

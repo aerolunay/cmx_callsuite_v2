@@ -26,6 +26,7 @@ const CONSOLIDATED_STATES = [
   "ON_HOLD",
   "AFTER_CALL_WORK",
   "READY",
+  "MANUAL_CALLBACK",
   "AD_HOC",
   "LUNCH_BREAK",
   "BIO_BREAK",
@@ -41,6 +42,7 @@ const STATE_LABELS = {
   ON_HOLD: "On Hold",
   AFTER_CALL_WORK: "ACW",
   READY: "Avail",
+  MANUAL_CALLBACK: "Callback",
   AD_HOC: "Ad-Hoc",
   LUNCH_BREAK: "Lunch/Break",
   BIO_BREAK: "Bio-Break",
@@ -563,7 +565,7 @@ export default function LiveStatusDashboard() {
                                   exactly (POST /users/:id/kick's
                                   KICKABLE_STATUSES) — never shows an
                                   action that would just fail. */}
-                              {["NOT_READY", "LUNCH_BREAK", "BIO_BREAK", "ADMIN", "MEETING", "TRAINING"].includes(
+                              {["NOT_READY", "MANUAL_CALLBACK", "LUNCH_BREAK", "BIO_BREAK", "ADMIN", "MEETING", "TRAINING"].includes(
                                 a.status
                               ) && (
                                 <button

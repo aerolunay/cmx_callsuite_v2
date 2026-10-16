@@ -47,9 +47,15 @@ manual-switch endpoint — they're driven entirely by real call events
                        in before the call, e.g. NOT_READY).
 ==================================================
 */
+// MANUAL_CALLBACK ("Callback" in the dropdown) — per explicit request: the
+// agent works scheduled callbacks. Auto Dial / Dial Next don't run and no
+// inbound call is offered (both only look for READY), but manual dials and
+// callbacks are allowed (POST /dialer/start-call accepts READY or this).
+// Productive, not occupancy.
 const MANUAL_STATUSES = new Set([
   "NOT_READY",
   "READY",
+  "MANUAL_CALLBACK",
   "ON_HOLD",
   "AD_HOC",
   "LUNCH_BREAK",
@@ -61,6 +67,7 @@ const MANUAL_STATUSES = new Set([
 const ALL_STATUSES = new Set([
   "NOT_READY",
   "READY",
+  "MANUAL_CALLBACK",
   "ON_HOLD",
   "AD_HOC",
   "LUNCH_BREAK",
@@ -94,7 +101,7 @@ these agents can receive a call, so counting that time as "available"
 would be wrong even for the ones that ARE productive.
 ==================================================
 */
-const PRODUCTIVE_STATUSES = new Set(["READY", "AD_HOC", "IN_CALL", "AFTER_CALL_WORK", "ON_HOLD", "ADMIN", "MEETING", "TRAINING"]);
+const PRODUCTIVE_STATUSES = new Set(["READY", "MANUAL_CALLBACK", "AD_HOC", "IN_CALL", "AFTER_CALL_WORK", "ON_HOLD", "ADMIN", "MEETING", "TRAINING"]);
 const OCCUPANCY_STATUSES = new Set(["READY", "IN_CALL", "AFTER_CALL_WORK", "ON_HOLD"]);
 
 function isManualStatus(status) {

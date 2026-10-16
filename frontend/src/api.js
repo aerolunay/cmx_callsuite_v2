@@ -151,6 +151,8 @@ export const api = {
       body: JSON.stringify({ campaignId, leadId, phoneNumber, lead, callType, dialExtension }),
     }),
   getCurrentCall: () => request("/dialer/current-call"),
+  // Per explicit request — scope "mine" (scheduled by this agent) or "all".
+  getScheduledCallbacks: (scope) => request(`/dialer/scheduled-callbacks?scope=${encodeURIComponent(scope)}`),
   getCurrentInboundCall: () => request("/dialer/inbound/current"),
   endCall: (callId) => request(`/dialer/end-call/${callId}`, { method: "POST" }),
   holdCall: (callId) => request(`/dialer/hold/${callId}`, { method: "POST" }),

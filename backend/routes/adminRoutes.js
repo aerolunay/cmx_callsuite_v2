@@ -1635,7 +1635,7 @@ router.post("/users/:appUserId/kick", requireAdmin, async (req, res) => {
     if (!currentStatus) {
       return res.status(400).json({ success: false, message: "This agent isn't currently logged in." });
     }
-    const KICKABLE_STATUSES = ["NOT_READY", "LUNCH_BREAK", "BIO_BREAK", "ADMIN", "MEETING", "TRAINING"];
+    const KICKABLE_STATUSES = ["NOT_READY", "MANUAL_CALLBACK", "LUNCH_BREAK", "BIO_BREAK", "ADMIN", "MEETING", "TRAINING"];
     if (!KICKABLE_STATUSES.includes(currentStatus)) {
       return res.status(400).json({
         success: false,

@@ -4,6 +4,7 @@ import Header from "../components/Header";
 import ContactDetailsCard from "../components/ContactDetailsCard";
 import CallLogTable from "../components/CallLogTable";
 import AbandonedVoicemailTable from "../components/AbandonedVoicemailTable";
+import ScheduledCallbacksTable from "../components/ScheduledCallbacksTable";
 import StatsPanel from "../components/StatsPanel";
 import { api } from "../api";
 import { useAuth } from "../context/AuthContext";
@@ -27,8 +28,12 @@ import Modal from "../modals/Modal";
 // AUX_CB removed — JsSIP's own call-gating on the agent's registered
 // extension now covers what it used to protect against; Callback
 // shares READY with Dial Next Number instead of its own status.
+// MANUAL_CALLBACK ("Callback") — per explicit request: work scheduled
+// callbacks. No Auto Dial / Dial Next and no inbound calls, but manual dials
+// and callbacks work (see canPlaceCalls below and dialerRoutes start-call).
 const MANUAL_STATUSES = [
   { value: "READY", label: "Ready" },
+  { value: "MANUAL_CALLBACK", label: "Callback" },
   { value: "NOT_READY", label: "Not Ready" },
   { value: "AD_HOC", label: "Ad-Hoc" },
   { value: "LUNCH_BREAK", label: "Lunch/Break" },
@@ -41,6 +46,7 @@ const MANUAL_STATUSES = [
 const STATUS_LABELS = {
   NOT_READY: "Not Ready",
   READY: "Ready",
+  MANUAL_CALLBACK: "Callback",
   AD_HOC: "Ad-Hoc",
   LUNCH_BREAK: "Lunch/Break",
   BIO_BREAK: "Bio-Break",
@@ -184,11 +190,15 @@ export default function DialerPage() {
   const [inboundDisposition, setInboundDisposition] = useState("");
   const [inboundCallbackAt, setInboundCallbackAt] = useState("");
   const [inboundSetNotReady, setInboundSetNotReady] = useState(false);
+  // Per explicit request — "Switch to Callback after saving". Either this or
+  // Not Ready (or neither) — ticking one clears the other.
+  const [inboundManualCallback, setInboundManualCallback] = useState(false);
 
   const [disposition, setDisposition] = useState("");
   const [comments, setComments] = useState("");
   const [callbackAt, setCallbackAt] = useState("");
   const [setNotReadyAfterSave, setSetNotReadyAfterSave] = useState(false);
+  const [manualCallbackAfterSave, setManualCallbackAfterSave] = useState(false);
   const [callLogVersion, setCallLogVersion] = useState(0);
   // Which tab of the Call Logs / Abandoned & Voicemail container is
   // showing — see the browser-tab-style card right above CallLogTable
@@ -660,6 +670,7 @@ export default function DialerPage() {
       setComments("");
       setCallbackAt("");
       setSetNotReadyAfterSave(false);
+      setManualCallbackAfterSave(false);
       setCallLogVersion((v) => v + 1);
       refreshAfterCall();
 
@@ -734,6 +745,9 @@ export default function DialerPage() {
     agentStatus?.status === "MICROSIP_OUTBOUND" ||
     agentStatus?.status === "AFTER_CALL_WORK";
   const isCallActive = call && call.status !== "ended";
+  // Ready or Callback mode — the statuses that may place manual dials and
+  // callbacks (the backend's start-call accepts the same two).
+  const canPlaceCalls = agentStatus?.status === "READY" || agentStatus?.status === "MANUAL_CALLBACK";
 
   // Per explicit request — Abandoned & Voicemail only ever has real
   // data for BLENDED campaigns in the first place (a pure OUTBOUND
@@ -907,10 +921,13 @@ export default function DialerPage() {
   // no real lead at all, so lead_id falls back to 0 (a harmless no-op
   // for that UPDATE).
   async function handleCallBack(row) {
-    if (agentStatus?.status !== "READY") {
-      setError("You must be Ready to place a callback.");
+    if (!canPlaceCalls) {
+      setError("You must be Ready or in Callback to place a callback.");
       return;
     }
+    // Calling from Callback mode — pre-tick "Switch to Callback after
+    // saving" so the agent stays in Callback mode between callbacks.
+    if (agentStatus?.status === "MANUAL_CALLBACK") setManualCallbackAfterSave(true);
     if (call || inboundCall) {
       setError("You're already on a call.");
       return;
@@ -975,10 +992,11 @@ export default function DialerPage() {
   // recorded on that row's own status too — see handleSaveDisposition
   // below and dialerRoutes.js's POST /dialer/disposition/:callId.
   async function handleAbandonedVoicemailCallback(row) {
-    if (agentStatus?.status !== "READY") {
-      setError("You must be Ready to place a callback.");
+    if (!canPlaceCalls) {
+      setError("You must be Ready or in Callback to place a callback.");
       return;
     }
+    if (agentStatus?.status === "MANUAL_CALLBACK") setManualCallbackAfterSave(true);
     if (call || inboundCall) {
       setError("You're already on a call.");
       return;
@@ -1062,10 +1080,11 @@ export default function DialerPage() {
   // display ("5551234567,101"), auto-dialed by the backend once the call
   // is answered (see dialerService.runAutoDtmf).
   async function handleManualDial(phoneNumber, dialExtension) {
-    if (agentStatus?.status !== "READY") {
-      setError("You must be Ready to place a call.");
+    if (!canPlaceCalls) {
+      setError("You must be Ready or in Callback to place a call.");
       return;
     }
+    if (agentStatus?.status === "MANUAL_CALLBACK") setManualCallbackAfterSave(true);
     if (call || inboundCall) {
       setError("You're already on a call.");
       return;
@@ -1266,6 +1285,7 @@ export default function DialerPage() {
         comments: comments.trim(),
         callbackAt: disposition === "CALLBACK" ? callbackAt : undefined,
         setNotReady: setNotReadyAfterSave,
+        setManualCallback: manualCallbackAfterSave,
         // NEW — per explicit request: when this call originated from
         // clicking "Callback" on an Abandoned & Voicemail row (see
         // handleAbandonedVoicemailCallback above), this disposition is
@@ -1284,6 +1304,7 @@ export default function DialerPage() {
       setComments("");
       setCallbackAt("");
       setSetNotReadyAfterSave(false);
+      setManualCallbackAfterSave(false);
       setCallLogVersion((v) => v + 1);
       refreshAfterCall();
     } catch (err) {
@@ -1315,6 +1336,7 @@ export default function DialerPage() {
         callbackAt: inboundDisposition === "CALLBACK_REQUESTED" ? inboundCallbackAt : undefined,
         callbackNumber: inboundCallbackNumber.trim() || undefined,
         setNotReady: inboundSetNotReady,
+        setManualCallback: inboundManualCallback,
       });
 
       setInboundCall(null);
@@ -1325,6 +1347,7 @@ export default function DialerPage() {
       setInboundDisposition("");
       setInboundCallbackAt("");
       setInboundSetNotReady(false);
+      setInboundManualCallback(false);
       setCallLogVersion((v) => v + 1);
       refreshAfterCall();
     } catch (err) {
@@ -1642,9 +1665,23 @@ export default function DialerPage() {
                   <input
                     type="checkbox"
                     checked={inboundSetNotReady}
-                    onChange={(e) => setInboundSetNotReady(e.target.checked)}
+                    onChange={(e) => {
+                      setInboundSetNotReady(e.target.checked);
+                      if (e.target.checked) setInboundManualCallback(false);
+                    }}
                   />
                   Set my status to Not Ready after saving
+                </label>
+                <label className="disposition-row">
+                  <input
+                    type="checkbox"
+                    checked={inboundManualCallback}
+                    onChange={(e) => {
+                      setInboundManualCallback(e.target.checked);
+                      if (e.target.checked) setInboundSetNotReady(false);
+                    }}
+                  />
+                  Switch to Callback after saving (no auto-dial — manual dials and callbacks only)
                 </label>
 
                 <button
@@ -1845,9 +1882,23 @@ export default function DialerPage() {
                     <input
                       type="checkbox"
                       checked={setNotReadyAfterSave}
-                      onChange={(e) => setSetNotReadyAfterSave(e.target.checked)}
+                      onChange={(e) => {
+                        setSetNotReadyAfterSave(e.target.checked);
+                        if (e.target.checked) setManualCallbackAfterSave(false);
+                      }}
                     />
                     Set my status to Not Ready after saving
+                  </label>
+                  <label className="disposition-row">
+                    <input
+                      type="checkbox"
+                      checked={manualCallbackAfterSave}
+                      onChange={(e) => {
+                        setManualCallbackAfterSave(e.target.checked);
+                        if (e.target.checked) setSetNotReadyAfterSave(false);
+                      }}
+                    />
+                    Switch to Callback after saving (no auto-dial — manual dials and callbacks only)
                   </label>
 
                   <button
@@ -1921,48 +1972,39 @@ export default function DialerPage() {
                 aria-expanded={showHistoryCompact}
               >
                 {showHistoryCompact ? "▾ Hide " : "▸ Show "}
-                {showAbandonedVoicemailTab ? "Call Logs, Abandoned & Voicemail" : "Call Logs"}
+                {showAbandonedVoicemailTab ? "Call Logs, Callbacks, Abandoned & Voicemail" : "Call Logs & Callbacks"}
               </button>
             )}
 
             {(!isCompact || showHistoryCompact) && (
               <>
-                {showAbandonedVoicemailTab && (
-                  <div className="card" style={{ padding: 0, marginBottom: 0 }}>
-                    <div style={{ display: "flex", borderBottom: "1px solid #e5e7eb" }}>
+                <div className="card" style={{ padding: 0, marginBottom: 0 }}>
+                  <div style={{ display: "flex", borderBottom: "1px solid #e5e7eb" }}>
+                    {[
+                      { key: "callLog", label: "Call Logs" },
+                      // Per explicit request — callbacks still waiting to be made.
+                      { key: "scheduledCallbacks", label: "Scheduled Callbacks" },
+                      ...(showAbandonedVoicemailTab ? [{ key: "abandonedVoicemail", label: "Abandoned & Voicemail" }] : []),
+                    ].map((tab) => (
                       <button
+                        key={tab.key}
                         type="button"
-                        onClick={() => setCallLogTab("callLog")}
+                        onClick={() => setCallLogTab(tab.key)}
                         style={{
                           flex: 1,
                           padding: "10px 16px",
                           border: "none",
                           background: "transparent",
                           cursor: "pointer",
-                          fontWeight: callLogTab === "callLog" ? 600 : 400,
-                          borderBottom: callLogTab === "callLog" ? "2px solid #1e7e34" : "2px solid transparent",
+                          fontWeight: callLogTab === tab.key ? 600 : 400,
+                          borderBottom: callLogTab === tab.key ? "2px solid #1e7e34" : "2px solid transparent",
                         }}
                       >
-                        Call Logs
+                        {tab.label}
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => setCallLogTab("abandonedVoicemail")}
-                        style={{
-                          flex: 1,
-                          padding: "10px 16px",
-                          border: "none",
-                          background: "transparent",
-                          cursor: "pointer",
-                          fontWeight: callLogTab === "abandonedVoicemail" ? 600 : 400,
-                          borderBottom: callLogTab === "abandonedVoicemail" ? "2px solid #1e7e34" : "2px solid transparent",
-                        }}
-                      >
-                        Abandoned & Voicemail
-                      </button>
-                    </div>
+                    ))}
                   </div>
-                )}
+                </div>
 
                 {callLogTab === "abandonedVoicemail" && showAbandonedVoicemailTab ? (
                   <AbandonedVoicemailTable
@@ -1972,12 +2014,19 @@ export default function DialerPage() {
                     refreshKey={callLogVersion}
                     compact={isCompact}
                   />
+                ) : callLogTab === "scheduledCallbacks" ? (
+                  <ScheduledCallbacksTable
+                    refreshKey={callLogVersion}
+                    canCallBack={canPlaceCalls && !call && !inboundCall}
+                    onCallBack={handleCallBack}
+                    compact={isCompact}
+                  />
                 ) : (
                   <CallLogTable
                     refreshKey={callLogVersion}
                     campaignId={statsCampaignFilter}
                     onCallBack={handleCallBack}
-                    canCallBack={agentStatus?.status === "READY"}
+                    canCallBack={canPlaceCalls}
                     compact={isCompact}
                   />
                 )}

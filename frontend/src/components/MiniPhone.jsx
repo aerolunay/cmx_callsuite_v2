@@ -89,7 +89,9 @@ Internal Transfer still picks this app's own named extensions (e.g.
 // IN_CALL at this exact moment (an incoming ring with no active
 // session yet) is the normal, expected result of having just been
 // READY a moment ago, not a different manual status the agent chose.
-const isAutoAnswerStatus = (status) => status === "READY" || status === "IN_CALL";
+// MANUAL_CALLBACK (Callback mode) places calls too, so its own agent leg
+// must auto-answer the same way.
+const isAutoAnswerStatus = (status) => status === "READY" || status === "MANUAL_CALLBACK" || status === "IN_CALL";
 
 // Matches the backend's own limit (dialerService.normalizeAutoDtmf).
 const MAX_EXT_LENGTH = 40;
@@ -309,6 +311,7 @@ function RoundButton({ icon, label, title, onClick, disabled, variant = "neutral
 // unrelated components/pages together for one lookup table.
 const AGENT_STATUS_LABELS = {
   READY: "Ready",
+  MANUAL_CALLBACK: "Callback",
   NOT_READY: "Not Ready",
   IN_CALL: "On a Call",
   ON_HOLD: "On Hold",
@@ -357,7 +360,7 @@ function statusDotClass(phone, agentStatus) {
   if (phone.callState === phone.CALL_STATES.INCOMING || phone.callState === phone.CALL_STATES.ACTIVE) {
     return "phone-status-dot-on"; // mid-call is always the "good/active" green state regardless of dropdown status
   }
-  return agentStatus === "READY" ? "phone-status-dot-on" : "phone-status-dot-away";
+  return agentStatus === "READY" || agentStatus === "MANUAL_CALLBACK" ? "phone-status-dot-on" : "phone-status-dot-away";
 }
 
 export function MiniPhone({
@@ -741,7 +744,8 @@ export function MiniPhone({
   const isIdle = phone.callState === phone.CALL_STATES.IDLE || phone.callState === phone.CALL_STATES.ENDED;
   const isIncoming = phone.callState === phone.CALL_STATES.INCOMING;
   const isActive = phone.callState === phone.CALL_STATES.ACTIVE;
-  const canDial = phone.registered && agentStatus === "READY" && !hasActiveCall && isIdle;
+  // Ready or Callback mode can dial (the backend's start-call accepts both).
+  const canDial = phone.registered && (agentStatus === "READY" || agentStatus === "MANUAL_CALLBACK") && !hasActiveCall && isIdle;
   const lineTwoFailed = Boolean(lineTwoStatus?.active && lineTwoStatus.status === "failed");
   const lineTwoLive = Boolean(lineTwoStatus?.active && lineTwoStatus.status !== "failed"); // ringing or connected
 
@@ -1130,7 +1134,7 @@ export function MiniPhone({
                 ? "Softphone must be registered before dialing."
                 : hasActiveCall
                   ? "You're already on a call."
-                  : "You must be Ready to place a call."}
+                  : "You must be Ready or in Callback to place a call."}
             </p>
           )}
 

@@ -780,6 +780,137 @@ router.post("/dialer/status", requireAuth, async (req, res) => {
 
 /*
 ==================================================
+SCHEDULED CALLBACKS — per explicit request
+==================================================
+GET /api/dialer/scheduled-callbacks?scope=mine|all
+
+Every callback still waiting to be made, across the agent's own assigned
+campaigns: outbound calls disposed CALLBACK and inbound calls disposed
+CALLBACK_REQUESTED, both with a callback time. scope=mine = only the ones
+this agent scheduled; all = everyone's.
+
+Nothing is stored separately — a callback simply stops being "scheduled"
+once the number is called again and a person is reached: any LATER
+outbound call to it whose disposition isn't a not-reached one (No Answer,
+Busy, Machine, Voicemail), or a later inbound call from it that closed it
+out. A newer CALLBACK / CALLBACK_REQUESTED replaces the older one (the
+older one counts as done, the newer one is listed). So a callback made
+from this list drops off by itself once its disposition shows the
+customer was reached, and stays when it went unanswered.
+
+Rows are shaped like call-log rows (campaign_id, lead_id, phone_number,
+callback_number, first/last name) so the Dialer reuses its existing
+handleCallBack to dial them.
+==================================================
+*/
+// Outcomes that mean the callback still hasn't happened.
+const CALLBACK_NOT_DONE_DISPOSITIONS = ["MACHINE", "BUSY", "NO_ANSWER", "VOICEMAIL", "VOICEMAIL_STANDARD"];
+// Inbound outcomes that close a scheduled callback (the person called in
+// and was helped), plus a newer callback request replacing it.
+const CALLBACK_INBOUND_CLOSING_DISPOSITIONS = [
+  "SCREENING_COMPLETED",
+  "CALL_ENDED",
+  "NOT_INTERESTED",
+  "DO_NOT_CALL",
+  "INFO_PROVIDED",
+  "XFER_CONF",
+  "TRANSFERRED",
+  "UNABLE_TO_COMPLETE_SCREENING",
+  "CALLBACK_REQUESTED",
+];
+
+function sqlList(values) {
+  return `(${values.map((v) => `'${v}'`).join(", ")})`;
+}
+
+// "This number was reached / closed after `afterCol`" for a normalized
+// 10-digit number expression. One plain `=` per stored format (bare 10
+// digits, "1" + 10) so MariaDB uses the call logs' phone indexes.
+function callbackResolvedSql(number10, afterCol) {
+  const outboundForms = [number10, `CONCAT('1', ${number10})`];
+  const inboundForms = [number10, `CONCAT('1', ${number10})`, `CONCAT('+1', ${number10})`];
+  const outbound = outboundForms.map(
+    (form) => `EXISTS (
+          SELECT 1 FROM cmx_dialer.dialer_call_log later
+          WHERE later.phone_number = ${form} AND later.call_started_at > ${afterCol}
+            AND later.disposition NOT IN ${sqlList(CALLBACK_NOT_DONE_DISPOSITIONS)}
+        )`
+  );
+  const inbound = inboundForms.map(
+    (form) => `EXISTS (
+          SELECT 1 FROM cmx_dialer.inbound_call_log laterIn
+          WHERE laterIn.caller_id_number = ${form} AND laterIn.call_started_at > ${afterCol}
+            AND laterIn.disposition IN ${sqlList(CALLBACK_INBOUND_CLOSING_DISPOSITIONS)}
+        )`
+  );
+  return `(${[...outbound, ...inbound].join("\n        OR ")})`;
+}
+
+router.get("/dialer/scheduled-callbacks", requireAuth, async (req, res) => {
+  try {
+    const { appUserId, username } = req.session.agent;
+    const scope = req.query.scope === "all" ? "all" : "mine";
+
+    const [assignedRows] = await db.execute(
+      `SELECT campaign_id FROM cmx_dialer.agent_campaign_assignments WHERE app_user_id = ? AND active = 1`,
+      [appUserId]
+    );
+    const campaignIds = assignedRows.map((r) => r.campaign_id);
+    if (campaignIds.length === 0) {
+      return res.json({ success: true, scope, callbacks: [] });
+    }
+    const campaignIn = campaignIds.map(() => "?").join(",");
+    const mineFilterOut = scope === "mine" ? "AND c.agent_user = ?" : "";
+    const mineFilterIn = scope === "mine" ? "AND i.agent_user = ?" : "";
+    const mineParams = scope === "mine" ? [username] : [];
+
+    const outboundNumber = "RIGHT(c.phone_number, 10)";
+    const inboundNumber = "RIGHT(REGEXP_REPLACE(COALESCE(NULLIF(i.callback_number, ''), i.caller_id_number), '[^0-9]', ''), 10)";
+
+    const [rows] = await db.execute(
+      `
+        SELECT 'outbound' AS source, c.call_log_id AS id, c.campaign_id, c.lead_id, c.phone_number,
+               NULL AS callback_number, c.first_name, c.last_name, c.callback_at, c.comments,
+               c.agent_user, c.call_started_at AS scheduled_at
+        FROM cmx_dialer.dialer_call_log c
+        WHERE c.disposition = 'CALLBACK' AND c.callback_at IS NOT NULL
+          AND c.campaign_id IN (${campaignIn}) ${mineFilterOut}
+          AND NOT ${callbackResolvedSql(outboundNumber, "c.call_started_at")}
+
+        UNION ALL
+
+        SELECT 'inbound' AS source, i.call_log_id AS id, i.campaign_id, 0 AS lead_id, i.caller_id_number AS phone_number,
+               i.callback_number, i.first_name, i.last_name, i.callback_at, i.comments,
+               i.agent_user, i.call_started_at AS scheduled_at
+        FROM cmx_dialer.inbound_call_log i
+        WHERE i.disposition = 'CALLBACK_REQUESTED' AND i.callback_at IS NOT NULL
+          AND i.campaign_id IN (${campaignIn}) ${mineFilterIn}
+          AND NOT ${callbackResolvedSql(inboundNumber, "i.call_started_at")}
+
+        ORDER BY callback_at ASC
+      `,
+      [...campaignIds, ...mineParams, ...campaignIds, ...mineParams]
+    );
+
+    // Agent display names (agent_user is the ViciDial username).
+    const [agentRows] = await db.execute(
+      `SELECT vicidial_user, full_name FROM cmx_dialer.app_users WHERE vicidial_user IS NOT NULL`
+    );
+    const nameByUser = new Map(agentRows.map((a) => [a.vicidial_user, a.full_name]));
+
+    return res.json({
+      success: true,
+      scope,
+      callbacks: rows.map((r) => ({ ...r, agent_name: nameByUser.get(r.agent_user) || r.agent_user })),
+    });
+  } catch (error) {
+    console.error("GET /api/dialer/scheduled-callbacks failed:", error);
+    return res.status(500).json({ success: false, message: "Failed to load scheduled callbacks." });
+  }
+});
+
+/*
+==================================================
 CURRENT CALL (restoration after refresh / app reopen)
 ==================================================
 */
@@ -994,7 +1125,9 @@ router.post("/dialer/start-call", requireAuth, async (req, res) => {
     ==================================================
     */
     const currentStatus = await agentStatusService.getCurrentStatus(appUserId);
-    const allowedToDial = currentStatus && currentStatus.status === "READY";
+    // Per explicit request — Callback mode (MANUAL_CALLBACK) can place
+    // manual dials and callbacks too; it just never auto-dials.
+    const allowedToDial = currentStatus && (currentStatus.status === "READY" || currentStatus.status === "MANUAL_CALLBACK");
     if (!allowedToDial) {
       return res.status(409).json({
         success: false,
@@ -1018,6 +1151,7 @@ router.post("/dialer/start-call", requireAuth, async (req, res) => {
       shouldRunAmd,
       outboundTrunk,
       autoDtmf,
+      returnStatus: currentStatus.status,
     });
 
     return res.json({ success: true, ...result });
@@ -1558,6 +1692,7 @@ router.post("/dialer/disposition/:callId", requireAuth, async (req, res) => {
       comments,
       callbackAt,
       setNotReady,
+      setManualCallback,
       // NEW — per explicit request: when this call originated from
       // clicking "Callback" on an Abandoned & Voicemail row (see
       // DialerPage.jsx's handleAbandonedVoicemailCallback), the
@@ -1576,6 +1711,10 @@ router.post("/dialer/disposition/:callId", requireAuth, async (req, res) => {
         success: false,
         message: "campaignId, leadId, phoneNumber, room, and disposition are all required.",
       });
+    }
+
+    if (setNotReady && setManualCallback) {
+      return res.status(400).json({ success: false, message: "Choose either Not Ready or Callback after saving — not both." });
     }
 
     if (!comments || !comments.trim()) {
@@ -1655,9 +1794,13 @@ router.post("/dialer/disposition/:callId", requireAuth, async (req, res) => {
     // campaign, and removing the now-redundant duplicate from
     // saveDisposition() itself (see that function's own comment).
     try {
-      await agentStatusService.setStatus(appUserId, setNotReady ? "NOT_READY" : "READY", {
-        relatedCampaignId: campaignId,
-      });
+      // Per explicit request — "Switch to Callback after saving" puts the
+      // agent in Callback mode (no auto-dial); never both with Not Ready.
+      await agentStatusService.setStatus(
+        appUserId,
+        setNotReady ? "NOT_READY" : setManualCallback ? "MANUAL_CALLBACK" : "READY",
+        { relatedCampaignId: campaignId }
+      );
     } catch (statusErr) {
       console.error("Failed to update agent status after disposition:", statusErr.message);
     }
@@ -1707,7 +1850,22 @@ matches the same ID used throughout the call's lifecycle.
 */
 router.post("/dialer/inbound-disposition", requireAuth, async (req, res) => {
   try {
-    const { callId, callerIdNumber, firstName, lastName, comments, disposition, callbackAt, callbackNumber, setNotReady } = req.body;
+    const {
+      callId,
+      callerIdNumber,
+      firstName,
+      lastName,
+      comments,
+      disposition,
+      callbackAt,
+      callbackNumber,
+      setNotReady,
+      setManualCallback,
+    } = req.body;
+
+    if (setNotReady && setManualCallback) {
+      return res.status(400).json({ success: false, message: "Choose either Not Ready or Callback after saving — not both." });
+    }
 
     if (!callId) {
       return res.status(400).json({ success: false, message: "callId is required." });
@@ -1771,7 +1929,7 @@ router.post("/dialer/inbound-disposition", requireAuth, async (req, res) => {
       ]
     );
 
-    await inboundCallService.finalizeInboundCall(callId, appUserId, setNotReady);
+    await inboundCallService.finalizeInboundCall(callId, appUserId, setNotReady, setManualCallback);
 
     // REAL BUG FIX, per explicit request — same stale CMXBSMSC-only
     // gate as the outbound disposition route above, same fix: attempt
