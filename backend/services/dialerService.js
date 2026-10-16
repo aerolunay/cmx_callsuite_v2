@@ -9,6 +9,7 @@ const ws = require("../config/ws");
 const agentStatusService = require("./agentStatusService");
 const leadDialingService = require("./leadDialingService");
 const {
+  LEAD_PHONE,
   LEAD_ELIGIBILITY_SQL,
   RETRYABLE_LEAD_STATUSES,
   CALLS_TO_NUMBER_TODAY_SQL,
@@ -358,7 +359,7 @@ async function startRetryCycle(campaignId, rules) {
         AND ${CALLS_TO_NUMBER_TODAY_SQL} < ?
         ${inCallFilter}
     `,
-    [campaignId, todayStart, maxCallsPerDay, ...inCallLeadIds]
+    [campaignId, todayStart, todayStart, maxCallsPerDay, ...inCallLeadIds]
   );
   return result.affectedRows;
 }
@@ -440,8 +441,10 @@ async function pickFreshLead(campaignId) {
       -- first, so a number that was just called goes to the bottom.
       ORDER BY
         (l.status = 'NEW') DESC,
-        (SELECT MAX(dc.call_started_at) FROM cmx_dialer.dialer_call_log dc
-          WHERE dc.phone_number IN (l.phone_number, CONCAT('1', l.phone_number))) ASC,
+        GREATEST(
+          COALESCE((SELECT MAX(dc.call_started_at) FROM cmx_dialer.dialer_call_log dc WHERE dc.phone_number = ${LEAD_PHONE}), '1970-01-01'),
+          COALESCE((SELECT MAX(dc.call_started_at) FROM cmx_dialer.dialer_call_log dc WHERE dc.phone_number = CONCAT('1', ${LEAD_PHONE})), '1970-01-01')
+        ) ASC,
         l.lead_id ASC
       LIMIT 1
     `,

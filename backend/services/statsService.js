@@ -2,7 +2,7 @@
 
 const { DateTime } = require("luxon");
 const db = require("../config/db");
-const { LEAD_ELIGIBILITY_SQL, REDIAL_PENDING_SQL, INBOUND_CLOSED_OUT_DISPOSITIONS } = require("./leadEligibility");
+const { LEAD_PHONE, LEAD_ELIGIBILITY_SQL, REDIAL_PENDING_SQL, INBOUND_CLOSED_OUT_DISPOSITIONS } = require("./leadEligibility");
 
 /*
 ==================================================
@@ -644,7 +644,7 @@ async function getLeadsCallingDashboard({ startDate, endDate, campaignIds }) {
   // morning from whatever is left — nothing is deleted. Leads the dialer
   // will never call again (reached, closed out, DNC) drop out entirely.
   // Remaining counts are live snapshots, not bounded by the date range.
-  const { start: todayStart } = await getEasternDayBoundsForServerClock(); // for the daily per-number call limit in REDIAL_PENDING_SQL
+  const { start: todayStart } = await getEasternDayBoundsForServerClock(); // for the daily per-number call limit in REDIAL_PENDING_SQL (two ?s)
   const [leadRows] = await db.execute(
     `
       SELECT
@@ -665,49 +665,54 @@ async function getLeadsCallingDashboard({ startDate, endDate, campaignIds }) {
           vlt.campaign_id AS campaignId,
           CASE WHEN l.status = 'NEW'${LEAD_ELIGIBILITY_SQL} THEN 1 ELSE 0 END AS isNew,
           CASE WHEN ${REDIAL_PENDING_SQL} THEN 1 ELSE 0 END AS isRedial,
-          EXISTS (
-            SELECT 1 FROM cmx_dialer.dialer_call_log dl
-            WHERE dl.lead_id = l.lead_id AND dl.campaign_id = vlt.campaign_id AND dl.call_started_at BETWEEN ? AND ?
-          ) AS dialedInRange,
+          dlr.lead_id IS NOT NULL AS dialedInRange,
           -- Per explicit request — the lead's number was closed out on an
           -- INBOUND call in range (the person called in and was screened,
           -- helped, ...). The dialer never calls these, so they're not in
           -- Remaining/Total; shown as their own count instead, once per
           -- number.
-          EXISTS (
-            SELECT 1 FROM cmx_dialer.inbound_call_log ic
-            WHERE ic.caller_id_number IN (l.phone_number, CONCAT('1', l.phone_number), CONCAT('+1', l.phone_number))
-              AND ic.disposition IN ${INBOUND_CLOSED_OUT_DISPOSITIONS}
-              AND ic.call_started_at BETWEEN ? AND ?
-          ) AS resolvedViaInbound,
+          icr.phone IS NOT NULL AS resolvedViaInbound,
           -- Closed out on an inbound call at ANY time — removed from Total
           -- and Leads Dialed even if it was dialed earlier in range (it
           -- already can't be New or Redial: NUMBER_BLOCKS_SQL excludes it).
-          EXISTS (
-            SELECT 1 FROM cmx_dialer.inbound_call_log ic2
-            WHERE ic2.caller_id_number IN (l.phone_number, CONCAT('1', l.phone_number), CONCAT('+1', l.phone_number))
-              AND ic2.disposition IN ${INBOUND_CLOSED_OUT_DISPOSITIONS}
-          ) AS closedViaInbound,
+          ica.phone IS NOT NULL AS closedViaInbound,
           -- Contacted, per explicit request = dialed AND rang: any call to
           -- this number in range on this campaign except Busy (a busy line
           -- never rings). Judged by outcome, not ring_seconds — that's 0
           -- for answered calls and most No Answers. Matched by number, so
           -- a callback or manual dial to it counts too.
-          EXISTS (
-            SELECT 1 FROM cmx_dialer.dialer_call_log hc
-            WHERE hc.phone_number IN (l.phone_number, CONCAT('1', l.phone_number)) AND hc.campaign_id = vlt.campaign_id
-              AND hc.call_started_at BETWEEN ? AND ?
-              AND hc.disposition <> 'BUSY'
-          ) AS contactedInRange,
+          hcr.phone IS NOT NULL AS contactedInRange,
           l.phone_number AS phoneNumber
         FROM vicidial_lists vlt
         JOIN vicidial_list l ON l.list_id = vlt.list_id
         LEFT JOIN cmx_dialer.campaign_autodial_rules r ON r.campaign_id = vlt.campaign_id
+        -- REAL PERFORMANCE FIX — each lookup below is built ONCE as a small
+        -- set and joined, instead of a subquery re-scanning the call logs
+        -- for every lead (that made this query take 10-40s). Numbers are
+        -- compared on their last 10 digits on both sides (a few older leads
+        -- are stored as "1" + 10).
+        LEFT JOIN (
+          SELECT DISTINCT lead_id, campaign_id FROM cmx_dialer.dialer_call_log
+          WHERE call_started_at BETWEEN ? AND ? AND lead_id > 0
+        ) dlr ON dlr.lead_id = l.lead_id AND dlr.campaign_id = vlt.campaign_id
+        LEFT JOIN (
+          SELECT DISTINCT RIGHT(caller_id_number, 10) AS phone FROM cmx_dialer.inbound_call_log
+          WHERE disposition IN ${INBOUND_CLOSED_OUT_DISPOSITIONS} AND call_started_at BETWEEN ? AND ?
+        ) icr ON icr.phone = RIGHT(${LEAD_PHONE}, 10)
+        LEFT JOIN (
+          SELECT DISTINCT RIGHT(caller_id_number, 10) AS phone FROM cmx_dialer.inbound_call_log
+          WHERE disposition IN ${INBOUND_CLOSED_OUT_DISPOSITIONS}
+        ) ica ON ica.phone = RIGHT(${LEAD_PHONE}, 10)
+        LEFT JOIN (
+          SELECT DISTINCT RIGHT(phone_number, 10) AS phone, campaign_id FROM cmx_dialer.dialer_call_log
+          WHERE call_started_at BETWEEN ? AND ? AND disposition <> 'BUSY'
+        ) hcr ON hcr.phone = RIGHT(${LEAD_PHONE}, 10) AND hcr.campaign_id = vlt.campaign_id
         WHERE vlt.campaign_id IN (${campaignInClause})
       ) perLead
       GROUP BY campaignId
     `,
-    [todayStart, start, end, start, end, start, end, ...campaignIds]
+    // isRedial's two todayStarts (SELECT list), then the joined lookups in order.
+    [todayStart, todayStart, start, end, start, end, start, end, ...campaignIds]
   );
 
   // Dial attempts + human-answered, grouped by campaign+agent, in range.

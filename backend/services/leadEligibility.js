@@ -16,6 +16,21 @@ statsService — sharing these through either one would be circular.
 
 // Vicidial statuses that mean "never dial this lead again" — every
 // terminal disposition in dialerService.js's DISPOSITION_TO_VICIDIAL_STATUS.
+// REAL PERFORMANCE FIX — asterisk.vicidial_list.phone_number is utf8mb3
+// but the cmx_dialer call logs' phone columns are latin1. Comparing them
+// directly made MySQL convert the CALL LOG column on every row, so the
+// phone-number indexes (sql/009) were never used and every per-lead check
+// scanned the whole log — the Leads dashboard took 10-40s, and getNextLead
+// paid the same price. Converting the lead's own number to latin1 instead
+// keeps the comparison on the indexed column. Phone numbers are digits
+// only, so nothing is lost in the conversion. Use LEAD_PHONE wherever a
+// lead's number is compared with dialer_call_log / inbound_call_log —
+// and one plain `=` per stored format (bare 10 digits, "1" + 10, "+1" +
+// 10): MariaDB won't use the index for an IN (...) list of expressions.
+const LEAD_PHONE = "CONVERT(l.phone_number USING latin1)";
+const LEAD_PHONE_1 = `CONCAT('1', ${LEAD_PHONE})`;
+const LEAD_PHONE_PLUS1 = `CONCAT('+1', ${LEAD_PHONE})`;
+
 const TERMINAL_LEAD_STATUSES = "('DNC', 'NI', 'DC', 'PU', 'CALLBK', 'SCRN', 'NOTELG')";
 
 // Per explicit request — a number is only ever called again when nobody
@@ -79,12 +94,19 @@ const NUMBER_BLOCKS_SQL = `
         )
         AND NOT EXISTS (
           SELECT 1 FROM cmx_dialer.dialer_call_log c
-          WHERE c.phone_number = l.phone_number AND c.disposition IN ${CLOSED_OUT_DISPOSITIONS}
+          WHERE c.phone_number = ${LEAD_PHONE} AND c.disposition IN ${CLOSED_OUT_DISPOSITIONS}
         )
         AND NOT EXISTS (
           SELECT 1 FROM cmx_dialer.inbound_call_log i
-          WHERE i.caller_id_number IN (l.phone_number, CONCAT('1', l.phone_number), CONCAT('+1', l.phone_number))
-            AND i.disposition IN ${INBOUND_CLOSED_OUT_DISPOSITIONS}
+          WHERE i.caller_id_number = ${LEAD_PHONE_1} AND i.disposition IN ${INBOUND_CLOSED_OUT_DISPOSITIONS}
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM cmx_dialer.inbound_call_log i
+          WHERE i.caller_id_number = ${LEAD_PHONE} AND i.disposition IN ${INBOUND_CLOSED_OUT_DISPOSITIONS}
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM cmx_dialer.inbound_call_log i
+          WHERE i.caller_id_number = ${LEAD_PHONE_PLUS1} AND i.disposition IN ${INBOUND_CLOSED_OUT_DISPOSITIONS}
         )`;
 
 const LEAD_ELIGIBILITY_SQL = `
@@ -101,22 +123,23 @@ const RETRYABLE_LEAD_STATUSES = "('NA', 'N', 'AM', 'A', 'B')";
 // Per explicit request — ONE daily limit per phone number: every outbound
 // call to the number today counts (any campaign, any outcome, callbacks
 // and manual dials included), compared on the bare 10 digits or "1" + 10.
-// Expects the lead row aliased `l` and one `?` for the start of today
-// (Eastern — statsService.getEasternDayBoundsForServerClock). The limit
+// Expects the lead row aliased `l` and TWO `?`s, both the start of today
+// (Eastern — statsService.getEasternDayBoundsForServerClock) — one per
+// stored number format, see LEAD_PHONE. The limit
 // itself is campaign_autodial_rules.max_attempts_no_answer: the rules
 // screen saves the single "Max calls per number per day" setting into all
 // three of the old per-outcome columns, so no schema change was needed.
 const CALLS_TO_NUMBER_TODAY_SQL = `(
-          SELECT COUNT(*) FROM cmx_dialer.dialer_call_log dc
-          WHERE dc.phone_number IN (l.phone_number, CONCAT('1', l.phone_number)) AND dc.call_started_at >= ?
+          (SELECT COUNT(*) FROM cmx_dialer.dialer_call_log dc WHERE dc.phone_number = ${LEAD_PHONE} AND dc.call_started_at >= ?)
+          + (SELECT COUNT(*) FROM cmx_dialer.dialer_call_log dc WHERE dc.phone_number = ${LEAD_PHONE_1} AND dc.call_started_at >= ?)
         )`;
 const DEFAULT_MAX_CALLS_PER_NUMBER_PER_DAY = 3;
 
 // A lead still due a redial: a retryable outcome, the number not blocked,
 // and calls to the number today still under the campaign's daily limit
 // (Admin -> Leads/Auto-Dial). Expects the lead row aliased `l`,
-// cmx_dialer.campaign_autodial_rules LEFT JOINed as `r`, and one `?` for
-// the start of today (see CALLS_TO_NUMBER_TODAY_SQL).
+// cmx_dialer.campaign_autodial_rules LEFT JOINed as `r`, and TWO `?`s,
+// both the start of today (see CALLS_TO_NUMBER_TODAY_SQL).
 const REDIAL_PENDING_SQL = `
         l.status IN ${RETRYABLE_LEAD_STATUSES}${NUMBER_BLOCKS_SQL}
         AND ${CALLS_TO_NUMBER_TODAY_SQL} < COALESCE(r.max_attempts_no_answer, ${DEFAULT_MAX_CALLS_PER_NUMBER_PER_DAY})`;
@@ -178,12 +201,13 @@ async function findRedialPendingPhoneNumbers(phoneNumbers) {
       LEFT JOIN cmx_dialer.campaign_autodial_rules r ON r.campaign_id = vlt.campaign_id
       WHERE l.phone_number IN (${placeholders}) AND ${REDIAL_PENDING_SQL}
     `,
-    [...phoneNumbers, todayStart]
+    [...phoneNumbers, todayStart, todayStart]
   );
   return new Set(rows.map((r) => r.phone_number));
 }
 
 module.exports = {
+  LEAD_PHONE,
   TERMINAL_LEAD_STATUSES,
   NOT_REACHED_LEAD_STATUSES,
   CLOSED_OUT_DISPOSITIONS,
