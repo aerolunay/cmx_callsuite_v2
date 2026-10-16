@@ -1182,6 +1182,40 @@ away from the screen at that exact moment.
   margin-bottom: 20px;
 }
 
+/* Near Real Time / Historical switch — Leads Calling Dashboard */
+.view-toggle {
+  display: inline-flex;
+  border: 1px solid #d0d5dd;
+  border-radius: 8px;
+  overflow: hidden;
+  margin-bottom: 16px;
+}
+
+.view-toggle-option {
+  padding: 8px 16px;
+  font-size: 14px;
+  background: #ffffff;
+  color: #344054;
+  border: none;
+  cursor: pointer;
+}
+
+.view-toggle-option + .view-toggle-option {
+  border-left: 1px solid #d0d5dd;
+}
+
+.view-toggle-option-active {
+  background: var(--cmx-navy);
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.leads-dashboard-realtime-note {
+  padding: 8px 0;
+  font-size: 14px;
+  color: #475467;
+}
+
 .leads-dashboard-campaign-picker {
   position: relative;
 }

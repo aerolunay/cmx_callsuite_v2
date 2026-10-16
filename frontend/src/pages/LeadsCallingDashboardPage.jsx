@@ -53,6 +53,21 @@ function dispositionLabel(code) {
   return DISPOSITION_LABELS[code] || code;
 }
 
+// Per explicit request — two views. Near Real Time is always today (no date
+// pickers) and refreshes itself every 20s; Historical has the date range and
+// only reloads when the filters change. The chosen view is remembered per
+// browser (a convenience only — falls back to Near Real Time).
+const VIEW_STORAGE_KEY = "leadsDashboardView";
+const REALTIME_REFRESH_MS = 20000;
+
+function readSavedView() {
+  try {
+    return window.localStorage.getItem(VIEW_STORAGE_KEY) === "historical" ? "historical" : "realtime";
+  } catch {
+    return "realtime";
+  }
+}
+
 export default function LeadsCallingDashboardPage() {
   const { agent } = useAuth();
 
@@ -61,12 +76,20 @@ export default function LeadsCallingDashboardPage() {
   const [pickerOpen, setPickerOpen] = useState(false);
   const pickerRef = useRef(null);
 
+  const [view, setView] = useState(readSavedView); // "realtime" | "historical"
+  const isRealtime = view === "realtime";
+
+  // Historical view's own range; Near Real Time always uses today.
   const [startDate, setStartDate] = useState(todayNY());
   const [endDate, setEndDate] = useState(todayNY());
 
   const [dashboard, setDashboard] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [lastUpdatedAt, setLastUpdatedAt] = useState(null);
+  // Only the newest request may update the page — a slow response from a
+  // previous view/filter must never overwrite a newer one.
+  const requestIdRef = useRef(0);
 
   const hasAccess = LEADS_DASHBOARD_ROLES.includes(agent?.accessLevel);
 
@@ -97,22 +120,67 @@ export default function LeadsCallingDashboardPage() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  function load() {
-    if (!startDate || !endDate) return;
-    setLoading(true);
-    setError("");
+  // silent = a background Near Real Time refresh: keep the current numbers
+  // on screen (no spinner), just swap them when the new ones arrive.
+  function load({ silent = false } = {}) {
+    const from = isRealtime ? todayNY() : startDate;
+    const to = isRealtime ? todayNY() : endDate;
+    if (!from || !to) return;
+    const requestId = ++requestIdRef.current;
+    if (!silent) {
+      setLoading(true);
+      setError("");
+    }
     api
-      .getLeadsDashboardSummary(startDate, endDate, selectedCampaignIds)
-      .then((data) => setDashboard(data.dashboard))
-      .catch((err) => setError(err.message))
-      .finally(() => setLoading(false));
+      .getLeadsDashboardSummary(from, to, selectedCampaignIds)
+      .then((data) => {
+        if (requestId !== requestIdRef.current) return;
+        setDashboard(data.dashboard);
+        setLastUpdatedAt(new Date());
+        setError("");
+      })
+      .catch((err) => {
+        if (requestId === requestIdRef.current) setError(err.message);
+      })
+      .finally(() => {
+        if (requestId === requestIdRef.current) setLoading(false);
+      });
   }
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: load-on-mount-and-filter-change is this component's whole data-fetch pattern, same as every other list/table in this app.
     if (hasAccess && campaigns.length > 0) load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasAccess, campaigns, selectedCampaignIds, startDate, endDate]);
+  }, [hasAccess, campaigns, selectedCampaignIds, view, startDate, endDate]);
+
+  // Near Real Time — refresh every 20s with the selected campaigns. Skipped
+  // while the tab is hidden (nobody's looking); refreshes right away when
+  // it's shown again.
+  useEffect(() => {
+    if (!isRealtime || !hasAccess || campaigns.length === 0) return;
+    const interval = setInterval(() => {
+      if (!document.hidden) load({ silent: true });
+    }, REALTIME_REFRESH_MS);
+    function onVisible() {
+      if (!document.hidden) load({ silent: true });
+    }
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isRealtime, hasAccess, campaigns, selectedCampaignIds]);
+
+  function changeView(next) {
+    if (next === view) return;
+    setView(next);
+    try {
+      window.localStorage.setItem(VIEW_STORAGE_KEY, next);
+    } catch {
+      // storage unavailable — the view just isn't remembered
+    }
+  }
 
   if (agent && !hasAccess) {
     return <Navigate to="/" replace />;
@@ -151,15 +219,48 @@ export default function LeadsCallingDashboardPage() {
       <div className="page-content page-content-wide">
         <h2>Leads Calling Dashboard</h2>
 
+        <div className="view-toggle" role="tablist" aria-label="Dashboard view">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={isRealtime}
+            className={`view-toggle-option${isRealtime ? " view-toggle-option-active" : ""}`}
+            onClick={() => changeView("realtime")}
+          >
+            Near Real Time
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={!isRealtime}
+            className={`view-toggle-option${!isRealtime ? " view-toggle-option-active" : ""}`}
+            onClick={() => changeView("historical")}
+          >
+            Historical
+          </button>
+        </div>
+
         <div className="leads-dashboard-filter-row">
-          <div>
-            <label className="comments-label">Start Date</label>
-            <input type="date" value={startDate} max={endDate} onChange={(e) => setStartDate(e.target.value)} />
-          </div>
-          <div>
-            <label className="comments-label">End Date</label>
-            <input type="date" value={endDate} min={startDate} onChange={(e) => setEndDate(e.target.value)} />
-          </div>
+          {isRealtime ? (
+            <div>
+              <label className="comments-label">Showing</label>
+              <div className="leads-dashboard-realtime-note">
+                Today ({todayNY()}) · refreshes every 20s
+                {lastUpdatedAt && <> · updated {lastUpdatedAt.toLocaleTimeString()}</>}
+              </div>
+            </div>
+          ) : (
+            <>
+              <div>
+                <label className="comments-label">Start Date</label>
+                <input type="date" value={startDate} max={endDate} onChange={(e) => setStartDate(e.target.value)} />
+              </div>
+              <div>
+                <label className="comments-label">End Date</label>
+                <input type="date" value={endDate} min={startDate} onChange={(e) => setEndDate(e.target.value)} />
+              </div>
+            </>
+          )}
 
           <div className="leads-dashboard-campaign-picker" ref={pickerRef}>
             <label className="comments-label">Campaigns</label>
