@@ -11,6 +11,7 @@ const db = require("../config/db");
 const leadCleanupService = require("../services/leadCleanupService");
 const { findClosedOutPhoneNumbers, findRedialPendingPhoneNumbers } = require("../services/leadEligibility");
 const leadDialingService = require("../services/leadDialingService");
+const dialerService = require("../services/dialerService");
 
 const router = express.Router();
 
@@ -490,6 +491,178 @@ router.post("/leads/cleanup/confirm", requireAdmin, async (req, res) => {
   } catch (error) {
     console.error("POST /api/admin/leads/cleanup/confirm failed:", error);
     return res.status(500).json({ success: false, message: error.message || "Failed to clean up leads." });
+  }
+});
+
+/*
+==================================================
+DELETE LEADS BY PHONE NUMBER
+==================================================
+POST /api/admin/leads/delete-by-phone
+Body (multipart): campaignId, mode ("preview" | "confirm"),
+                  phoneNumbers (typed/pasted, optional), file (CSV/XLSX, optional)
+
+Per explicit request — an admin picks a campaign, then types/pastes phone
+numbers and/or imports a CSV/XLSX of them, and every lead in THAT campaign
+with one of those numbers is deleted. Same preview-then-confirm flow as
+Clean Up Leads, and the same permanent log (cmx_dialer.deleted_leads_log,
+reason 'MANUAL_DELETE' — needs sql/011_add_manual_delete_reason.sql).
+
+Numbers are matched on the bare 10 digits (formatting ignored, a leading
+1 dropped), and against leads stored either way ("1" + 10 too). Unlike
+upload, a number doesn't have to be dialable — removing an undialable
+lead is one of the reasons to use this. A lead whose number is on a live
+call right now is left alone and reported.
+==================================================
+*/
+const DELETE_BY_PHONE_LOOKUP_CHUNK = 500;
+
+// Bare 10 digits, or null — formatting ignored, a leading 1 dropped.
+function phoneNumberForDelete(value) {
+  let digits = String(value ?? "").replace(/\D/g, "");
+  if (digits.length === 11 && digits.startsWith("1")) {
+    digits = digits.slice(1);
+  }
+  return digits.length === 10 ? digits : null;
+}
+
+// The phone numbers in an uploaded file: its phone_number column, or —
+// for a plain list with some other header, or none at all — the first
+// column (a headerless file's first number lands in the header row).
+async function phoneValuesFromFile(file) {
+  const rows = await parseUploadedRows(file);
+  if (rows.length === 0) return [];
+  if (rows.some((r) => "phone_number" in r)) return rows.map((r) => r.phone_number);
+  const firstKey = Object.keys(rows[0])[0];
+  const values = rows.map((r) => r[firstKey]);
+  return phoneNumberForDelete(firstKey) ? [firstKey, ...values] : values;
+}
+
+async function manualDeleteReasonExists() {
+  const [rows] = await db.execute(
+    `SELECT COLUMN_TYPE FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = 'cmx_dialer' AND TABLE_NAME = 'deleted_leads_log' AND COLUMN_NAME = 'reason'`
+  );
+  return rows.length > 0 && String(rows[0].COLUMN_TYPE).includes("'MANUAL_DELETE'");
+}
+
+router.get("/leads/delete-template", requireAdmin, async (req, res) => {
+  const { format } = req.query;
+  await sendTemplate(res, "cmx-dialer-delete-leads-template", ["phone_number"], ["6468016974"], format);
+});
+
+router.post("/leads/delete-by-phone", requireAdmin, upload.single("file"), async (req, res) => {
+  const { campaignId, mode, phoneNumbers } = req.body;
+  const file = req.file;
+
+  try {
+    if (!campaignId) {
+      return res.status(400).json({ success: false, message: "Select a campaign first." });
+    }
+    if (!["preview", "confirm"].includes(mode)) {
+      return res.status(400).json({ success: false, message: 'mode must be "preview" or "confirm".' });
+    }
+
+    // One number per line / comma / semicolon, so a formatted number with
+    // spaces ("(646) 801-6974") stays whole; an entry that isn't one number
+    // ("6468016974 7180000001" on one line) is split on whitespace instead.
+    const rawValues = String(phoneNumbers || "")
+      .split(/[\r\n,;]+/)
+      .flatMap((entry) => (phoneNumberForDelete(entry) ? [entry] : entry.split(/\s+/)))
+      .filter(Boolean);
+    if (file) rawValues.push(...(await phoneValuesFromFile(file)));
+    const nonBlank = rawValues.map((v) => String(v ?? "").trim()).filter(Boolean);
+
+    const wanted = new Set();
+    const invalid = [];
+    for (const value of nonBlank) {
+      const cleaned = phoneNumberForDelete(value);
+      if (cleaned) wanted.add(cleaned);
+      else invalid.push(value);
+    }
+    if (wanted.size === 0) {
+      return res.status(400).json({
+        success: false,
+        message:
+          invalid.length > 0
+            ? `No valid phone numbers found — each needs 10 digits (or 11 starting with 1), e.g. ${invalid.slice(0, 5).join(", ")}.`
+            : "Enter or import at least one phone number.",
+      });
+    }
+
+    const numbers = [...wanted];
+    const leads = [];
+    for (let i = 0; i < numbers.length; i += DELETE_BY_PHONE_LOOKUP_CHUNK) {
+      const chunk = numbers.slice(i, i + DELETE_BY_PHONE_LOOKUP_CHUNK);
+      const both = [...chunk, ...chunk.map((n) => `1${n}`)];
+      const [rows] = await db.execute(
+        `
+          SELECT l.lead_id, l.list_id, vlt.campaign_id, l.phone_number, l.first_name, l.last_name, l.status
+          FROM asterisk.vicidial_list l
+          JOIN asterisk.vicidial_lists vlt ON vlt.list_id = l.list_id
+          WHERE vlt.campaign_id = ? AND l.phone_number IN (${both.map(() => "?").join(",")})
+        `,
+        [campaignId, ...both]
+      );
+      leads.push(...rows);
+    }
+
+    const inCallNumbers = new Set(
+      Object.values(dialerService.getActiveCallPhoneNumbers()).map(phoneNumberForDelete).filter(Boolean)
+    );
+    const toDelete = [];
+    const inCall = [];
+    for (const lead of leads) {
+      if (inCallNumbers.has(phoneNumberForDelete(lead.phone_number))) inCall.push(lead);
+      else toDelete.push({ ...lead, reason: "MANUAL_DELETE" });
+    }
+    const matchedNumbers = new Set(leads.map((l) => phoneNumberForDelete(l.phone_number)));
+    const notFound = numbers.filter((n) => !matchedNumbers.has(n));
+
+    const migrationMissing = !(await manualDeleteReasonExists());
+    const summary = {
+      campaignId,
+      numbersEntered: numbers.length,
+      invalidCount: invalid.length,
+      invalidExamples: invalid.slice(0, 5),
+      notFoundCount: notFound.length,
+      notFoundExamples: notFound.slice(0, 5),
+      inCallCount: inCall.length,
+    };
+
+    if (mode === "preview") {
+      return res.json({
+        success: true,
+        preview: true,
+        ...summary,
+        totalToDelete: toDelete.length,
+        migrationMissing,
+        // A sample to sanity-check before confirming — not the full list.
+        sample: toDelete.slice(0, 20).map((r) => ({
+          phoneNumber: r.phone_number,
+          firstName: r.first_name,
+          lastName: r.last_name,
+          status: r.status,
+          listId: r.list_id,
+        })),
+      });
+    }
+
+    if (migrationMissing) {
+      return res.status(500).json({
+        success: false,
+        message: "Deleting by phone number needs sql/011_add_manual_delete_reason.sql run on the database first. Nothing was deleted.",
+      });
+    }
+    if (toDelete.length > 0) {
+      await leadCleanupService.logAndDeleteLeads(toDelete, req.session.agent.appUserId);
+    }
+    return res.json({ success: true, ...summary, deleted: toDelete.length });
+  } catch (error) {
+    console.error("POST /api/admin/leads/delete-by-phone failed:", error);
+    return res.status(500).json({ success: false, message: error.message || "Failed to delete leads." });
+  } finally {
+    cleanupStagedFile(file);
   }
 });
 

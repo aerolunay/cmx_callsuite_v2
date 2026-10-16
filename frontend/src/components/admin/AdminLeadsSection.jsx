@@ -86,6 +86,16 @@ export default function AdminLeadsSection() {
   const [cleanupResult, setCleanupResult] = useState(null);
   const [cleanupError, setCleanupError] = useState("");
 
+  // Delete Leads by Phone Number — per explicit request
+  const [deleteCampaignId, setDeleteCampaignId] = useState("");
+  const [deletePhoneText, setDeletePhoneText] = useState("");
+  const [deleteFile, setDeleteFile] = useState(null);
+  const [deleteFileInputKey, setDeleteFileInputKey] = useState(0); // bumped to clear the file picker
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deletePreview, setDeletePreview] = useState(null);
+  const [deleteResult, setDeleteResult] = useState(null);
+  const [deleteError, setDeleteError] = useState("");
+
   // Autodial Rules
   const [rulesCampaignId, setRulesCampaignId] = useState("");
   // Per explicit request — one daily call limit per phone number replaces
@@ -267,6 +277,69 @@ export default function AdminLeadsSection() {
 
   function handleCleanupCancel() {
     setCleanupPreview(null);
+  }
+
+  /*
+  ==================================================
+  Delete Leads by Phone Number — per explicit request. Campaign first,
+  then typed/pasted numbers and/or a CSV/XLSX; same preview-then-confirm
+  pattern as Clean Up Leads, re-sending the same numbers and file.
+  ==================================================
+  */
+  function buildDeleteFormData(mode) {
+    const formData = new FormData();
+    formData.append("campaignId", deleteCampaignId);
+    formData.append("mode", mode);
+    formData.append("phoneNumbers", deletePhoneText);
+    if (deleteFile) formData.append("file", deleteFile);
+    return formData;
+  }
+
+  async function handleDeleteCheck(e) {
+    e.preventDefault();
+    if (!deleteCampaignId) return;
+    if (!deletePhoneText.trim() && !deleteFile) {
+      setDeleteError("Enter phone numbers or choose a file.");
+      return;
+    }
+    setDeleteBusy(true);
+    setDeleteError("");
+    setDeleteResult(null);
+    setDeletePreview(null);
+    try {
+      setDeletePreview(await api.deleteLeadsByPhone(buildDeleteFormData("preview")));
+    } catch (err) {
+      setDeleteError(err.message);
+    } finally {
+      setDeleteBusy(false);
+    }
+  }
+
+  async function handleDeleteConfirm() {
+    if (
+      !window.confirm(
+        `Permanently delete ${deletePreview.totalToDelete} lead(s) from ${deleteCampaignId}? They're logged, but this can't be undone from here.`
+      )
+    ) {
+      return;
+    }
+    setDeleteBusy(true);
+    setDeleteError("");
+    try {
+      setDeleteResult(await api.deleteLeadsByPhone(buildDeleteFormData("confirm")));
+      setDeletePreview(null);
+      setDeletePhoneText("");
+      setDeleteFile(null);
+      setDeleteFileInputKey((k) => k + 1);
+    } catch (err) {
+      setDeleteError(err.message);
+    } finally {
+      setDeleteBusy(false);
+    }
+  }
+
+  function handleDeleteCancel() {
+    setDeletePreview(null);
   }
 
   async function handleRulesSubmit(e) {
@@ -547,6 +620,149 @@ export default function AdminLeadsSection() {
                 {cleanupBusy ? "Deleting…" : `Delete ${cleanupPreview.totalToDelete} Lead(s)`}
               </button>
               <button type="button" disabled={cleanupBusy} onClick={handleCleanupCancel}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* ================= DELETE LEADS BY PHONE NUMBER ================= */}
+      <div className="card" style={{ marginBottom: 20 }}>
+        <h4>Delete Leads by Phone Number</h4>
+        <p style={{ fontSize: 13, color: "#888", marginTop: -6 }}>
+          Removes every lead in the selected campaign with one of these phone numbers. Type or paste numbers, import
+          a CSV/XLSX, or both. Every removed lead is logged permanently for reference. Leads on a live call are left
+          alone.
+        </p>
+        {deleteError && <div className="error">{deleteError}</div>}
+        {deleteResult && (
+          <div className="success">
+            Deleted {deleteResult.deleted} lead{deleteResult.deleted === 1 ? "" : "s"} from {deleteResult.campaignId}
+            {deleteResult.notFoundCount > 0 ? ` (${deleteResult.notFoundCount} number(s) had no lead in this campaign)` : ""}
+            {deleteResult.inCallCount > 0 ? ` (${deleteResult.inCallCount} lead(s) on a live call left alone)` : ""}.
+          </div>
+        )}
+
+        {!deletePreview ? (
+          <form onSubmit={handleDeleteCheck}>
+            <label className="comments-label">Campaign</label>
+            <select
+              value={deleteCampaignId}
+              onChange={(e) => {
+                setDeleteCampaignId(e.target.value);
+                setDeleteResult(null);
+              }}
+              required
+            >
+              <option value="">Select a campaign…</option>
+              {outboundCampaigns.map((c) => (
+                <option key={c.campaign_id} value={c.campaign_id}>
+                  {c.campaign_name} ({c.campaign_id})
+                </option>
+              ))}
+            </select>
+
+            {deleteCampaignId && (
+              <>
+                <label className="comments-label">Phone Numbers</label>
+                <textarea
+                  rows={4}
+                  value={deletePhoneText}
+                  onChange={(e) => setDeletePhoneText(e.target.value)}
+                  placeholder="One per line, or separated by commas or spaces"
+                  style={{ width: "100%", boxSizing: "border-box" }}
+                />
+
+                <label className="comments-label">Or import a file (CSV or XLSX)</label>
+                <input
+                  key={deleteFileInputKey}
+                  type="file"
+                  accept=".csv,.xlsx"
+                  onChange={(e) => setDeleteFile(e.target.files?.[0] || null)}
+                />
+                <p style={{ fontSize: 13, margin: "6px 0 0" }}>
+                  Uses the phone_number column, or the first column if there isn't one.{" "}
+                  <a href="/api/admin/leads/delete-template?format=xlsx">XLSX template</a>
+                  {" · "}
+                  <a href="/api/admin/leads/delete-template?format=csv">CSV template</a>
+                </p>
+
+                <div style={{ marginTop: 14 }}>
+                  <button className="button-secondary" type="submit" disabled={deleteBusy}>
+                    {deleteBusy ? "Checking…" : "Find Leads to Delete"}
+                  </button>
+                </div>
+              </>
+            )}
+          </form>
+        ) : (
+          <div>
+            {deletePreview.migrationMissing && (
+              <div className="error">
+                Deleting needs sql/011_add_manual_delete_reason.sql run on the database first.
+              </div>
+            )}
+            <p>
+              <strong>{deletePreview.totalToDelete}</strong> lead(s) in {deletePreview.campaignId} match{" "}
+              {deletePreview.numbersEntered} phone number(s).
+            </p>
+            <ul style={{ fontSize: 14, marginTop: 4 }}>
+              {deletePreview.notFoundCount > 0 && (
+                <li>
+                  {deletePreview.notFoundCount} number(s) have no lead in this campaign, e.g.{" "}
+                  {deletePreview.notFoundExamples.join(", ")}
+                </li>
+              )}
+              {deletePreview.invalidCount > 0 && (
+                <li>
+                  {deletePreview.invalidCount} value(s) skipped — not a 10-digit phone number, e.g.{" "}
+                  {deletePreview.invalidExamples.join(", ")}
+                </li>
+              )}
+              {deletePreview.inCallCount > 0 && (
+                <li>{deletePreview.inCallCount} lead(s) on a live call right now will be left alone</li>
+              )}
+            </ul>
+            {deletePreview.sample.length > 0 && (
+              <table className="call-log-table">
+                <thead>
+                  <tr>
+                    <th>Phone</th>
+                    <th>Name</th>
+                    <th>Status</th>
+                    <th>List</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {deletePreview.sample.map((r, i) => (
+                    <tr key={i}>
+                      <td>{r.phoneNumber}</td>
+                      <td>
+                        {r.firstName} {r.lastName}
+                      </td>
+                      <td>{r.status}</td>
+                      <td>{r.listId}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            {deletePreview.totalToDelete > deletePreview.sample.length && (
+              <p style={{ fontSize: 13, color: "#888" }}>
+                …and {deletePreview.totalToDelete - deletePreview.sample.length} more, not shown.
+              </p>
+            )}
+            <div style={{ display: "flex", gap: 10, marginTop: 14 }}>
+              <button
+                className="button-secondary"
+                type="button"
+                disabled={deleteBusy || deletePreview.totalToDelete === 0 || deletePreview.migrationMissing}
+                onClick={handleDeleteConfirm}
+              >
+                {deleteBusy ? "Deleting…" : `Delete ${deletePreview.totalToDelete} Lead(s)`}
+              </button>
+              <button type="button" disabled={deleteBusy} onClick={handleDeleteCancel}>
                 Cancel
               </button>
             </div>

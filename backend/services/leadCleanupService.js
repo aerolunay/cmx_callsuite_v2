@@ -61,31 +61,45 @@ async function findLeadsToClean(campaignId) {
 async function runLeadCleanup({ campaignId = null, appUserId = null } = {}) {
   const toClean = await findLeadsToClean(campaignId);
   if (toClean.length === 0) return { deleted: 0 };
+  await logAndDeleteLeads(toClean, appUserId);
+  return { deleted: toClean.length };
+}
 
+// Shared by runLeadCleanup and Delete Leads by Phone Number: logs every
+// row to cmx_dialer.deleted_leads_log (each row carries its own reason),
+// then deletes the leads and their hopper rows, all in one transaction.
+// Batched in chunks so a large file stays under MySQL's placeholder limit.
+const DELETE_CHUNK_SIZE = 1000;
+
+async function logAndDeleteLeads(rows, appUserId = null) {
   const connection = await db.getConnection();
   try {
     await connection.beginTransaction();
 
-    // Log every row BEFORE deleting it — batched, not one insert per row.
-    const logPlaceholders = toClean.map(() => "(?, ?, ?, ?, ?, ?, ?, ?)").join(", ");
-    const logParams = [];
-    for (const row of toClean) {
-      logParams.push(row.lead_id, row.list_id, row.campaign_id, row.phone_number, row.first_name, row.last_name, row.reason, appUserId);
-    }
-    await connection.execute(
-      `
-        INSERT INTO cmx_dialer.deleted_leads_log
-          (lead_id, list_id, campaign_id, phone_number, first_name, last_name, reason, deleted_by_app_user_id)
-        VALUES ${logPlaceholders}
-      `,
-      logParams
-    );
+    for (let i = 0; i < rows.length; i += DELETE_CHUNK_SIZE) {
+      const chunk = rows.slice(i, i + DELETE_CHUNK_SIZE);
 
-    const leadIds = toClean.map((r) => r.lead_id);
-    const deletePlaceholders = leadIds.map(() => "?").join(",");
-    await connection.execute(`DELETE FROM asterisk.vicidial_list WHERE lead_id IN (${deletePlaceholders})`, leadIds);
-    // Their hopper rows too, so nothing points at a deleted lead.
-    await connection.execute(`DELETE FROM asterisk.vicidial_hopper WHERE lead_id IN (${deletePlaceholders})`, leadIds);
+      // Log every row BEFORE deleting it — batched, not one insert per row.
+      const logPlaceholders = chunk.map(() => "(?, ?, ?, ?, ?, ?, ?, ?)").join(", ");
+      const logParams = [];
+      for (const row of chunk) {
+        logParams.push(row.lead_id, row.list_id, row.campaign_id, row.phone_number, row.first_name, row.last_name, row.reason, appUserId);
+      }
+      await connection.execute(
+        `
+          INSERT INTO cmx_dialer.deleted_leads_log
+            (lead_id, list_id, campaign_id, phone_number, first_name, last_name, reason, deleted_by_app_user_id)
+          VALUES ${logPlaceholders}
+        `,
+        logParams
+      );
+
+      const leadIds = chunk.map((r) => r.lead_id);
+      const deletePlaceholders = leadIds.map(() => "?").join(",");
+      await connection.execute(`DELETE FROM asterisk.vicidial_list WHERE lead_id IN (${deletePlaceholders})`, leadIds);
+      // Their hopper rows too, so nothing points at a deleted lead.
+      await connection.execute(`DELETE FROM asterisk.vicidial_hopper WHERE lead_id IN (${deletePlaceholders})`, leadIds);
+    }
 
     await connection.commit();
   } catch (err) {
@@ -94,8 +108,6 @@ async function runLeadCleanup({ campaignId = null, appUserId = null } = {}) {
   } finally {
     connection.release();
   }
-
-  return { deleted: toClean.length };
 }
 
 const CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
@@ -123,5 +135,6 @@ function startHourlyCleanup() {
 module.exports = {
   findLeadsToClean,
   runLeadCleanup,
+  logAndDeleteLeads,
   startHourlyCleanup,
 };

@@ -351,6 +351,8 @@ export const api = {
     request("/admin/leads/cleanup/preview", { method: "POST", body: JSON.stringify({ campaignId: campaignId || null }) }),
   confirmLeadsCleanup: (campaignId) =>
     request("/admin/leads/cleanup/confirm", { method: "POST", body: JSON.stringify({ campaignId: campaignId || null }) }),
+  // Body (FormData): campaignId, mode ("preview" | "confirm"), phoneNumbers, file
+  deleteLeadsByPhone: (formData) => request("/admin/leads/delete-by-phone", { method: "POST", body: formData }),
   getDncList: () => request("/admin/dnc"),
   uploadDnc: (formData) => request("/admin/dnc/upload", { method: "POST", body: formData }),
   getAutodialRules: (campaignId) => request(`/admin/campaigns/${encodeURIComponent(campaignId)}/autodial-rules`),
