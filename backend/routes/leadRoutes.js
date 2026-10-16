@@ -152,13 +152,15 @@ async function parseUploadedRows(file) {
 // A lead's phone number as the bare 10 digits the outbound routes dial,
 // or null if it can't be dialed. Formatting is ignored ("(646) 801-6974",
 // "+1 646-801-6974"), and an 11-digit number keeps its last 10 only when
-// it starts with 1 — same rule as dialerService.js's isDialablePhoneNumber.
+// it starts with 1 — same rule as dialerService.js's isDialablePhoneNumber,
+// including that the area code and exchange start with 2-9 (7180000001
+// can't be routed).
 function cleanLeadPhoneNumber(phoneNumber) {
   let digits = String(phoneNumber).replace(/\D/g, "");
   if (digits.length === 11 && digits.startsWith("1")) {
     digits = digits.slice(1);
   }
-  return digits.length === 10 ? digits : null;
+  return /^[2-9]\d{2}[2-9]\d{6}$/.test(digits) ? digits : null;
 }
 
 function cleanupStagedFile(file) {
@@ -267,7 +269,7 @@ router.post("/leads/upload", requireAdmin, upload.single("file"), async (req, re
         success: false,
         message:
           skippedInvalidPhone > 0
-            ? `No valid rows found — every phone_number is missing or isn't 10 digits (e.g. ${invalidPhoneExamples.join(", ")}).`
+            ? `No valid rows found — every phone_number is missing or isn't a valid 10-digit US number (e.g. ${invalidPhoneExamples.join(", ")}).`
             : "No valid rows found — every row is missing a phone_number.",
       });
     }

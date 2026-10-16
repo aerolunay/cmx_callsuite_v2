@@ -1054,7 +1054,7 @@ router.post("/dialer/start-call", requireAuth, async (req, res) => {
     if (!dialerService.isDialablePhoneNumber(phoneNumber)) {
       return res.status(400).json({
         success: false,
-        message: `${phoneNumber} isn't a valid phone number — it needs 10 digits (or 11 starting with 1).`,
+        message: `${phoneNumber} isn't a valid phone number — it needs 10 digits (or 11 starting with 1), with the area code and the next 3 digits each starting with 2-9.`,
       });
     }
 

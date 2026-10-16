@@ -158,7 +158,7 @@ function splitDialString(value) {
 // with "Extension does not exist."
 function isDialableNumber(number) {
   const digits = number.length === 11 && number.startsWith("1") ? number.slice(1) : number;
-  return /^\d{10}$/.test(digits);
+  return /^[2-9]\d{2}[2-9]\d{6}$/.test(digits);
 }
 
 // Per explicit request — shown as a tooltip bubble under the display,
@@ -168,6 +168,7 @@ function isDialableNumber(number) {
 function dialNumberHint(number) {
   if (!number || isDialableNumber(number)) return "";
   if (number.length < 10) return `Enter a 10-digit number — ${number.length} so far`;
+  if (/^1?\d{10}$/.test(number)) return "Not a valid US number — the area code and the next 3 digits can't start with 0 or 1";
   return "Enter a 10-digit number (or 11 starting with 1)";
 }
 

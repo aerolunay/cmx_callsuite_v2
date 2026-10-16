@@ -109,7 +109,15 @@ const NUMBER_BLOCKS_SQL = `
           WHERE i.caller_id_number = ${LEAD_PHONE_PLUS1} AND i.disposition IN ${INBOUND_CLOSED_OUT_DISPOSITIONS}
         )`;
 
+// REAL BUG FIX — only numbers the outbound dialplan can route
+// (_NXXNXXXXXX / _1NXXNXXXXXX: area code and exchange start with 2-9).
+// An undialable lead fails in Asterisk before it's ever marked dialed, so
+// without this it stayed first in line and every agent got it on a loop.
+// Same rule as dialerService.js's isDialablePhoneNumber.
+const DIALABLE_LEAD_PHONE_SQL = "l.phone_number REGEXP '^1{0,1}[2-9][0-9]{2}[2-9][0-9]{6}$'";
+
 const LEAD_ELIGIBILITY_SQL = `
+        AND ${DIALABLE_LEAD_PHONE_SQL}
         AND l.called_since_last_reset = 'N'
         AND l.status NOT IN ${TERMINAL_LEAD_STATUSES}${NUMBER_BLOCKS_SQL}`;
 

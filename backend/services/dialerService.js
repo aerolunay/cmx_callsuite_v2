@@ -496,8 +496,15 @@ function normalizePhoneNumber(phoneNumber) {
 // outbound patterns need exactly 10 digits once normalized, so checking
 // that up front (see the start-call route) rejects it before anything
 // is dialed, with a message the agent can actually act on.
+//
+// REAL BUG FIX, confirmed live: the patterns are _NXXNXXXXXX, so the area
+// code AND the exchange must start with 2-9. A lead uploaded as
+// 7180000001 passed the old 10-digit check, failed in Asterisk every time
+// before markLeadDialed ran, stayed NEW, and was handed to every agent
+// over and over (1,285 failed dials). Same rule as leadEligibility.js's
+// DIALABLE_LEAD_PHONE_SQL and leadRoutes.js's cleanLeadPhoneNumber.
 function isDialablePhoneNumber(phoneNumber) {
-  return /^\d{10}$/.test(normalizePhoneNumber(String(phoneNumber || "")));
+  return /^[2-9]\d{2}[2-9]\d{6}$/.test(normalizePhoneNumber(String(phoneNumber || "")));
 }
 
 // Called once a lead's number is actually being dialed — see startCall.
@@ -793,6 +800,16 @@ function startCall({
         }
         await discardNeverConnectedCall(callState);
         releaseRoomSuffix(suffix);
+        // REAL BUG FIX, confirmed live — a lead whose number has no
+        // outbound route fails here, before markLeadDialed above ever
+        // runs, so it stayed first in line and every agent was handed it
+        // on a loop. isDialablePhoneNumber now screens out the known
+        // cases; this takes out any other number Asterisk can't route.
+        if (Number(leadId) > 0 && /extension does not exist/i.test(err.message)) {
+          await markLeadDialed(leadId).catch((markErr) => {
+            console.error(`[dialerService] Failed to mark undialable lead ${leadId} as dialed:`, markErr.message);
+          });
+        }
         // Asterisk's own wording ("Extension does not exist.") reads to
         // an agent like a phone-extension problem — say what it means.
         reject(
