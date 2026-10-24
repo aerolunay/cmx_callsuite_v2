@@ -261,8 +261,18 @@ function isWithinCallingHours({ calling_days, calling_start_time, calling_end_ti
     const [start, end] = calling_days.split("-");
     const startIdx = DAY_ORDER.indexOf(start);
     const endIdx = DAY_ORDER.indexOf(end);
-    allowedDays =
-      startIdx !== -1 && endIdx !== -1 && startIdx <= endIdx ? DAY_ORDER.slice(startIdx, endIdx + 1) : [calling_days];
+    // REAL BUG FIX, confirmed live — the admin screen orders days Mon..Sun,
+    // so ticking every day saves "mon-sun" (and Sat + Sun saves
+    // "sat-sun"), which runs past the end of this Sun-first list. Those
+    // used to match no day at all, so the campaign was "outside calling
+    // hours" all week. Walk forward and wrap around the week instead.
+    allowedDays = [];
+    if (startIdx !== -1 && endIdx !== -1) {
+      for (let i = startIdx; ; i = (i + 1) % 7) {
+        allowedDays.push(DAY_ORDER[i]);
+        if (i === endIdx) break;
+      }
+    }
   } else {
     allowedDays = calling_days.split(",").map((d) => d.trim());
   }
