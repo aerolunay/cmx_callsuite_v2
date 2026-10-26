@@ -2223,6 +2223,37 @@ router.get(
 );
 
 /*
+GET /api/admin/leads-dashboard/connect-trends?startDate=yyyy-MM-dd&endDate=yyyy-MM-dd&campaignIds=A,B,C
+
+Answered vs machine vs no answer per day and per hour of day — see
+statsService.getLeadsConnectTrends. Same role gate and campaign scoping
+as /summary above (eligible = OUTBOUND campaigns with leads, within the
+caller's own scope).
+*/
+router.get(
+  "/leads-dashboard/connect-trends",
+  requireRoles(...LEADS_DASHBOARD_ROLES),
+  resolveCampaignScopeMulti,
+  async (req, res) => {
+    try {
+      const { startDate, endDate } = req.query;
+      if (!startDate || !endDate) {
+        return res.status(400).json({ success: false, message: "startDate and endDate query params are required." });
+      }
+
+      const eligibleCampaigns = await statsService.getLeadsCampaignsWithLeads(req.campaignScope);
+      const campaignIds = eligibleCampaigns.map((c) => c.campaignId);
+
+      const trends = await statsService.getLeadsConnectTrends({ startDate, endDate, campaignIds });
+      return res.json({ success: true, trends });
+    } catch (error) {
+      console.error("GET /api/admin/leads-dashboard/connect-trends failed:", error);
+      return res.status(500).json({ success: false, message: error.message || "Failed to load connect trends." });
+    }
+  }
+);
+
+/*
 ==================================================
 GET /api/admin/reports/abandoned-calls-aggregated?startDate=&endDate=&campaignId=optional
 ==================================================

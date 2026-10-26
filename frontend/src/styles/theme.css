@@ -1274,6 +1274,192 @@ away from the screen at that exact moment.
   }
 }
 
+/* ===== Leads dashboard — Connect Trends section ===== */
+.connect-trends {
+  --connect-answered: var(--cmx-navy);
+  --connect-machine: var(--cmx-cyan);
+  --connect-noanswer: #9aa8bd;
+  --connect-busy: #cdd3dd;
+  margin-top: 28px;
+}
+
+.connect-trends .card {
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.connect-trends .stats-grid-6 {
+  grid-template-columns: repeat(6, 1fr);
+  margin-top: 0;
+}
+
+@media (max-width: 1000px) {
+  .connect-trends .stats-grid-6 {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+@media (max-width: 520px) {
+  .connect-trends .stats-grid-6 {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+.connect-trends .card h3 {
+  margin: 0 0 6px;
+  color: var(--cmx-navy);
+}
+
+.connect-trends-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.connect-trends-header h3 {
+  margin: 0 0 4px;
+  color: var(--cmx-navy);
+}
+
+.connect-trends-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.connect-trends-note {
+  margin: 0 0 10px;
+  color: #666;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.connect-trends-takeaway {
+  margin: 0 0 16px;
+  font-size: 15px;
+  color: var(--cmx-navy);
+  max-width: 80ch;
+}
+
+.connect-trends-refreshing {
+  opacity: 0.55;
+  transition: opacity 0.2s ease;
+}
+
+.connect-trends-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin-bottom: 12px;
+  font-size: 12px;
+  color: #555;
+}
+
+.connect-trends-legend i {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  margin-right: 6px;
+  vertical-align: -1px;
+}
+
+.connect-trends-answered { background: var(--connect-answered); }
+.connect-trends-machine { background: var(--connect-machine); }
+.connect-trends-noanswer { background: var(--connect-noanswer); }
+.connect-trends-busy { background: var(--connect-busy); }
+
+.connect-trends-dow {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.connect-trends-dow-row {
+  display: grid;
+  grid-template-columns: 40px 1fr;
+  gap: 4px 10px;
+  align-items: center;
+  font-size: 13px;
+}
+
+.connect-trends-dow-label {
+  color: #444;
+}
+
+.connect-trends-stack {
+  display: flex;
+  gap: 2px;
+  height: 16px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--cmx-gray-bg);
+}
+
+.connect-trends-dow-meta {
+  grid-column: 2;
+  font-size: 12px;
+  color: #666;
+}
+
+.connect-trends-dow-meta strong {
+  color: var(--cmx-navy);
+}
+
+.connect-trends-thin {
+  opacity: 0.5;
+}
+
+.connect-trends-daily-scroll {
+  overflow-x: auto;
+}
+
+.connect-trends-daily {
+  display: grid;
+  grid-template-columns: repeat(var(--connect-trends-days), minmax(34px, 1fr));
+  align-items: end;
+  gap: 2px;
+  height: 240px;
+}
+
+.connect-trends-day {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  height: 100%;
+  padding: 0 3px;
+  border-radius: 4px;
+}
+
+.connect-trends-weekend {
+  background: var(--cmx-gray-bg);
+}
+
+.connect-trends-day-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-height: 2px;
+  border-radius: 4px 4px 0 0;
+  overflow: hidden;
+}
+
+.connect-trends-day-bar > div {
+  flex: none;
+}
+
+.connect-trends-day-label {
+  margin-top: 4px;
+  font-size: 10px;
+  line-height: 1.2;
+  text-align: center;
+  color: #666;
+  white-space: nowrap;
+}
+
 /* ===== MiniPhone — softphone widget ===== */
 .phone-widget {
   background: var(--cmx-navy);

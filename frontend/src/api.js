@@ -281,6 +281,11 @@ export const api = {
     if (campaignIds && campaignIds.length > 0) params.set("campaignIds", campaignIds.join(","));
     return request(`/admin/leads-dashboard/summary?${params.toString()}`);
   },
+  getLeadsDashboardConnectTrends: (startDate, endDate, campaignIds) => {
+    const params = new URLSearchParams({ startDate, endDate });
+    if (campaignIds && campaignIds.length > 0) params.set("campaignIds", campaignIds.join(","));
+    return request(`/admin/leads-dashboard/connect-trends?${params.toString()}`);
+  },
 
   // Campaign management — create/edit auto-creates the DID routing,
   // dialplan, and audio prompts server-side (see campaignRoutes.js).

@@ -1157,6 +1157,95 @@ async function getReportingSummary(campaignId) {
   };
 }
 
+/*
+==================================================
+getLeadsConnectTrends — NEW, for the Leads Calling Dashboard
+==================================================
+Powers the dashboard's "Connect Trends" section: answered vs answering
+machine vs no answer, per day and per hour of day, so the business can
+see which weekdays (and whether weekends) connect best.
+
+Same Human Answered definition as getLeadsCallingDashboard (human =
+not in NON_HUMAN_DISPOSITIONS), but per explicit request only REGULAR
+dials count — callbacks (call_type 'CALLBACK') are excluded, since a
+callback is a call the customer asked for and would inflate the answer
+rate of whichever day it landed on. So Dials here can be a little lower
+than the Total Dialed card above it. The non-human side is split:
+  - machine   = MACHINE + every VOICEMAIL* code
+  - noAnswer  = NO_ANSWER
+  - busy      = BUSY
+
+Days/hours are DATE()/HOUR() of call_started_at, i.e. the MySQL
+server's own clock. That's Eastern on this server (system_time_zone
+EDT/EST, confirmed 2026-10-26) — if the server ever moves off Eastern,
+these buckets shift with it while the [start, end] range itself stays
+correct (it's computed via getEasternRangeBoundsForServerClock).
+
+Day-of-week and weekday/weekend rollups are left to the frontend — they
+are plain sums of these daily rows.
+==================================================
+*/
+const MACHINE_DISPOSITIONS = NON_HUMAN_DISPOSITIONS.filter((d) => d === "MACHINE" || d.startsWith("VOICEMAIL"));
+
+async function getLeadsConnectTrends({ startDate, endDate, campaignIds }) {
+  if (!campaignIds || campaignIds.length === 0) {
+    return { startDate, endDate, days: [], hours: [] };
+  }
+
+  const { start, end } = await getEasternRangeBoundsForServerClock(startDate, endDate);
+  const campaignInClause = campaignIds.map(() => "?").join(",");
+  const nonHumanPlaceholders = NON_HUMAN_DISPOSITIONS.map(() => "?").join(",");
+  const machinePlaceholders = MACHINE_DISPOSITIONS.map(() => "?").join(",");
+
+  const outcomeColumns = `
+    COUNT(*) AS dials,
+    SUM(CASE WHEN disposition NOT IN (${nonHumanPlaceholders}) THEN 1 ELSE 0 END) AS answered,
+    SUM(CASE WHEN disposition IN (${machinePlaceholders}) THEN 1 ELSE 0 END) AS machine,
+    SUM(CASE WHEN disposition = 'NO_ANSWER' THEN 1 ELSE 0 END) AS noAnswer,
+    SUM(CASE WHEN disposition = 'BUSY' THEN 1 ELSE 0 END) AS busy
+  `;
+  const params = [...NON_HUMAN_DISPOSITIONS, ...MACHINE_DISPOSITIONS, start, end, ...campaignIds];
+
+  const [dayRows] = await db.execute(
+    `
+      SELECT DATE_FORMAT(call_started_at, '%Y-%m-%d') AS day, ${outcomeColumns},
+             COUNT(DISTINCT agent_user) AS agents
+      FROM cmx_dialer.dialer_call_log
+      WHERE call_started_at BETWEEN ? AND ? AND campaign_id IN (${campaignInClause}) AND call_type = 'REGULAR'
+      GROUP BY day
+      ORDER BY day
+    `,
+    params
+  );
+
+  const [hourRows] = await db.execute(
+    `
+      SELECT HOUR(call_started_at) AS hour, ${outcomeColumns}
+      FROM cmx_dialer.dialer_call_log
+      WHERE call_started_at BETWEEN ? AND ? AND campaign_id IN (${campaignInClause}) AND call_type = 'REGULAR'
+      GROUP BY hour
+      ORDER BY hour
+    `,
+    params
+  );
+
+  // mysql2 returns SUM() as strings — same coercion as the rest of this file.
+  const toCounts = (r) => ({
+    dials: Number(r.dials) || 0,
+    answered: Number(r.answered) || 0,
+    machine: Number(r.machine) || 0,
+    noAnswer: Number(r.noAnswer) || 0,
+    busy: Number(r.busy) || 0,
+  });
+
+  return {
+    startDate,
+    endDate,
+    days: dayRows.map((r) => ({ date: r.day, ...toCounts(r), agents: Number(r.agents) || 0 })),
+    hours: hourRows.map((r) => ({ hour: Number(r.hour), ...toCounts(r) })),
+  };
+}
+
 module.exports = {
   getTodayStats,
   getTodayStatsAggregate,
@@ -1167,4 +1256,5 @@ module.exports = {
   getCampaignAgentBreakdown,
   getLeadsCampaignsWithLeads,
   getLeadsCallingDashboard,
+  getLeadsConnectTrends,
 };

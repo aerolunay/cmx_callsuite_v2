@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Navigate } from "react-router-dom";
 import Header from "../components/Header";
 import HorizontalBarChart from "../components/HorizontalBarChart";
+import ConnectTrendsSection from "../components/ConnectTrendsSection";
 import { api } from "../api";
 import { useAuth } from "../context/AuthContext";
 import LoadingSpinner from "../components/LoadingSpinner";
@@ -464,6 +465,19 @@ export default function LeadsCallingDashboardPage() {
             </div>
           </>
         )}
+
+        {/* ===== Connect Trends — by day of week / day / hour. Historical
+             only: Near Real Time is a single day, which can't show a
+             day-of-week pattern. ===== */}
+        {campaigns.length > 0 &&
+          (isRealtime ? (
+            <p className="connect-trends-note" style={{ marginTop: 20 }}>
+              Switch to Historical and pick a date range to see Connect Trends: answer rates by day of week, weekday vs
+              weekend, and hour of day.
+            </p>
+          ) : (
+            <ConnectTrendsSection startDate={startDate} endDate={endDate} campaignIds={selectedCampaignIds} />
+          ))}
       </div>
     </>
   );
