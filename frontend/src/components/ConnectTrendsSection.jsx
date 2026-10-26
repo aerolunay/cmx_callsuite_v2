@@ -13,6 +13,10 @@ and per hour of day — so the business can see which weekdays connect
 best and whether weekend calling is worth it. Same Human Answered
 definition as the KPI cards above it (see statsService.getLeadsConnectTrends).
 
+Per explicit request it covers every OUTBOUND campaign, with or without
+leads left, so it has its own campaign picker instead of the page's
+(which only lists campaigns that still have leads).
+
 Fetches on its own whenever the range or campaign selection changes;
 the backend returns plain daily + hourly rows and every rollup here
 (day of week, weekday vs weekend) is a sum of those rows.
@@ -147,13 +151,28 @@ function OutcomeLegend() {
   );
 }
 
-export default function ConnectTrendsSection({ startDate, endDate, campaignIds }) {
+export default function ConnectTrendsSection({ startDate, endDate }) {
+  const [campaigns, setCampaigns] = useState([]);
+  const [campaignId, setCampaignId] = useState(""); // "" = all outbound campaigns
   const [trends, setTrends] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const requestIdRef = useRef(0);
 
-  const campaignKey = campaignIds.join(",");
+  // Empty = every outbound campaign in the caller's scope (resolved server-side).
+  const campaignIds = campaignId ? [campaignId] : [];
+  const campaignKey = campaignId;
+  const campaignLabel = campaignId
+    ? campaigns.find((c) => c.campaignId === campaignId)?.campaignName || campaignId
+    : "All outbound campaigns";
+  const fileTag = `${campaignId || "all-outbound"}_${startDate}_to_${endDate}`;
+
+  useEffect(() => {
+    api
+      .getConnectTrendsCampaigns()
+      .then((data) => setCampaigns(data.campaigns || []))
+      .catch((err) => setError(err.message));
+  }, []);
 
   useEffect(() => {
     if (!startDate || !endDate) return;
@@ -184,7 +203,7 @@ export default function ConnectTrendsSection({ startDate, endDate, campaignIds }
 
   function handleDownloadDaily() {
     downloadCsv(
-      `cmx-dialer-connect-trends-daily_${startDate}_to_${endDate}.csv`,
+      `cmx-dialer-connect-trends-daily_${fileTag}.csv`,
       [
         { label: "Date", value: "date" },
         { label: "Day", value: "weekday" },
@@ -202,7 +221,7 @@ export default function ConnectTrendsSection({ startDate, endDate, campaignIds }
 
   function handleDownloadHourly() {
     downloadCsv(
-      `cmx-dialer-connect-trends-hourly_${startDate}_to_${endDate}.csv`,
+      `cmx-dialer-connect-trends-hourly_${fileTag}.csv`,
       [
         { label: "Hour (ET)", value: (r) => fmtHour(r.hour) },
         { label: "Total Dialed", value: "dials" },
@@ -216,17 +235,60 @@ export default function ConnectTrendsSection({ startDate, endDate, campaignIds }
     );
   }
 
+  // Per explicit request — everything in the summary cards and tables in
+  // one sheet: a row per day of week, then Weekday, Weekend and Total.
+  function handleDownloadSummary() {
+    const rows = [
+      ...weekdays.map((w) => ({ ...w, label: WEEKDAY_NAMES[w.weekday] })),
+      ...periods.map((p) => ({ ...p, label: p.period })),
+      { ...total, label: "Total" },
+    ];
+    downloadCsv(
+      `cmx-dialer-connect-trends-summary_${fileTag}.csv`,
+      [
+        { label: "Campaigns", value: () => campaignLabel },
+        { label: "Day / Period", value: "label" },
+        { label: "Days Dialed", value: "days" },
+        { label: "Total Dialed", value: "dials" },
+        { label: "Human Answered", value: "answered" },
+        { label: "Answering Machine / Voicemail", value: "machine" },
+        { label: "No Answer", value: "noAnswer" },
+        { label: "Busy", value: "busy" },
+        { label: "Answer Rate %", value: (r) => (r.answerRatePct === null ? "" : r.answerRatePct.toFixed(1)) },
+        { label: "Machine Rate %", value: (r) => (r.machineRatePct === null ? "" : r.machineRatePct.toFixed(1)) },
+        { label: "Answered / Day", value: (r) => (r.answeredPerDay === null ? "" : r.answeredPerDay.toFixed(1)) },
+        { label: "Answered / Agent-Day", value: (r) => (r.answeredPerAgentDay === null ? "" : r.answeredPerAgentDay.toFixed(1)) },
+      ],
+      rows
+    );
+  }
+
   return (
     <section className="connect-trends">
       <div className="connect-trends-header">
         <div>
           <h3>Connect Trends — {startDate} to {endDate}</h3>
+          <div className="connect-trends-campaign">
+            <label htmlFor="connect-trends-campaign">Campaign</label>
+            <select id="connect-trends-campaign" value={campaignId} onChange={(e) => setCampaignId(e.target.value)}>
+              <option value="">All outbound campaigns ({campaigns.length})</option>
+              {campaigns.map((c) => (
+                <option key={c.campaignId} value={c.campaignId}>
+                  {c.campaignName} ({c.campaignId})
+                </option>
+              ))}
+            </select>
+          </div>
           <p className="connect-trends-note">
-            Which days and hours get a person on the line. Regular outbound dials only (callbacks excluded); days and
-            hours in Eastern time.
+            Which days and hours get a person on the line. Every outbound campaign, including ones with no leads left
+            (its own picker, separate from the campaigns above). Dials to leads only (manual dials and callbacks
+            excluded); days and hours in Eastern time.
           </p>
         </div>
         <div className="connect-trends-actions">
+          <button type="button" className="button-secondary" onClick={handleDownloadSummary} disabled={!trends || days.length === 0}>
+            Download Summary CSV
+          </button>
           <button type="button" className="button-secondary" onClick={handleDownloadDaily} disabled={!trends || days.length === 0}>
             Download Daily CSV
           </button>
@@ -241,7 +303,7 @@ export default function ConnectTrendsSection({ startDate, endDate, campaignIds }
 
       {trends && days.length === 0 && (
         <div className="card">
-          <p style={{ margin: 0 }}>No outbound dials in this range.</p>
+          <p style={{ margin: 0 }}>No dials to leads in this range for {campaignLabel}.</p>
         </div>
       )}
 
@@ -442,8 +504,8 @@ export default function ConnectTrendsSection({ startDate, endDate, campaignIds }
           <p className="connect-trends-note">
             Human Answered uses the same rule as Connect Rate above: every disposition except No Answer, Busy, Answering
             Machine and Voicemail. It depends on what the agent picks, and calls closed without a disposition aren't
-            counted. Callbacks are left out of this whole section, so Dials can be a little lower than Total Dialed
-            above. Agent-days count each agent once per day they made any outbound call.
+            counted. Only dials to leads count here: manual dials to a typed-in number and callbacks are left out, so Dials
+            can be lower than Total Dialed above. Agent-days count each agent once per day they made any outbound call.
           </p>
         </div>
       )}

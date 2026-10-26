@@ -1324,6 +1324,18 @@ away from the screen at that exact moment.
   color: var(--cmx-navy);
 }
 
+.connect-trends-campaign {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0 8px;
+  font-size: 13px;
+}
+
+.connect-trends-campaign select {
+  max-width: 100%;
+}
+
 .connect-trends-actions {
   display: flex;
   flex-wrap: wrap;

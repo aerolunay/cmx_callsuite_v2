@@ -469,15 +469,14 @@ export default function LeadsCallingDashboardPage() {
         {/* ===== Connect Trends — by day of week / day / hour. Historical
              only: Near Real Time is a single day, which can't show a
              day-of-week pattern. ===== */}
-        {campaigns.length > 0 &&
-          (isRealtime ? (
-            <p className="connect-trends-note" style={{ marginTop: 20 }}>
-              Switch to Historical and pick a date range to see Connect Trends: answer rates by day of week, weekday vs
-              weekend, and hour of day.
-            </p>
-          ) : (
-            <ConnectTrendsSection startDate={startDate} endDate={endDate} campaignIds={selectedCampaignIds} />
-          ))}
+        {isRealtime ? (
+          <p className="connect-trends-note" style={{ marginTop: 20 }}>
+            Switch to Historical and pick a date range to see Connect Trends: answer rates by day of week, weekday vs
+            weekend, and hour of day.
+          </p>
+        ) : (
+          <ConnectTrendsSection startDate={startDate} endDate={endDate} />
+        )}
       </div>
     </>
   );

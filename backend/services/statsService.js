@@ -1166,10 +1166,12 @@ machine vs no answer, per day and per hour of day, so the business can
 see which weekdays (and whether weekends) connect best.
 
 Same Human Answered definition as getLeadsCallingDashboard (human =
-not in NON_HUMAN_DISPOSITIONS), but per explicit request only REGULAR
-dials count — callbacks (call_type 'CALLBACK') are excluded, since a
-callback is a call the customer asked for and would inflate the answer
-rate of whichever day it landed on. So Dials here can be a little lower
+not in NON_HUMAN_DISPOSITIONS), but per explicit request only dials to
+LEADS count: REGULAR calls with a lead_id. Callbacks (call_type
+'CALLBACK') are excluded, since a callback is a call the customer asked
+for and would inflate the answer rate of whichever day it landed on, and
+so are manual dials to a typed-in number (lead_id 0) — e.g. CMXHTAOB's
+dials are all manual, so it shows no data. So Dials here can be lower
 than the Total Dialed card above it. The non-human side is split:
   - machine   = MACHINE + every VOICEMAIL* code
   - noAnswer  = NO_ANSWER
@@ -1185,6 +1187,30 @@ Day-of-week and weekday/weekend rollups are left to the frontend — they
 are plain sums of these daily rows.
 ==================================================
 */
+// Per explicit request — Connect Trends looks at every OUTBOUND campaign
+// (campaign_settings.campaign_type), with or without leads left and
+// active or not, so finished campaigns' history still counts. Blended
+// campaigns are not included. scopeCampaignIds: null = all, else only these.
+async function getConnectTrendsCampaigns(scopeCampaignIds) {
+  const params = [];
+  let scopeFilter = "";
+  if (scopeCampaignIds && scopeCampaignIds.length > 0) {
+    scopeFilter = ` AND s.campaign_id IN (${scopeCampaignIds.map(() => "?").join(",")})`;
+    params.push(...scopeCampaignIds);
+  }
+  const [rows] = await db.execute(
+    `
+      SELECT s.campaign_id AS campaignId, COALESCE(c.campaign_name, s.campaign_id) AS campaignName
+      FROM cmx_dialer.campaign_settings s
+      LEFT JOIN vicidial_campaigns c ON c.campaign_id = s.campaign_id
+      WHERE s.campaign_type = 'OUTBOUND'${scopeFilter}
+      ORDER BY campaignName ASC
+    `,
+    params
+  );
+  return rows;
+}
+
 const MACHINE_DISPOSITIONS = NON_HUMAN_DISPOSITIONS.filter((d) => d === "MACHINE" || d.startsWith("VOICEMAIL"));
 
 async function getLeadsConnectTrends({ startDate, endDate, campaignIds }) {
@@ -1211,7 +1237,7 @@ async function getLeadsConnectTrends({ startDate, endDate, campaignIds }) {
       SELECT DATE_FORMAT(call_started_at, '%Y-%m-%d') AS day, ${outcomeColumns},
              COUNT(DISTINCT agent_user) AS agents
       FROM cmx_dialer.dialer_call_log
-      WHERE call_started_at BETWEEN ? AND ? AND campaign_id IN (${campaignInClause}) AND call_type = 'REGULAR'
+      WHERE call_started_at BETWEEN ? AND ? AND campaign_id IN (${campaignInClause}) AND call_type = 'REGULAR' AND lead_id > 0
       GROUP BY day
       ORDER BY day
     `,
@@ -1222,7 +1248,7 @@ async function getLeadsConnectTrends({ startDate, endDate, campaignIds }) {
     `
       SELECT HOUR(call_started_at) AS hour, ${outcomeColumns}
       FROM cmx_dialer.dialer_call_log
-      WHERE call_started_at BETWEEN ? AND ? AND campaign_id IN (${campaignInClause}) AND call_type = 'REGULAR'
+      WHERE call_started_at BETWEEN ? AND ? AND campaign_id IN (${campaignInClause}) AND call_type = 'REGULAR' AND lead_id > 0
       GROUP BY hour
       ORDER BY hour
     `,
@@ -1257,4 +1283,5 @@ module.exports = {
   getLeadsCampaignsWithLeads,
   getLeadsCallingDashboard,
   getLeadsConnectTrends,
+  getConnectTrendsCampaigns,
 };

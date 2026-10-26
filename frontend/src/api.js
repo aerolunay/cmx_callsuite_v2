@@ -281,6 +281,7 @@ export const api = {
     if (campaignIds && campaignIds.length > 0) params.set("campaignIds", campaignIds.join(","));
     return request(`/admin/leads-dashboard/summary?${params.toString()}`);
   },
+  getConnectTrendsCampaigns: () => request("/admin/leads-dashboard/connect-trends/campaigns"),
   getLeadsDashboardConnectTrends: (startDate, endDate, campaignIds) => {
     const params = new URLSearchParams({ startDate, endDate });
     if (campaignIds && campaignIds.length > 0) params.set("campaignIds", campaignIds.join(","));

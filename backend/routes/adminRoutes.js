@@ -2227,9 +2227,26 @@ GET /api/admin/leads-dashboard/connect-trends?startDate=yyyy-MM-dd&endDate=yyyy-
 
 Answered vs machine vs no answer per day and per hour of day — see
 statsService.getLeadsConnectTrends. Same role gate and campaign scoping
-as /summary above (eligible = OUTBOUND campaigns with leads, within the
-caller's own scope).
+as /summary above, but per explicit request eligible = every OUTBOUND
+campaign in the caller's scope, with or without leads left (see
+statsService.getConnectTrendsCampaigns) — the section has its own
+campaign picker, fed by /connect-trends/campaigns below.
 */
+router.get("/leads-dashboard/connect-trends/campaigns", requireRoles(...LEADS_DASHBOARD_ROLES), async (req, res) => {
+  try {
+    const { accessLevel, appUserId } = req.session.agent;
+    const scopeCampaignIds = UNRESTRICTED_CAMPAIGN_ROLES.includes(accessLevel)
+      ? null
+      : await getAssignedCampaignIds(appUserId);
+    // A scoped role with no assignments sees nothing, not everything.
+    const campaigns = scopeCampaignIds && scopeCampaignIds.length === 0 ? [] : await statsService.getConnectTrendsCampaigns(scopeCampaignIds);
+    return res.json({ success: true, campaigns });
+  } catch (error) {
+    console.error("GET /api/admin/leads-dashboard/connect-trends/campaigns failed:", error);
+    return res.status(500).json({ success: false, message: "Failed to load campaigns." });
+  }
+});
+
 router.get(
   "/leads-dashboard/connect-trends",
   requireRoles(...LEADS_DASHBOARD_ROLES),
@@ -2241,7 +2258,8 @@ router.get(
         return res.status(400).json({ success: false, message: "startDate and endDate query params are required." });
       }
 
-      const eligibleCampaigns = await statsService.getLeadsCampaignsWithLeads(req.campaignScope);
+      const eligibleCampaigns =
+        req.campaignScope && req.campaignScope.length === 0 ? [] : await statsService.getConnectTrendsCampaigns(req.campaignScope);
       const campaignIds = eligibleCampaigns.map((c) => c.campaignId);
 
       const trends = await statsService.getLeadsConnectTrends({ startDate, endDate, campaignIds });
