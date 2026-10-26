@@ -154,6 +154,7 @@ export default function CallLogTable({ refreshKey, campaignId, onCallBack, canCa
               <th>Call Date</th>
               <th>Name</th>
               <th>Phone Number</th>
+              <th>Callback Number</th>
               <th>Disposition</th>
               <th>Xfer/Conf</th>
               <th>Call ID</th>
@@ -182,6 +183,12 @@ export default function CallLogTable({ refreshKey, campaignId, onCallBack, canCa
                   {row.first_name} {row.last_name}
                 </td>
                 <td>{row.phone_number}</td>
+                {/* Per explicit request — the number the inbound caller asked
+                    to be called back on (entered on the inbound disposition
+                    form); when none was entered, the caller ID, per explicit
+                    request — the same number Call Back dials. Outbound
+                    calls never have one, so they show the number dialed. */}
+                <td>{row.callback_number || row.phone_number}</td>
                 <td>{resolveDispositionLabel(row)}</td>
                 <td>{row.xfer_conf === "Y" ? `Yes — ${row.xfer_conf_target}` : "No"}</td>
                 <td className="call-id-cell" title={row.call_id || undefined}>
@@ -200,7 +207,7 @@ export default function CallLogTable({ refreshKey, campaignId, onCallBack, canCa
           style={{ top: popup.y + 8, left: popup.x + 8 }}
         >
           <button className="button-secondary" onClick={handleConfirmCallBack}>
-            Call Back {popup.row.phone_number}
+            Call Back {popup.row.callback_number || popup.row.phone_number}
           </button>
         </div>
       )}
