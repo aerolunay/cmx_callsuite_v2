@@ -247,6 +247,11 @@ export default function DialerPage() {
   // inbound caller this agent can take is waiting, so Auto Dial holds off
   // (instead of retrying in a tight loop) while the inbound call rings them.
   const [inboundWaitingHold, setInboundWaitingHold] = useState(false);
+  // REAL BUG FIX, confirmed live — when Asterisk couldn't reach the
+  // agent's phone (agent leg Originate failed), Auto Dial retried
+  // instantly: ~50 failed dials in 4s for one agent right after login.
+  // True for a few seconds after such a failure, so Auto Dial waits.
+  const [agentLegFailedHold, setAgentLegFailedHold] = useState(false);
   const [hasLeads, setHasLeads] = useState(true); // optimistic default — avoids a flash of "no leads" before the check resolves
   // Per explicit request — an admin paused lead dialing for this campaign
   // (Admin -> Leads/Auto-Dial). hasLeads is false too; this only changes
@@ -279,6 +284,12 @@ export default function DialerPage() {
     const timeout = setTimeout(() => setInboundWaitingHold(false), 3000);
     return () => clearTimeout(timeout);
   }, [inboundWaitingHold]);
+
+  useEffect(() => {
+    if (!agentLegFailedHold) return;
+    const timeout = setTimeout(() => setAgentLegFailedHold(false), 10000);
+    return () => clearTimeout(timeout);
+  }, [agentLegFailedHold]);
 
   useEffect(() => {
     if (!autoResolvedNotice) return;
@@ -494,6 +505,49 @@ export default function DialerPage() {
     return () => clearTimeout(timeout);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [acwWithoutCall]);
+
+  // REAL BUG FIX, confirmed live — an agent's page missed the message
+  // that her auto-resolved call had ended (live connection hiccup), so it
+  // kept showing the call; Auto Dial won't run with a call on screen, and
+  // she sat READY on the server with no dials for 25+ minutes until a
+  // refresh. The reconnect and stuck-ACW catch-ups above don't cover
+  // that. So every 30s, compare with the server: take its status if it
+  // differs, and if it says READY / Callback with no call while this page
+  // still shows one, that call is over — clear it the same way
+  // callAutoResolved does.
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      if (busy) return;
+      try {
+        const data = await api.getStatus();
+        const serverStatus = data.status?.status;
+        if (!serverStatus) return;
+        if (serverStatus !== agentStatus?.status) {
+          setAgentStatus(data.status);
+          setStatusDraft(serverStatus);
+          baseElapsedRef.current = data.status.elapsedSeconds;
+          baseAtRef.current = Date.now();
+        }
+        if (!call || (serverStatus !== "READY" && serverStatus !== "MANUAL_CALLBACK")) return;
+        const current = await api.getCurrentCall();
+        if (current.call && current.call.callId === call.callId) return;
+        const staleCallId = call.callId;
+        setCall((prev) => (prev && prev.callId === staleCallId ? null : prev));
+        setLead(null);
+        setDisposition("");
+        setComments("");
+        setCallbackAt("");
+        setSetNotReadyAfterSave(false);
+        setManualCallbackAfterSave(false);
+        setCallLogVersion((v) => v + 1);
+        refreshAfterCall();
+      } catch {
+        // transient failure — try again on the next tick
+      }
+    }, 30000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agentStatus?.status, call?.callId, busy]);
 
   async function handleReturnToReadyAfterLostCall() {
     setError("");
@@ -863,6 +917,11 @@ export default function DialerPage() {
         // no-leads case, just a different underlying reason.
         setHasLeads(false);
         setError(err.message);
+      } else if (/agent leg/i.test(err.message)) {
+        // Asterisk couldn't ring the agent's own phone — wait before Auto
+        // Dial tries again instead of retrying in a tight loop.
+        setAgentLegFailedHold(true);
+        setError(`${err.message} Auto Dial will try again in 10 seconds.`);
       } else {
         setError(err.message);
       }
@@ -904,6 +963,11 @@ export default function DialerPage() {
     if (!hasLeads) return;
     if (busy) return;
     if (inboundWaitingHold) return;
+    // Every extension is a browser (JsSIP) phone — Asterisk can't ring the
+    // agent until it has registered, so don't pull a lead before then
+    // (MiniPhone's manual dial already has the same rule).
+    if (!phone.registered) return;
+    if (agentLegFailedHold) return;
     if (autoDialInFlightRef.current) return;
 
     autoDialInFlightRef.current = true;
@@ -911,7 +975,7 @@ export default function DialerPage() {
       autoDialInFlightRef.current = false;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [outboundCampaign, agentStatus, call, hasLeads, busy, inboundWaitingHold]);
+  }, [outboundCampaign, agentStatus, call, hasLeads, busy, inboundWaitingHold, phone.registered, agentLegFailedHold]);
 
   // Callback: reuses the same startCall path as "Dial Next Number" but
   // skips getNextLead entirely — the row from Call Logs already has
