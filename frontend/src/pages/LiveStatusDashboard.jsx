@@ -85,6 +85,16 @@ function nameWithVicidialUser(a) {
   return `${a.fullName} (${a.vicidialUser || "—"})`;
 }
 
+// Same rule as POST /admin/users/:id/kick: any non-call status, or — per
+// explicit request — After Call Work once it has lasted 5 minutes.
+const KICKABLE_STATUSES = ["NOT_READY", "MANUAL_CALLBACK", "LUNCH_BREAK", "BIO_BREAK", "ADMIN", "MEETING", "TRAINING"];
+const ACW_KICK_AFTER_SECONDS = 5 * 60;
+
+function isKickable(agentRow) {
+  if (agentRow.status === "AFTER_CALL_WORK") return (agentRow.elapsedSeconds ?? 0) >= ACW_KICK_AFTER_SECONDS;
+  return KICKABLE_STATUSES.includes(agentRow.status);
+}
+
 export default function LiveStatusDashboard() {
   const { agent } = useAuth();
   const [campaigns, setCampaigns] = useState([]);
@@ -207,7 +217,9 @@ export default function LiveStatusDashboard() {
 
   async function handleKickAgent(agentRow) {
     const confirmed = window.confirm(
-      `Force-logout ${agentRow.fullName}? They'll be logged out immediately and shown a notice.`
+      agentRow.status === "AFTER_CALL_WORK"
+        ? `Force-logout ${agentRow.fullName}? They're still in After Call Work — their last call will be saved as "No Disposition" and they'll be logged out immediately.`
+        : `Force-logout ${agentRow.fullName}? They'll be logged out immediately and shown a notice.`
     );
     if (!confirmed) return;
 
@@ -563,11 +575,10 @@ export default function LiveStatusDashboard() {
                             <td>
                               {/* Matches the backend's own restriction
                                   exactly (POST /users/:id/kick's
-                                  KICKABLE_STATUSES) — never shows an
-                                  action that would just fail. */}
-                              {["NOT_READY", "MANUAL_CALLBACK", "LUNCH_BREAK", "BIO_BREAK", "ADMIN", "MEETING", "TRAINING"].includes(
-                                a.status
-                              ) && (
+                                  KICKABLE_STATUSES, plus After Call Work
+                                  once it has lasted 5 minutes) — never
+                                  shows an action that would just fail. */}
+                              {isKickable(a) && (
                                 <button
                                   type="button"
                                   className="link"

@@ -14,6 +14,7 @@ const { transporter } = require("../config/mailer");
 const { buildWelcomeEmail } = require("../services/emailTemplates");
 const { requireRoles, requireCampaignAccess, resolveCampaignScope, resolveCampaignScopeMulti, getAssignedCampaignIds, UNRESTRICTED_CAMPAIGN_ROLES } = require("../services/accessControlService");
 const monitoringService = require("../services/monitoringService");
+const acwKickService = require("../services/acwKickService");
 
 const router = express.Router();
 
@@ -1621,13 +1622,22 @@ router.delete("/users/:appUserId", requireAdmin, async (req, res) => {
 ==================================================
 POST /users/:appUserId/kick
 ==================================================
+Per explicit request, After Call Work is kickable too once it has lasted
+ACW_KICK_AFTER_SECONDS — the call the agent never dispositioned is saved
+as NO_DISPOSITION first (see acwKickService.js). Same rule on the Live
+Status Dashboard's Kick button.
+==================================================
 */
+const KICKABLE_STATUSES = ["NOT_READY", "MANUAL_CALLBACK", "LUNCH_BREAK", "BIO_BREAK", "ADMIN", "MEETING", "TRAINING"];
+const ACW_KICK_AFTER_SECONDS = 5 * 60;
+
 router.post("/users/:appUserId/kick", requireAdmin, async (req, res) => {
   try {
-    const { appUserId } = req.params;
+    const appUserId = Number(req.params.appUserId);
 
     const [rows] = await db.execute(
-      `SELECT status FROM cmx_dialer.agent_status_log WHERE app_user_id = ? AND ended_at IS NULL LIMIT 1`,
+      `SELECT status, TIMESTAMPDIFF(SECOND, started_at, NOW()) AS seconds_in_status
+       FROM cmx_dialer.agent_status_log WHERE app_user_id = ? AND ended_at IS NULL LIMIT 1`,
       [appUserId]
     );
     const currentStatus = rows[0]?.status;
@@ -1635,11 +1645,20 @@ router.post("/users/:appUserId/kick", requireAdmin, async (req, res) => {
     if (!currentStatus) {
       return res.status(400).json({ success: false, message: "This agent isn't currently logged in." });
     }
-    const KICKABLE_STATUSES = ["NOT_READY", "MANUAL_CALLBACK", "LUNCH_BREAK", "BIO_BREAK", "ADMIN", "MEETING", "TRAINING"];
-    if (!KICKABLE_STATUSES.includes(currentStatus)) {
+    if (currentStatus === "AFTER_CALL_WORK") {
+      const secondsInAcw = Number(rows[0].seconds_in_status) || 0;
+      if (secondsInAcw < ACW_KICK_AFTER_SECONDS) {
+        const minutesLeft = Math.ceil((ACW_KICK_AFTER_SECONDS - secondsInAcw) / 60);
+        return res.status(400).json({
+          success: false,
+          message: `This agent has been in After Call Work for under 5 minutes — they can be kicked in about ${minutesLeft} minute${minutesLeft === 1 ? "" : "s"}.`,
+        });
+      }
+      await acwKickService.closePendingCallsForKick(appUserId);
+    } else if (!KICKABLE_STATUSES.includes(currentStatus)) {
       return res.status(400).json({
         success: false,
-        message: `Can't kick an agent who is currently ${currentStatus} — only agents in a non-call status can be force-logged-out.`,
+        message: `Can't kick an agent who is currently ${currentStatus} — only agents in a non-call status, or in After Call Work for 5+ minutes, can be force-logged-out.`,
       });
     }
 

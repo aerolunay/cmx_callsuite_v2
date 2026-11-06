@@ -963,6 +963,16 @@ function agentHasTrackedCall(appUserId) {
 // the public-facing shape and deliberately omits agentChannel. Added
 // for Conference/Transfer (Phase E), which needs to hang up the
 // agent's own channel after a successful blind transfer.
+// Internal-only — the agent's RAW call that has ended but is still
+// waiting for its disposition (After Call Work), or null. Used when an
+// admin kicks an agent out of ACW (acwKickService.js).
+function getCallAwaitingDisposition(appUserId) {
+  for (const call of activeCalls.values()) {
+    if (call.appUserId === appUserId && call.status === "ended") return call;
+  }
+  return null;
+}
+
 function getRawActiveCallForAgent(appUserId) {
   for (const call of activeCalls.values()) {
     if (call.appUserId === appUserId && call.status !== "ended") {
@@ -1629,6 +1639,11 @@ const DISPOSITION_TO_VICIDIAL_STATUS = {
   CONTRACTED_SERVICE_COMPLETED: "PU",
   // Voicemail (Standard) — not reached, redialed like VOICEMAIL.
   VOICEMAIL_STANDARD: "A",
+  // System-only, per explicit request — saved for the call an agent was
+  // still holding in After Call Work when an admin kicked them (see
+  // acwKickService.js). They spoke to someone, so PU: not redialed.
+  // Agents can't pick it (the disposition routes reject it).
+  NO_DISPOSITION: "PU",
 };
 
 /*
@@ -1960,6 +1975,7 @@ module.exports = {
   getCallStatus,
   getActiveCallForAgent,
   getRawActiveCallForAgent,
+  getCallAwaitingDisposition,
   agentHasTrackedCall,
   getActiveCallPhoneNumbers,
   endCall,

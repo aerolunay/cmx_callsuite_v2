@@ -1717,6 +1717,11 @@ router.post("/dialer/disposition/:callId", requireAuth, async (req, res) => {
       return res.status(400).json({ success: false, message: "Choose either Not Ready or Callback after saving — not both." });
     }
 
+    // System-only — saved when an admin kicks an agent out of ACW.
+    if (disposition === "NO_DISPOSITION") {
+      return res.status(400).json({ success: false, message: "Pick a disposition for this call." });
+    }
+
     if (!comments || !comments.trim()) {
       return res.status(400).json({ success: false, message: "Comments are required before saving a disposition." });
     }
@@ -1875,7 +1880,8 @@ router.post("/dialer/inbound-disposition", requireAuth, async (req, res) => {
       return res.status(400).json({ success: false, message: "Comments are required." });
     }
 
-    if (!disposition) {
+    // NO_DISPOSITION is system-only — saved when an admin kicks an agent out of ACW.
+    if (!disposition || disposition === "NO_DISPOSITION") {
       return res.status(400).json({ success: false, message: "Disposition is required." });
     }
 

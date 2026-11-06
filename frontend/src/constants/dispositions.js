@@ -75,9 +75,15 @@ export function getOutboundDispositionsForCampaign(campaignId) {
 // already contain everything in DISPOSITIONS plus their own one new
 // entry, so merging all three still just resolves to DISPOSITIONS +
 // SCREENING_COMPLETED — no duplicate-key issue.)
-const LABEL_BY_VALUE = Object.fromEntries(
-  [...BSMSC_OUTBOUND_DISPOSITIONS, ...BSCSR_OUTBOUND_DISPOSITIONS].map((d) => [d.value, d.label])
-);
+// System-only — saved when an admin kicks an agent out of After Call Work
+// (backend acwKickService.js). Never offered in a disposition form, only
+// labelled wherever logged calls are shown.
+const SYSTEM_DISPOSITION_LABELS = { NO_DISPOSITION: "No Disposition (Kicked)" };
+
+const LABEL_BY_VALUE = {
+  ...Object.fromEntries([...BSMSC_OUTBOUND_DISPOSITIONS, ...BSCSR_OUTBOUND_DISPOSITIONS].map((d) => [d.value, d.label])),
+  ...SYSTEM_DISPOSITION_LABELS,
+};
 
 export function dispositionLabel(value) {
   return LABEL_BY_VALUE[value] || value;
@@ -174,9 +180,12 @@ export function getInboundDispositionsForCampaign(campaignId) {
 // lookup-by-value (e.g. displaying past dispositions in a Call Logs
 // table) needs to resolve correctly regardless of which list it was
 // originally selected from.
-const INBOUND_LABEL_BY_VALUE = Object.fromEntries(
-  [...INBOUND_DISPOSITIONS, ...BSMSC_INBOUND_DISPOSITIONS, ...BSCSR_INBOUND_DISPOSITIONS].map((d) => [d.value, d.label])
-);
+const INBOUND_LABEL_BY_VALUE = {
+  ...Object.fromEntries(
+    [...INBOUND_DISPOSITIONS, ...BSMSC_INBOUND_DISPOSITIONS, ...BSCSR_INBOUND_DISPOSITIONS].map((d) => [d.value, d.label])
+  ),
+  ...SYSTEM_DISPOSITION_LABELS,
+};
 
 export function inboundDispositionLabel(value) {
   return INBOUND_LABEL_BY_VALUE[value] || value;
