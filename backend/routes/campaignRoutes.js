@@ -1255,7 +1255,11 @@ router.put("/:campaignId/dispositions", requireAdmin, async (req, res) => {
     return res.json({ success: true, ...result });
   } catch (error) {
     console.error(`PUT /api/admin/campaigns/${campaignId}/dispositions failed:`, error);
-    if (error.message.includes("is required when custom") || error.message.includes("has no campaign_settings row")) {
+    if (
+      error.code === "INVALID_DISPOSITION" ||
+      error.message.includes("is required when custom") ||
+      error.message.includes("has no campaign_settings row")
+    ) {
       return res.status(400).json({ success: false, message: error.message });
     }
     return res.status(500).json({ success: false, message: "Failed to save campaign dispositions." });

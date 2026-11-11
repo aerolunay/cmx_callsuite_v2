@@ -79,6 +79,15 @@ function slugifyValue(label) {
     .replace(/^_+|_+$/g, "");
 }
 
+// Per explicit request — no custom disposition should ever fail to save.
+// A code longer than this skipped the Abandoned & Voicemail "CB - ..."
+// status update (dialerRoutes.js's buildCallbackStatus accepts 1-64), and
+// a very long name failed the admin save with a raw "Data too long".
+// Codes are cut to fit (well inside the call logs' VARCHAR(100), see
+// sql/012); names get a clear error instead.
+const MAX_VALUE_LENGTH = 64;
+const MAX_LABEL_LENGTH = 100;
+
 function normalizeRows(rows) {
   if (!Array.isArray(rows)) return [];
   const seen = new Set();
@@ -89,7 +98,14 @@ function normalizeRows(rows) {
     // editor never submits one on purpose, but a stray empty row from
     // a fast "add then immediately remove" click shouldn't 400 the
     // whole save.
-    const value = String(row?.value || "").trim().toUpperCase().replace(/\s+/g, "_") || slugifyValue(label);
+    if (label.length > MAX_LABEL_LENGTH) {
+      const err = new Error(`Disposition name "${label.slice(0, 40)}…" is too long — keep it to ${MAX_LABEL_LENGTH} characters.`);
+      err.code = "INVALID_DISPOSITION";
+      throw err;
+    }
+    const value = (String(row?.value || "").trim().toUpperCase().replace(/\s+/g, "_") || slugifyValue(label))
+      .slice(0, MAX_VALUE_LENGTH)
+      .replace(/_+$/, "");
     if (seen.has(value)) continue; // last-one-wins would silently
     // overwrite a row order-dependent way; first-one-wins is simpler
     // to reason about and matches how the admin editor renders top to
