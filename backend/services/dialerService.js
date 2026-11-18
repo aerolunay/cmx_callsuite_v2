@@ -11,7 +11,7 @@ const leadDialingService = require("./leadDialingService");
 const {
   LEAD_PHONE,
   LEAD_ELIGIBILITY_SQL,
-  RETRYABLE_LEAD_STATUSES,
+  RETRYABLE_LEAD_SQL,
   CALLS_TO_NUMBER_TODAY_SQL,
   DEFAULT_MAX_CALLS_PER_NUMBER_PER_DAY,
 } = require("./leadEligibility");
@@ -365,7 +365,7 @@ async function startRetryCycle(campaignId, rules) {
       SET l.called_since_last_reset = 'N'
       WHERE vl.campaign_id = ?
         AND l.called_since_last_reset = 'Y'
-        AND l.status IN ${RETRYABLE_LEAD_STATUSES}
+        AND ${RETRYABLE_LEAD_SQL}
         AND ${CALLS_TO_NUMBER_TODAY_SQL} < ?
         ${inCallFilter}
     `,
@@ -429,9 +429,11 @@ async function pickFreshLead(campaignId) {
   // still fully eligible for re-dial despite being terminal outcomes —
   // confirmed by reading the actual mapping, not assumed. Now excludes
   // every real status code a terminal disposition can produce.
-  // CALLBACK ('CALLBK') is included here per explicit request — a
-  // scheduled callback is handled through its own separate mechanism,
-  // not by leaving the lead eligible for ordinary auto-dial re-pulls.
+  // CALLBACK ('CALLBK') is excluded too while its number's most recent
+  // call record is still the callback or reached someone — per explicit
+  // request the latest record decides (leadEligibility.js's
+  // CALLBACK_LEAD_REOPENED_SQL); the callback itself is worked from the
+  // Scheduled Callbacks list.
   //
   // Also excludes any phone_number present in asterisk.vicidial_dnc —
   // the native, system-wide DNC list — so a manually-uploaded DNC

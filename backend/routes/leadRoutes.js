@@ -311,7 +311,8 @@ router.post("/leads/upload", requireAdmin, upload.single("file"), async (req, re
 
     // Per explicit request — numbers already closed out (DNC list, or ever
     // disposed Not Interested / Do Not Call / Call Ended / Screening
-    // Completed) are removed automatically, in both modes: re-uploading
+    // Completed, or whose most recent record is a scheduled callback) are
+    // removed automatically, in both modes: re-uploading
     // them must never make them callable again. Counted once per number.
     const closedOutPhoneSet = await findClosedOutPhoneNumbers(dedupedWithinFile.map((r) => r.phone_number));
     const skippedClosedOut = closedOutPhoneSet.size;
